@@ -158,18 +158,23 @@ async def request(
     url: str,
     *,
     rate_budget: RateBudgetName,
+    attempts: int = MAX_ATTEMPTS,
     **kwargs: object,
 ) -> httpx.Response:
     """Issue one HTTP request under the named rate budget, with the shared
     retry policy: connection errors, 429, and 5xx retry with exponential
-    backoff and full jitter (1s base, 30s cap, 4 attempts total), honoring
-    `Retry-After`. Any other 4xx fails immediately. `rate_budget` is
-    required -- every provider call belongs to exactly one budget."""
+    backoff and full jitter (1s base, 30s cap, `attempts` attempts total),
+    honoring `Retry-After`. Any other 4xx fails immediately. `rate_budget`
+    is required -- every provider call belongs to exactly one budget.
+    `attempts=1` still draws from the budget and still raises the same
+    exception types on failure, but makes exactly one try and never
+    retries -- for a caller whose own next tick is the retry (Alpaca
+    `get_snapshots(retry=False)`, `get_clock`)."""
     bucket = get_rate_budget(rate_budget)
 
     async for attempt in AsyncRetrying(
         retry=retry_if_exception_type((httpx.TransportError, RetryableStatusError)),
-        stop=stop_after_attempt(MAX_ATTEMPTS),
+        stop=stop_after_attempt(attempts),
         wait=_wait,
         reraise=True,
     ):

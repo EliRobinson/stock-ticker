@@ -5,15 +5,20 @@ response shapes: a normal page, a multi-page response, a 429 with
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import httpx
 import pytest
 import respx
 
-from stockticker.ingest.alpaca.client import DATA_API_BASE_URL, TRADING_API_BASE_URL, AlpacaClient
-from stockticker.ingest.http import reset_rate_budgets
+from stockticker.ingest.alpaca.client import (
+    DATA_API_BASE_URL,
+    TRADING_API_BASE_URL,
+    AlpacaClient,
+    _is_open_between,
+)
+from stockticker.ingest.http import RateBudgetName, get_rate_budget, reset_rate_budgets
 
 
 @pytest.fixture(autouse=True)
@@ -62,6 +67,111 @@ async def test_get_clock_is_cached_across_calls() -> None:
     await client.get_clock()
     await client.get_clock()
     assert route.call_count == 1
+
+
+@respx.mock
+async def test_get_clock_draws_from_the_quotes_budget_not_the_general_one() -> None:
+    respx.get(f"{TRADING_API_BASE_URL}/v2/clock").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "timestamp": "2026-09-17T14:15:22Z",
+                "is_open": True,
+                "next_open": "2026-09-18T09:30:00-04:00",
+                "next_close": "2026-09-17T16:00:00-04:00",
+            },
+        )
+    )
+    quotes_budget = get_rate_budget(RateBudgetName.ALPACA_QUOTES)
+    general_budget = get_rate_budget(RateBudgetName.ALPACA)
+
+    await _client().get_clock()
+
+    assert quotes_budget._tokens == pytest.approx(quotes_budget._capacity - 1)
+    assert general_budget._tokens == general_budget._capacity
+
+
+@respx.mock
+async def test_get_clock_makes_a_single_attempt_not_the_default_retry_count() -> None:
+    route = respx.get(f"{TRADING_API_BASE_URL}/v2/clock").mock(return_value=httpx.Response(500))
+    with pytest.raises(httpx.HTTPStatusError):
+        await _client().get_clock()
+    assert route.call_count == 1
+
+
+@respx.mock
+async def test_get_clock_raises_when_the_fetch_fails_and_nothing_is_cached() -> None:
+    respx.get(f"{TRADING_API_BASE_URL}/v2/clock").mock(return_value=httpx.Response(500))
+    with pytest.raises(httpx.HTTPStatusError):
+        await _client().get_clock(use_cache=False)
+
+
+@respx.mock
+async def test_get_clock_falls_back_to_the_cached_clock_when_a_fresh_fetch_fails() -> None:
+    route = respx.get(f"{TRADING_API_BASE_URL}/v2/clock")
+    route.side_effect = [
+        httpx.Response(
+            200,
+            json={
+                "timestamp": "2026-09-17T14:15:22Z",
+                "is_open": True,
+                # Far enough in the future that "now" at test time is
+                # always before both -- keeps the derived `is_open` below
+                # deterministic without mocking the wall clock.
+                "next_open": "2099-01-02T09:30:00-05:00",
+                "next_close": "2099-01-01T16:00:00-05:00",
+            },
+        ),
+        httpx.Response(500),
+    ]
+    client = _client()
+    first = await client.get_clock()
+
+    second = await client.get_clock(use_cache=False)
+
+    assert second.next_open == first.next_open
+    assert second.next_close == first.next_close
+    assert second.is_open is True  # now is still well before the cached next_close
+    assert route.call_count == 2
+
+
+@pytest.mark.parametrize(
+    ("next_open", "next_close", "now", "expected"),
+    [
+        pytest.param(
+            datetime(2026, 9, 18, 9, 30, tzinfo=UTC),
+            datetime(2026, 9, 17, 16, 0, tzinfo=UTC),
+            datetime(2026, 9, 17, 12, 0, tzinfo=UTC),
+            True,
+            id="open-shaped cache, now before the cached close",
+        ),
+        pytest.param(
+            datetime(2026, 9, 18, 9, 30, tzinfo=UTC),
+            datetime(2026, 9, 17, 16, 0, tzinfo=UTC),
+            datetime(2026, 9, 17, 20, 0, tzinfo=UTC),
+            False,
+            id="open-shaped cache, now after the cached close",
+        ),
+        pytest.param(
+            datetime(2026, 9, 18, 9, 30, tzinfo=UTC),
+            datetime(2026, 9, 18, 16, 0, tzinfo=UTC),
+            datetime(2026, 9, 18, 8, 0, tzinfo=UTC),
+            False,
+            id="closed-shaped cache, now before the cached open",
+        ),
+        pytest.param(
+            datetime(2026, 9, 18, 9, 30, tzinfo=UTC),
+            datetime(2026, 9, 18, 16, 0, tzinfo=UTC),
+            datetime(2026, 9, 18, 12, 0, tzinfo=UTC),
+            True,
+            id="closed-shaped cache, now inside the derived open window",
+        ),
+    ],
+)
+def test_is_open_between_derives_state_from_the_cached_bounds(
+    next_open: datetime, next_close: datetime, now: datetime, expected: bool
+) -> None:
+    assert _is_open_between(next_open, next_close, now) is expected
 
 
 @respx.mock
@@ -245,3 +355,37 @@ async def test_get_corporate_actions_skips_one_malformed_row_not_the_whole_page(
     assert page.splits[0].symbol == "AAPL"
     assert len(page.errors) == 1
     assert "id=2" in page.errors[0]
+
+
+@respx.mock
+async def test_get_corporate_actions_follows_next_page_token_until_exhausted() -> None:
+    """The shared `_paged()` helper (issue #26 item 2) through its second
+    call site, not just `get_bars`'s."""
+    route = respx.get(f"{DATA_API_BASE_URL}/v1/corporate-actions")
+    route.side_effect = [
+        httpx.Response(
+            200,
+            json={
+                "corporate_actions": {
+                    "cash_dividends": [{"id": "1", "symbol": "AAPL", "rate": "0.24", "ex_date": "2026-08-10"}]
+                },
+                "next_page_token": "page-2",
+            },
+        ),
+        httpx.Response(
+            200,
+            json={
+                "corporate_actions": {
+                    "cash_dividends": [{"id": "2", "symbol": "AAPL", "rate": "0.25", "ex_date": "2026-11-10"}]
+                },
+                "next_page_token": None,
+            },
+        ),
+    ]
+    page = await _client().get_corporate_actions(
+        ["AAPL"], types=("cash_dividend",), start=date(2026, 1, 1), end=date(2026, 12, 31)
+    )
+    assert [d.id for d in page.dividends] == ["1", "2"]
+    assert route.call_count == 2
+    second_call_params = dict(httpx.QueryParams(route.calls[1].request.url.query))
+    assert second_call_params["page_token"] == "page-2"

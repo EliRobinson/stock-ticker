@@ -5,26 +5,27 @@
 - **Price Listing.** `share_class_rules.price_symbol` when a rule exists,
   else the primary Listing. Only an active Listing prices a Company, so a
   retired ticker never adds to its value.
-- **Shares.** The count with the latest `as_of_date <= d`; ties go to the
-  latest `filed_date`, then `dei` before `us-gaap`. Multiplied by
+- **Shares.** Point-in-time: the count from the latest filing with
+  `filed_date <= d`; among counts filed the same day, the latest
+  `as_of_date`, then `dei` before `us-gaap`. Multiplied by
   `shares_unit_ratio` (default 1) and by the product of the price Listing's
   split ratios with `anchor < ex_date <= d`.
 - `is_multi_class` is true exactly when the Company has a
   `share_class_rules` row.
 
-Two deliberate departures from §3 as written. Both stop EDGAR restatements
-from leaking into the past. Alphabet's 2022 20-for-1 split is the worked
-case (`tests/integration/test_market_caps_math.py`):
+Point-in-time counts stop EDGAR restatements from leaking into the past:
+a later filing re-reports old periods already restated for newer splits
+(Alphabet's 2021-12-31 count is 13.2B in filings after its July 2022
+20-for-1 split). The worked cases are in
+`tests/integration/test_market_caps_math.py`.
 
-1. **No lookahead.** A count is eligible for `d` only once it has been filed
-   (`filed_date <= d`). Otherwise a comparative restated after a split (e.g.
-   Alphabet's 2021-12-31 count, re-reported post-split in July 2022) would
-   value pre-split prices with post-split shares.
-2. **Split anchor.** The split window starts at the count's *anchor*: its
-   `as_of_date` for a `dei` cover-page count (the count on that day, in that
-   day's units), but its `filed_date` for a `us-gaap` balance-sheet count,
-   because financial statements restate share counts for any split that
-   happens before they are issued.
+**Split anchor.** The split window starts at the count's *anchor*. For a
+`us-gaap` balance-sheet count that is its `filed_date`, because statements
+restate share counts for any split before they are issued. For a `dei`
+cover-page count it is its `as_of_date`: that count is the number
+outstanding on that day, so a split between the cover date and the filing
+date still has to be applied. §3 (PR #14) says `filed_date` for both; the
+two agree except in that window.
 
 Sanity checks run in Python over each Company's counts before the rebuild,
 in filing order. Each rejected count is a failed item and is excluded from
@@ -59,6 +60,7 @@ logger = get_logger(__name__)
 
 MAX_UNEXPLAINED_CHANGE = Decimal("0.40")
 SPLIT_KINDS = ("split", "reverse_split")
+NO_WHOLE_COMPANY_COUNT = "no_whole_company_count"
 
 
 class SplitRatioError(ValueError):
@@ -197,7 +199,7 @@ REBUILD_SQL = text(
       CROSS JOIN LATERAL (
         SELECT * FROM counts s
         WHERE s.as_of_date <= b.trade_date AND s.filed_date <= b.trade_date
-        ORDER BY s.as_of_date DESC, s.filed_date DESC, (s.concept = :dei) DESC, s.accession DESC
+        ORDER BY s.filed_date DESC, s.as_of_date DESC, (s.concept = :dei) DESC, s.accession DESC
         LIMIT 1
       ) cnt
     ),
@@ -240,6 +242,9 @@ class CompanyRebuild:
     upserted: int
     removed: int
     rejections: list[Rejection]
+    # No whole-company count on file (Berkshire reports per class only):
+    # the Company has no Market Cap, and that is reported, not guessed.
+    no_whole_company_count: bool = False
 
 
 async def rebuild_company(conn: AsyncConnection, cik: str) -> CompanyRebuild:
@@ -263,7 +268,12 @@ async def rebuild_company(conn: AsyncConnection, cik: str) -> CompanyRebuild:
             },
         )
     ).one()
-    return CompanyRebuild(upserted=row.upserted, removed=row.removed, rejections=rejections)
+    return CompanyRebuild(
+        upserted=row.upserted,
+        removed=row.removed,
+        rejections=rejections,
+        no_whole_company_count=not counts,
+    )
 
 
 async def _load_counts(conn: AsyncConnection, cik: str) -> list[ShareCount]:
@@ -347,6 +357,8 @@ async def run_market_caps_rebuild(engine: AsyncEngine) -> JobResult:
                 result.failed_items.append(FailedItem(key=cik, error=f"rebuild skipped: {exc}"))
                 continue
             result.rows_written += rebuilt.upserted + rebuilt.removed
+            if rebuilt.no_whole_company_count:
+                result.failed_items.append(FailedItem(key=cik, error=NO_WHOLE_COMPANY_COUNT))
             result.failed_items.extend(
                 FailedItem(key=f"{cik}:{rejection.count.key}", error=rejection.reason)
                 for rejection in rebuilt.rejections

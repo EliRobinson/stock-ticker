@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision = "0003_seed_brown_forman"
-down_revision = "0002_refetch_accepted_at"
+revision = "0002_seed_brown_forman"
+down_revision = "0001_initial_schema"
 branch_labels = None
 depends_on = None
 

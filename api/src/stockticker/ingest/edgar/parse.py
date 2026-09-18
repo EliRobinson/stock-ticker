@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 
+from stockticker.ingest.symbols import normalize_cik
+
 DEI_SHARES = "dei:EntityCommonStockSharesOutstanding"
 US_GAAP_SHARES = "us-gaap:CommonStockSharesOutstanding"
 SHARES_CONCEPTS = (DEI_SHARES, US_GAAP_SHARES)
@@ -88,7 +90,7 @@ class SharesParse:
 
 
 def cik_path(cik: str) -> str:
-    return f"CIK{cik.zfill(10)}"
+    return f"CIK{normalize_cik(cik)}"
 
 
 def parse_shares(companyfacts: dict[str, Any]) -> SharesParse:

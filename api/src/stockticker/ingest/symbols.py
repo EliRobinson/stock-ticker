@@ -21,3 +21,11 @@ def normalize_symbol(raw: str) -> str:
     if not cleaned:
         raise ValueError("symbol must not be empty")
     return cleaned.replace("-", ".")
+
+
+def normalize_cik(raw: str) -> str:
+    """Return a CIK zero-padded to EDGAR's fixed 10 digits (`companies.cik`,
+    `CIK{n}` folder and file names). Wikipedia's table and EDGAR's own JSON
+    both give a CIK with its leading zeros already stripped.
+    """
+    return raw.zfill(10)

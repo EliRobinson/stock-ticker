@@ -1222,8 +1222,193 @@
                         },
                         "parts": {
                           "items": {
-                            "additionalProperties": true,
-                            "type": "object"
+                            "oneOf": [
+                              {
+                                "properties": {
+                                  "text": {
+                                    "maxLength": 32000,
+                                    "type": "string"
+                                  },
+                                  "type": {
+                                    "const": "text",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["type", "text"],
+                                "type": "object"
+                              },
+                              {
+                                "properties": {
+                                  "type": {
+                                    "const": "step-start",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["type"],
+                                "type": "object"
+                              },
+                              {
+                                "oneOf": [
+                                  {
+                                    "properties": {
+                                      "input": {
+                                        "anyOf": [
+                                          {
+                                            "additionalProperties": true,
+                                            "type": "object"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "output": {},
+                                      "state": {
+                                        "const": "output-available",
+                                        "type": "string"
+                                      },
+                                      "toolCallId": {
+                                        "minLength": 1,
+                                        "type": "string"
+                                      },
+                                      "toolName": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "type": {
+                                        "pattern": "^(tool-.+|dynamic-tool)$",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": ["type", "toolCallId", "state"],
+                                    "type": "object"
+                                  },
+                                  {
+                                    "properties": {
+                                      "errorText": {
+                                        "type": "string"
+                                      },
+                                      "input": {
+                                        "anyOf": [
+                                          {
+                                            "additionalProperties": true,
+                                            "type": "object"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "state": {
+                                        "const": "output-error",
+                                        "type": "string"
+                                      },
+                                      "toolCallId": {
+                                        "minLength": 1,
+                                        "type": "string"
+                                      },
+                                      "toolName": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "type": {
+                                        "pattern": "^(tool-.+|dynamic-tool)$",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "type",
+                                      "toolCallId",
+                                      "state",
+                                      "errorText"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  {
+                                    "description": "Every other state: `input-streaming`, `input-available`,\n`approval-requested`, `approval-responded`, `output-denied`, and any state\na newer AI SDK adds. The call has no result the model can see.",
+                                    "properties": {
+                                      "input": {
+                                        "anyOf": [
+                                          {
+                                            "additionalProperties": true,
+                                            "type": "object"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "state": {
+                                        "type": "string"
+                                      },
+                                      "toolCallId": {
+                                        "minLength": 1,
+                                        "type": "string"
+                                      },
+                                      "toolName": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "type": {
+                                        "pattern": "^(tool-.+|dynamic-tool)$",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": ["type", "toolCallId", "state"],
+                                    "type": "object"
+                                  }
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "data": {},
+                                  "id": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "type": {
+                                    "pattern": "^data-",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["type"],
+                                "type": "object"
+                              },
+                              {
+                                "description": "A part the converter drops unread: `reasoning`, `reasoning-file`,\n`file`, `source-url`, `source-document`, `custom`, and any part type a\nnewer AI SDK adds. Only `type` is kept.",
+                                "properties": {
+                                  "type": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["type"],
+                                "type": "object"
+                              }
+                            ]
                           },
                           "maxItems": 200,
                           "type": "array"

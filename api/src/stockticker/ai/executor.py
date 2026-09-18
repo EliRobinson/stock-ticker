@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 import asyncpg
+from asyncpg.transaction import Transaction
 from sqlalchemy import exc as sa_exc
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
@@ -37,6 +38,10 @@ STATEMENT_TIMEOUT = "5s"
 LOCK_TIMEOUT = "1s"
 TEMP_FILE_LIMIT = "64MB"
 _TEMP_FILE_LIMIT_KB = 64 * 1024
+MAX_RESULT_BYTES = 8 * 1024 * 1024
+"""What one query may hold in API memory. Rows are fetched through a cursor
+in batches and counted as they arrive, so a huge result stops early."""
+FETCH_BATCH_ROWS = 100
 
 
 class ToolError(Exception):
@@ -72,13 +77,28 @@ class AiReaderExecutor:
             raw = await conn.get_raw_connection()
             pg = raw.driver_connection
             assert isinstance(pg, asyncpg.Connection)
-            outcome = await self._run(pg, sql)
+            # asyncpg's own transaction object (it issues `BEGIN READ ONLY`),
+            # because its cursors refuse to run outside one.
+            transaction = pg.transaction(readonly=True)
+            await transaction.start()
+            try:
+                result = await self._query(pg, sql)
+            except ToolError:
+                await self._reset(pg, transaction)
+                clean = True
+                raise
+            await self._reset(pg, transaction)
             clean = True
+            return result
         finally:
+            # A cancellation or a broken connection leaves `clean` false, and
+            # the connection is invalidated instead of going back to the pool.
             await asyncio.shield(self._release(conn, clean=clean))
-        if isinstance(outcome, ToolError):
-            raise outcome
-        return outcome
+
+    @staticmethod
+    async def _reset(pg: asyncpg.Connection, transaction: Transaction) -> None:
+        await transaction.rollback()
+        await pg.execute("DISCARD ALL")
 
     async def _acquire(self) -> AsyncConnection:
         try:
@@ -91,36 +111,33 @@ class AiReaderExecutor:
             logger.warning("ai_reader_connect_failed", error=str(error))
             raise ToolError("The database is not reachable. The query did not run.") from None
 
-    async def _run(self, pg: asyncpg.Connection, sql: str) -> QueryResult | ToolError:
-        """A ToolError is returned, not raised, once the transaction is rolled
-        back and the session discarded, so the connection can go back to the
-        pool. A cancellation or a broken connection raises straight through,
-        and the caller invalidates the connection instead."""
-        await pg.execute("BEGIN READ ONLY")
-        outcome = await self._query(pg, sql)
-        await pg.execute("ROLLBACK")
-        await pg.execute("DISCARD ALL")
-        return outcome
-
-    async def _query(self, pg: asyncpg.Connection, sql: str) -> QueryResult | ToolError:
+    async def _query(self, pg: asyncpg.Connection, sql: str) -> QueryResult:
         await pg.execute(
             f"SET LOCAL statement_timeout = '{STATEMENT_TIMEOUT}'; SET LOCAL lock_timeout = '{LOCK_TIMEOUT}'"
         )
+        await self._apply_temp_file_limit(pg)
         try:
-            await self._apply_temp_file_limit(pg)
             statement = await pg.prepare(sql)
-            records = await statement.fetch()
-        except ToolError as error:
-            return error
+            rows: list[tuple[Any, ...]] = []
+            size = 0
+            async for record in statement.cursor(prefetch=FETCH_BATCH_ROWS):
+                row = tuple(record.values())
+                size += _approx_bytes(row)
+                if size > MAX_RESULT_BYTES:
+                    raise ToolError(
+                        f"The result is larger than {MAX_RESULT_BYTES // (1024 * 1024)} MB, so it was not "
+                        "read. Select fewer columns or rows, or aggregate."
+                    )
+                rows.append(row)
         except asyncpg.QueryCanceledError:
-            return ToolError(
+            raise ToolError(
                 f"The query ran longer than {STATEMENT_TIMEOUT} and was stopped. "
                 "Filter by date or symbol, or aggregate, and try again."
-            )
+            ) from None
         except asyncpg.PostgresError as error:
-            return ToolError(_describe_postgres_error(error))
+            raise ToolError(_describe_postgres_error(error)) from None
         columns = [Column(name=a.name, type=a.type.name) for a in statement.get_attributes()]
-        return QueryResult(columns=columns, rows=[tuple(record.values()) for record in records])
+        return QueryResult(columns=columns, rows=rows)
 
     async def _apply_temp_file_limit(self, pg: asyncpg.Connection) -> None:
         """`temp_file_limit` is superuser-only unless the role holds
@@ -160,6 +177,16 @@ def _parse_size_kb(value: str) -> int | None:
     if match is None or match.group(1).startswith("-"):
         return None
     return int(match.group(1)) * _SIZE_FACTORS_KB[match.group(2)]
+
+
+def _approx_bytes(row: tuple[Any, ...]) -> int:
+    total = 0
+    for value in row:
+        if isinstance(value, str | bytes | bytearray):
+            total += len(value)
+        else:
+            total += 16
+    return total
 
 
 def _describe_postgres_error(error: asyncpg.PostgresError) -> str:

@@ -7,18 +7,35 @@ import { env } from '@/env'
 /**
  * The stub `/api/v1/chat` route in web/openapi/openapi.json documents no
  * response body yet, so `ViewSpec` isn't in the generated api-types.ts. This
- * schema follows the target contract from docs/design/system-design.md §6
- * ("ViewSpec is a Pydantic discriminated union on kind") - swap this for a
- * generated type the day the chat route ships its OpenAPI response model.
+ * schema was confirmed directly with the #7 (ai-chat) agent, which validates
+ * its golden streams against the same shape with ai@7.0.106's
+ * uiMessageChunkSchema - swap this for its generated DataViewPart/
+ * TableSpec/TimeseriesChartSpec once feat/ai-chat pushes the OpenAPI
+ * components.
  */
+const viewValueFormatSchema = z
+  .enum([
+    'text',
+    'integer',
+    'number',
+    'currency',
+    'compact_currency',
+    'percent',
+    'fraction_as_percent',
+    'date',
+    'datetime'
+  ])
+  .nullable()
+
 const viewColumnSchema = z.object({
   key: z.string(),
   label: z.string(),
-  format: z.string().optional()
+  format: viewValueFormatSchema
 })
 
 const tableViewSpecSchema = z.object({
   kind: z.literal('table'),
+  id: z.string(),
   title: z.string(),
   columns: z.array(viewColumnSchema),
   rows: z.array(z.record(z.string(), z.unknown()))
@@ -31,10 +48,11 @@ const timeseriesSeriesSchema = z.object({
 
 const timeseriesViewSpecSchema = z.object({
   kind: z.literal('timeseries'),
+  id: z.string(),
   title: z.string(),
   x: z.string(),
-  series: z.array(timeseriesSeriesSchema),
-  y_format: z.string().optional(),
+  series: z.array(timeseriesSeriesSchema).min(1).max(8),
+  y_format: viewValueFormatSchema,
   rows: z.array(z.record(z.string(), z.unknown()))
 })
 

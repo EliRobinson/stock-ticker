@@ -420,7 +420,7 @@ Three ways a stream ends:
 
 - **Normal completion.** The model stops calling tools and its last step is plain text. `finish` then `data: [DONE]`.
 - **Model error or budget exhausted.** The server closes every part still open first: a `text-end` for any in-progress text, and a `tool-output-error` for every tool call that has not returned yet. Only then does it send `error{errorText}` and `finish`.
-- **Client disconnects.** Between chunks the server checks `request.is_disconnected()`. On disconnect it cancels the Anthropic stream and any running Postgres query, and sends nothing further; there is no `error` or `finish`, because there is no one left to read them.
+- **Client disconnects.** One task reads the request's ASGI `receive` and waits for `http.disconnect`, racing the answer's event queue, so a disconnect is seen as soon as it arrives, even while the answer waits on the model or on Postgres. It is the only reader: the response class turns off Starlette's own disconnect listener, which would otherwise read `receive` too under ASGI < 2.4 (uvicorn's HTTP scopes are 2.3). On disconnect it cancels the Anthropic stream and any running Postgres query, and sends nothing further; there is no `error` or `finish`, because there is no one left to read them.
 
 The encoder is tested against a stream recorded from AI SDK Core.
 

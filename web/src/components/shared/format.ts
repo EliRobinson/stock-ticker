@@ -4,6 +4,7 @@
 import {
   directionOf,
   formatChange,
+  formatDateShort,
   formatMarketCap,
   formatPercent,
   formatPrice as formatPriceWithCurrency,
@@ -37,31 +38,14 @@ export function formatTimeET(iso: string, withSeconds = false): string {
 
 const NY = 'America/New_York'
 
-// TODO(#8): `formatDateShort` reads a bare "YYYY-MM-DD" (a Trading Day) as
-// UTC midnight and shifts it a day back in New York; use it here once it
-// treats date-only strings as calendar dates.
-function dateParts(iso: string) {
-  const dateOnly = iso.length === 10
-  const d = dateOnly ? new Date(`${iso}T12:00:00Z`) : new Date(iso)
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: dateOnly ? 'UTC' : NY,
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric'
-  }).formatToParts(d)
-  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? ''
-  return { day: get('day'), month: get('month'), year: get('year') }
-}
-
 // "17 Sep 2024": day first, as the design board writes dates.
 export function formatDate(iso: string): string {
-  const { day, month, year } = dateParts(iso)
-  return `${day} ${month} ${year}`
+  return formatDateShort(iso)
 }
 
+// "17 Sep": the start of a same-year range.
 export function formatShortDate(iso: string): string {
-  const { day, month } = dateParts(iso)
-  return `${day} ${month}`
+  return formatDateShort(iso).replace(/ \d{4}$/, '')
 }
 
 export function formatDateRange(start: string, end: string): string {

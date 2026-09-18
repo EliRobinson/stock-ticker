@@ -13,13 +13,7 @@ import {
 import type { IngestDetail, IngestHealth } from '../shared/status-pills'
 import { shellCopy as copy } from './copy'
 
-// `/status` `ai` block, as #7 serves it (feat/ai-chat). Not in the generated
-// types yet; placement on /status awaits the API foundation owner.
-export interface AiStatus {
-  spend_usd: number
-  limit_usd: number
-  enabled: boolean
-}
+export type AiStatus = StatusResponse['ai']
 
 export function ingestHealth(status: StatusResponse | null): IngestHealth {
   if (!status) return 'failing'

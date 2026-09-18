@@ -1,9 +1,13 @@
-import type { AiStatus } from '@/components/shell/status-strip'
 import type { StatusResponse } from '@/lib/api'
 
 import { CLOSED_NOW, FIXTURE_NOW, NEXT_CLOSE, NEXT_OPEN } from './market'
 
 type Job = StatusResponse['jobs'][number]
+type AiStatus = StatusResponse['ai']
+
+export const aiOk: AiStatus = { spend_usd: 1.24, limit_usd: 5, enabled: true }
+export const aiSpent: AiStatus = { spend_usd: 5, limit_usd: 5, enabled: false }
+export const aiNoKey: AiStatus = { spend_usd: 0, limit_usd: 5, enabled: false }
 
 const okJobs: Job[] = [
   {
@@ -31,7 +35,8 @@ export const statusOk: StatusResponse = {
   backfill: { listings_done: 503, listings_total: 503 },
   missing_keys: [],
   data_as_of: '2024-09-17T15:42:07Z',
-  open_gaps: 0
+  open_gaps: 0,
+  ai: aiOk
 }
 
 export const statusDegraded: StatusResponse = {
@@ -88,7 +93,8 @@ export const statusMissingAlpaca: StatusResponse = {
 
 export const statusMissingAi: StatusResponse = {
   ...statusOk,
-  missing_keys: ['ANTHROPIC_API_KEY']
+  missing_keys: ['ANTHROPIC_API_KEY'],
+  ai: aiNoKey
 }
 
 export const statusBackfill: StatusResponse = {
@@ -122,12 +128,3 @@ export const statusFirstRun: StatusResponse = {
   backfill: { listings_done: 0, listings_total: 0 },
   data_as_of: null
 }
-
-// /status `ai` block from #7 (feat/ai-chat); not yet in the generated types.
-export const aiOk: AiStatus = { spend_usd: 1.24, limit_usd: 5, enabled: true }
-export const aiSpent: AiStatus = {
-  spend_usd: 5.0,
-  limit_usd: 5,
-  enabled: false
-}
-export const aiNoKey: AiStatus = { spend_usd: 0, limit_usd: 5, enabled: false }

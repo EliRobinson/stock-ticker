@@ -18,6 +18,7 @@ dependencies = [
     "structlog>=24.4",
     "sqlglot>=25.0",
     "anthropic>=0.39",
+    "selectolax>=0.4.11",
 ]
 
 [dependency-groups]

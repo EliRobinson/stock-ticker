@@ -10,35 +10,33 @@ in `queries/market.py`/`queries/bars.py`:
 ## `/api/v1/market` (`queries/market.py::MARKET_QUERY`)
 
 ```
-Nested Loop Left Join  (actual time=0.762..11.466 rows=503 loops=1)
-  Buffers: shared hit=3485 read=557
+Nested Loop Left Join  (actual time=0.902..15.671 rows=503 loops=1)
+  Buffers: shared hit=4693 read=905
   -> Nested Loop Left Join (listings x companies x quotes, then the previous
-     Trading Day)  (actual time=0.732..5.992 rows=503 loops=1)
-     -> Memoize (per-quote previous-Trading-Day lookup)
-        -> Index Only Scan Backward using trading_days_pkey
-           Index Cond: (trade_date < COALESCE(quote's NY date, CURRENT_DATE))
-     -> Index Scan using daily_bars_pkey  (actual time=0.009..0.009 rows=1 loops=503)
-        Index Cond: (symbol = l.symbol AND trade_date = <that previous Trading Day>)
-  -> Limit (per-listing latest market_caps row)  (actual time=0.011..0.011 rows=1 loops=503)
+     Trading Day's bar)  (actual time=0.866..7.646 rows=503 loops=1)
+     -> Merge Left Join (listings x companies x quotes)  (actual time=0.547..0.844 rows=503 loops=1)
+     -> Index Scan using daily_bars_pkey  (actual time=0.008..0.008 rows=1 loops=503)
+        Index Cond: (symbol = l.symbol
+          AND trade_date = prev_trading_day(COALESCE(quote's NY date, CURRENT_DATE)))
+  -> Limit (per-listing latest market_caps row)  (actual time=0.016..0.016 rows=1 loops=503)
      -> Index Scan Backward using market_caps_pkey
         Index Cond: (cik = l.cik AND trade_date <= CURRENT_DATE)
-Planning Time: 2.743 ms
-Execution Time: 11.599 ms
+Planning Time: 0.824 ms
+Execution Time: 15.759 ms
 ```
 
-11.6 ms total — well under the 300 ms budget, with room to spare for slower
+15.8 ms total — well under the 300 ms budget, with room to spare for slower
 hardware than this laptop. Every step against `daily_bars`/`market_caps`
 (the two ~1.18M-row tables) is an index lookup, never a sequential scan:
-finding each Listing's previous Trading Day is an `Index Only Scan` against
-the small (~2,300-row) `trading_days` table, and the exact `daily_bars` row
-for that date is then a plain `Index Scan` on the table's own primary key
-`(symbol, trade_date)` -- an equality lookup, not a range scan, which is
-*more* index-friendly than the "just take the latest bar" version of this
-query. `market_caps` gets the same `LATERAL` + `LIMIT 1` treatment against
-its own `(cik, trade_date)` primary key. (The `Memoize` node here is an
-artifact of the seed script giving every quote the same `observed_at`; with
-distinct observed times per Listing, Postgres does 503 small index probes
-instead of 1 cached one, still cheap against a 2,300-row index.)
+`public.prev_trading_day` (migration 0001 -- DRY pass on #6's review gate,
+replacing this query's own `trading_days` lookup) resolves the previous
+Trading Day, and Postgres folds it straight into the `daily_bars_pkey`
+index condition, so the exact bar for that date is a plain equality lookup
+on the table's own primary key `(symbol, trade_date)` -- not a range scan,
+which is *more* index-friendly than the "just take the latest bar" version
+of this query. `market_caps` gets the same `LATERAL` + `LIMIT 1` treatment
+against its own `(cik, trade_date)` primary key (no shared function for
+that one yet).
 
 ## `/api/v1/listings/{symbol}/bars` (`queries/bars.py::_BARS_QUERY`)
 
@@ -46,16 +44,16 @@ Full default range (`2018-01-01` to today) for one symbol, against the same
 ~1.18M-row `daily_bars` table:
 
 ```
-Sort  (actual time=13.517..13.636 rows=2348 loops=1)
-  -> Bitmap Heap Scan on daily_bars  (actual time=0.570..12.992 rows=2348 loops=1)
+Sort  (actual time=14.666..14.780 rows=2348 loops=1)
+  -> Bitmap Heap Scan on daily_bars  (actual time=0.629..14.089 rows=2348 loops=1)
      Recheck Cond: (symbol = 'PERF0250' AND trade_date >= '2018-01-01' AND trade_date <= CURRENT_DATE)
      -> Bitmap Index Scan on daily_bars_pkey
         Index Cond: (symbol = 'PERF0250' AND trade_date >= '2018-01-01' AND trade_date <= CURRENT_DATE)
-Planning Time: 0.220 ms
-Execution Time: 13.783 ms
+Planning Time: 0.211 ms
+Execution Time: 14.926 ms
 ```
 
-13.8 ms — the `daily_bars` primary key `(symbol, trade_date)` already
+14.9 ms — the `daily_bars` primary key `(symbol, trade_date)` already
 covers this query exactly; no extra index was needed.
 
 ## Reproducing

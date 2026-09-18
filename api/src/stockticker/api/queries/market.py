@@ -3,12 +3,13 @@
 **Performance.** With ~503 active Listings and ~1.1M `daily_bars` rows, a
 naive "latest bar per symbol" query (`GROUP BY symbol` or a window function
 over the whole table) has to touch every row. Instead, for each active
-Listing, one `LATERAL` subquery against `trading_days` (a ~2,300-row table)
-finds the previous Trading Day, bounded by `ORDER BY trade_date DESC LIMIT
-1`; the exact `daily_bars` row for that date is then a plain equality join
-on the table's own primary key `(symbol, trade_date)`. `market_caps` gets
-the same `LATERAL` + `LIMIT 1` treatment against its own `(cik, trade_date)`
-primary key. See `EXPLAIN.md` in this package for the measured plan.
+Listing this calls `public.prev_trading_day` (migration 0001, a ~2,300-row
+`trading_days` lookup) to get the exact previous Trading Day, then joins
+`daily_bars` for that date -- a plain equality lookup on the table's own
+primary key `(symbol, trade_date)`. `market_caps` gets the same `LATERAL` +
+`LIMIT 1` treatment against its own `(cik, trade_date)` primary key (no
+shared function for that one). See `EXPLAIN.md` in this package for the
+measured plan.
 
 **"Previous SIP close".** `daily_bars` is fed from Alpaca's SIP feed
 (`feed=sip`, system design §4) while `quotes.price` is IEX. "Previous SIP
@@ -19,6 +20,12 @@ Day has no bar (a gap), `prev_close`/`volume` come back null rather than
 falling back to an earlier one, because a silent fallback would make a
 stale/wrong number look current. A Listing with no Quote at all anchors on
 `:today` instead, since there's no `observed_at` to convert.
+
+DRY pass on #6's review gate: this used to compute "the previous Trading
+Day" with its own `LATERAL` subquery, a second copy of the same rule the
+foundation's `ai.quotes` view also had (and the two disagreed on edge
+cases). `public.prev_trading_day(anchor date)` is now the one place that
+rule is written.
 """
 
 from __future__ import annotations
@@ -39,6 +46,7 @@ MARKET_QUERY = text(
       c.name,
       c.sector,
       l.first_bar_date,
+      l.backfill_completed_at,
       q.price,
       q.observed_at,
       pb.close AS prev_close,
@@ -48,14 +56,11 @@ MARKET_QUERY = text(
     FROM listings l
     JOIN companies c ON c.cik = l.cik
     LEFT JOIN quotes q ON q.symbol = l.symbol
-    LEFT JOIN LATERAL (
-      SELECT td.trade_date
-      FROM trading_days td
-      WHERE td.trade_date < COALESCE((q.observed_at AT TIME ZONE 'America/New_York')::date, :today)
-      ORDER BY td.trade_date DESC
-      LIMIT 1
-    ) ptd ON true
-    LEFT JOIN daily_bars pb ON pb.symbol = l.symbol AND pb.trade_date = ptd.trade_date
+    LEFT JOIN daily_bars pb
+      ON pb.symbol = l.symbol
+      AND pb.trade_date = public.prev_trading_day(
+        COALESCE((q.observed_at AT TIME ZONE 'America/New_York')::date, :today)
+      )
     LEFT JOIN LATERAL (
       SELECT m.market_cap, m.is_multi_class
       FROM market_caps m

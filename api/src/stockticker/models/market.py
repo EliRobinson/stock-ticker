@@ -22,6 +22,7 @@ class MarketRow(BaseModel):
     market_cap: Decimal | None
     market_cap_is_approx: bool
     first_bar_date: date | None
+    backfill_completed_at: datetime | None
 
 
 class MarketResponse(BaseModel):

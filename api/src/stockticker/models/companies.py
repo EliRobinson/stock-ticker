@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel
@@ -11,6 +11,7 @@ class ListingSummary(BaseModel):
     is_primary: bool
     is_active: bool
     first_bar_date: date | None
+    backfill_completed_at: datetime | None
 
 
 class MarketCapSummary(BaseModel):

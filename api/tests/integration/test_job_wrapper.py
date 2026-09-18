@@ -12,6 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from stockticker.config import get_settings
 from stockticker.ingest.job import (
     ConfigMissingError,
     FailedItem,
@@ -430,6 +431,57 @@ async def test_run_job_uses_the_spec_engine_for_both_lock_and_handler(app_writer
         assert rows[0].status == "succeeded"
     finally:
         await unreachable.dispose()
+        await _cleanup(app_writer_engine, job_name)
+
+
+async def test_run_job_never_raises_when_the_database_is_unreachable(app_writer_engine: AsyncEngine) -> None:
+    """`run_job`'s own bookkeeping -- taking the lock, before a handler
+    ever runs -- can fail too (the DB is down). It must still return a
+    JobOutcome, never raise: `failed`/`infra`, not an unhandled exception
+    that would take the whole startup-chain gather or scheduler tick down
+    with it."""
+    job_name = _job_name()
+    unreachable = create_async_engine(
+        "postgresql+asyncpg://nobody:nobody@127.0.0.1:1/nonexistent",
+        pool_pre_ping=True,
+    )
+
+    async def never_called(ctx: JobContext) -> JobResult:
+        raise AssertionError("the handler must never run if the lock connection can't even open")
+
+    try:
+        outcome = await run_job(_spec(job_name, never_called), engine=unreachable, quotes_engine=unreachable)
+        assert outcome.status == "failed"
+        assert outcome.error is not None
+        assert outcome.error.type == "infra"
+    finally:
+        await unreachable.dispose()
+
+
+async def test_run_job_never_raises_when_the_pool_is_exhausted(app_writer_engine: AsyncEngine) -> None:
+    """A pool with no free connection and no room to overflow: `run_job`
+    must still return `failed`/`infra` rather than raising a pool-timeout
+    exception or hanging forever."""
+    job_name = _job_name()
+    tiny_pool = create_async_engine(
+        get_settings().app_writer_dsn,
+        pool_size=1,
+        max_overflow=0,
+        pool_timeout=1,
+    )
+
+    async def never_called(ctx: JobContext) -> JobResult:
+        raise AssertionError("the handler must never run if no connection could be acquired")
+
+    holder = await tiny_pool.connect()  # the pool's only connection, held for the whole test
+    try:
+        outcome = await run_job(_spec(job_name, never_called), engine=tiny_pool, quotes_engine=tiny_pool)
+        assert outcome.status == "failed"
+        assert outcome.error is not None
+        assert outcome.error.type == "infra"
+    finally:
+        await holder.close()
+        await tiny_pool.dispose()
         await _cleanup(app_writer_engine, job_name)
 
 

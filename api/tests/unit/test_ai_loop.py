@@ -9,7 +9,7 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
-from support.ai_fakes import (
+from ai_fakes import (
     FakeClock,
     FakeExecutor,
     HttpError,
@@ -31,7 +31,7 @@ from support.ai_fakes import (
 )
 
 from stockticker.ai.context import _anthropic_client, build_chat_deps
-from stockticker.ai.loop import ChatDeps, Limits, stream_answer
+from stockticker.ai.loop import ChatDeps, Limits, answer_producer, stream_answer
 from stockticker.ai.pricing import PRICES, TokenUsage, cost_usd
 from stockticker.ai.stream import until_disconnected
 from stockticker.config import Settings
@@ -331,9 +331,7 @@ async def test_daily_token_budget_blocks_calls() -> None:
 async def test_unknown_model_fails_closed() -> None:
     anthropic = ScriptedAnthropic()
     out = await run(make_deps(anthropic, model="claude-unpriced-9"))
-    assert errors(out) == [
-        "AI is off. No price is set for model claude-unpriced-9. Add it to stockticker/ai/pricing.py."
-    ]
+    assert errors(out) == ["AI is off. Model claude-unpriced-9 has no configured price."]
     assert anthropic.requests == []
 
 
@@ -362,7 +360,7 @@ async def test_disconnect_during_the_model_stream_cancels_it_and_sends_nothing_m
 
     received: list[str] = []
     relay = until_disconnected(
-        stream_answer(make_deps(anthropic, ledger=ledger), [user("q")], "m"),
+        answer_producer(make_deps(anthropic, ledger=ledger), [user("q")], "m"),
         is_disconnected,
         poll_seconds=0.01,
     )
@@ -390,7 +388,7 @@ async def test_disconnect_during_a_query_cancels_it() -> None:
     received = [
         c
         async for c in until_disconnected(
-            stream_answer(make_deps(anthropic, executor), [user("q")], "m"),
+            answer_producer(make_deps(anthropic, executor), [user("q")], "m"),
             is_disconnected,
             poll_seconds=0.01,
         )

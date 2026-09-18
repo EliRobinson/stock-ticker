@@ -1,24 +1,18 @@
 """The three Ask tools (system design §6, "Tools").
 
-Each tool is defined once, as a name plus a Pydantic input model. The JSON
-schema sent to Anthropic is generated from that model (`anthropic_tools()`),
-and the model's input is validated against the same model before the tool
-runs, so the two can never drift apart.
+Each tool is defined once, as a `ToolDefinition`: a name, a Pydantic input
+model, and its handler. The JSON schema sent to Anthropic is generated from
+the input model (`anthropic_tools()`), and the model's input is validated
+against the same model before the handler runs, so the two can never drift.
 
-Every tool result the model reads is wrapped in `<untrusted_data>` tags
-(`wrap_untrusted`): query results carry Company names, Event titles, Note
-bodies, and filing text, none of which are instructions.
+A tool never ends the answer. Every failure, expected or not, comes back to
+the model as a `ToolFailure` it can read.
 """
 
 from __future__ import annotations
 
-import json
-import math
-import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import date, datetime, time, timedelta
-from decimal import Decimal
 from typing import Annotated, Any, Literal
 
 from anthropic.types import ToolParam
@@ -26,13 +20,19 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from stockticker.ai.executor import Column, SqlExecutor, ToolError
 from stockticker.ai.guard import AI_VIEWS, ROW_LIMIT, GuardError, guard_sql
-from stockticker.models.views import ChartSeries, TableColumn, TableSpec, TimeseriesChartSpec
+from stockticker.ai.serialize import display_value, inline_schema_refs, model_payload, wrap_untrusted
+from stockticker.logging import get_logger
+from stockticker.models.views import (
+    ChartSeries,
+    TableColumn,
+    TableSpec,
+    TimeseriesChartSpec,
+    ViewSpec,
+)
 
-MODEL_ROW_LIMIT = 200
-MODEL_BYTE_LIMIT = 16 * 1024
-MAX_CELL_CHARS = 1_000
+logger = get_logger(__name__)
+
 MAX_CHART_SERIES = 8
-SIGNIFICANT_DIGITS = 6
 
 DATE_TYPES = frozenset({"date", "timestamp", "timestamptz"})
 NUMERIC_TYPES = frozenset({"int2", "int4", "int8", "numeric", "float4", "float8"})
@@ -47,6 +47,10 @@ _FORMAT_HELP = (
     "How the web app formats the value. `percent`: the value is already in percent (12.5 -> 12.5%). "
     "`fraction_as_percent`: the value is a fraction (0.125 -> 12.5%). `compact_currency`: $2.9T."
 )
+INTERNAL_TOOL_ERROR = "The tool failed with an internal error. Try a different query."
+
+
+# --- inputs ------------------------------------------------------------------
 
 
 class _ToolInput(BaseModel):
@@ -87,81 +91,38 @@ class ShowChartInput(_ToolInput):
     y_format: NumberFormat | None = Field(default=None, description=_FORMAT_HELP)
 
 
+# --- outcomes ------------------------------------------------------------------
+
+
 @dataclass(frozen=True)
-class ToolDefinition:
-    name: str
-    description: str
-    input_model: type[_ToolInput]
+class ToolSuccess:
+    """`output` goes to the browser in `tool-output-available` and, wrapped as
+    untrusted data, to the model. `view`, if any, becomes a `data-view` part."""
+
+    output: dict[str, Any]
+    view: ViewSpec | None = None
+
+    @property
+    def model_content(self) -> str:
+        return wrap_untrusted(self.output)
 
 
-RUN_SQL = ToolDefinition(
-    name="run_sql",
-    description=(
-        "Run one read-only SELECT against the ai views and functions. Returns result_id, columns, "
-        "up to 200 rows (numbers rounded to 6 significant digits), row_count, and truncated. "
-        "Errors come back as text you can use to fix the query."
-    ),
-    input_model=RunSqlInput,
-)
-SHOW_TABLE = ToolDefinition(
-    name="show_table",
-    description=(
-        "Display an earlier run_sql result to the user as a table. Use a result_id you have already "
-        "seen; call it on a later turn than the run_sql that produced it."
-    ),
-    input_model=ShowTableInput,
-)
-SHOW_CHART = ToolDefinition(
-    name="show_chart",
-    description=(
-        "Display an earlier run_sql result to the user as a time-series line chart. x must be a date "
-        f"column; at most {MAX_CHART_SERIES} numeric series. Use a result_id you have already seen."
-    ),
-    input_model=ShowChartInput,
-)
-TOOLS: tuple[ToolDefinition, ...] = (RUN_SQL, SHOW_TABLE, SHOW_CHART)
-TOOLS_BY_NAME = {tool.name: tool for tool in TOOLS}
+@dataclass(frozen=True)
+class ToolFailure:
+    """`message` goes to the browser in `tool-output-error` and, wrapped as
+    untrusted data, to the model, which can often fix its call."""
+
+    message: str
+
+    @property
+    def model_content(self) -> str:
+        return wrap_untrusted({"error": self.message})
 
 
-def anthropic_tools() -> list[ToolParam]:
-    return [
-        ToolParam(
-            name=tool.name,
-            description=tool.description,
-            input_schema=_inline_refs(tool.input_model.model_json_schema()),
-        )
-        for tool in TOOLS
-    ]
+ToolOutcome = ToolSuccess | ToolFailure
 
 
-def _inline_refs(schema: dict[str, Any]) -> dict[str, Any]:
-    """Pydantic puts nested models under `$defs` and points at them with
-    `$ref`. Inline them, and drop the `title`s, which only cost tokens."""
-    defs = schema.get("$defs", {})
-
-    def resolve(node: Any) -> Any:
-        if isinstance(node, dict):
-            if "$ref" in node:
-                return resolve(defs[node["$ref"].rsplit("/", 1)[-1]])
-            return {
-                key: (
-                    {name: resolve(sub) for name, sub in value.items()}
-                    if key == "properties"
-                    else resolve(value)
-                )
-                for key, value in node.items()
-                if key not in {"$defs", "title"}
-            }
-        if isinstance(node, list):
-            return [resolve(item) for item in node]
-        return node
-
-    resolved = resolve(schema)
-    assert isinstance(resolved, dict)
-    return resolved
-
-
-# --- results -------------------------------------------------------------
+# --- per-answer state ------------------------------------------------------------
 
 
 @dataclass
@@ -171,22 +132,6 @@ class CachedResult:
     rows: list[tuple[Any, ...]]
     row_count: int
     step: int
-
-
-@dataclass
-class ToolOutcome:
-    """What one tool call produced. `output` goes to the browser in
-    `tool-output-available`; `model_content` goes to the model."""
-
-    output: dict[str, Any] | None = None
-    model_content: str = ""
-    error: str | None = None
-    view: dict[str, Any] | None = None
-    view_id: str | None = None
-
-    @property
-    def is_error(self) -> bool:
-        return self.error is not None
 
 
 @dataclass
@@ -202,37 +147,20 @@ class AnswerTools:
     async def run(self, name: str, raw_input: Any) -> ToolOutcome:
         tool = TOOLS_BY_NAME.get(name)
         if tool is None:
-            return _error(f"Unknown tool {name!r}. The tools are: {', '.join(TOOLS_BY_NAME)}.")
+            return ToolFailure(f"Unknown tool {name!r}. The tools are: {', '.join(TOOLS_BY_NAME)}.")
         try:
             parsed = tool.input_model.model_validate(raw_input)
         except ValidationError as error:
-            return _error(f"Invalid input for {name}: {_validation_summary(error)}")
-        handlers: dict[str, Callable[[Any], Awaitable[ToolOutcome]]] = {
-            RUN_SQL.name: self._run_sql,
-            SHOW_TABLE.name: self._show_table,
-            SHOW_CHART.name: self._show_chart,
-        }
+            return ToolFailure(f"Invalid input for {name}: {_validation_summary(error)}")
         try:
-            return await handlers[name](parsed)
+            return await tool.handler(self, parsed)
         except (GuardError, ToolError) as error:
-            return _error(str(error))
+            return ToolFailure(str(error))
+        except Exception:
+            logger.exception("ai_tool_failed", tool=name)
+            return ToolFailure(INTERNAL_TOOL_ERROR)
 
-    async def _run_sql(self, request: RunSqlInput) -> ToolOutcome:
-        guarded = guard_sql(request.sql, ai_views=self.ai_views)
-        result = await self.executor.execute(guarded.wrapped_sql)
-        result_id = f"r{len(self.results) + 1}"
-        cached = CachedResult(
-            result_id=result_id,
-            columns=result.columns,
-            rows=result.rows[:ROW_LIMIT],
-            row_count=min(len(result.rows), ROW_LIMIT),
-            step=self.step,
-        )
-        self.results[result_id] = cached
-        payload = model_payload(cached, more_than_limit=len(result.rows) > ROW_LIMIT)
-        return ToolOutcome(output=payload, model_content=wrap_untrusted(payload))
-
-    def _seen_result(self, result_id: str) -> CachedResult:
+    def seen_result(self, result_id: str) -> CachedResult:
         cached = self.results.get(result_id)
         if cached is None:
             raise ToolError(
@@ -246,57 +174,79 @@ class AnswerTools:
             )
         return cached
 
-    async def _show_table(self, request: ShowTableInput) -> ToolOutcome:
-        cached = self._seen_result(request.result_id)
-        names = _unique_column_names(cached)
-        _require_columns(cached, [column.key for column in request.columns], names)
-        view_id = self._next_view_id()
-        spec = TableSpec(
-            id=view_id,
-            title=request.title,
-            columns=[TableColumn(key=c.key, label=c.label, format=c.format) for c in request.columns],
-            rows=_row_dicts(cached, [c.key for c in request.columns]),
-        )
-        return self._view_outcome(view_id, spec.model_dump(mode="json"), len(spec.rows))
-
-    async def _show_chart(self, request: ShowChartInput) -> ToolOutcome:
-        cached = self._seen_result(request.result_id)
-        names = _unique_column_names(cached)
-        keys = [request.x, *(series.key for series in request.series)]
-        _require_columns(cached, keys, names)
-        types = {column.name: column.type for column in cached.columns}
-        if types[request.x] not in DATE_TYPES:
-            raise ToolError(f"x must be a date column; {request.x!r} is {types[request.x]}.")
-        for series in request.series:
-            if series.key == request.x:
-                raise ToolError(f"{series.key!r} is the x column; it cannot also be a series.")
-            if types[series.key] not in NUMERIC_TYPES:
-                raise ToolError(f"Series {series.key!r} must be numeric; it is {types[series.key]}.")
-        view_id = self._next_view_id()
-        spec = TimeseriesChartSpec(
-            id=view_id,
-            title=request.title,
-            x=request.x,
-            series=[ChartSeries(key=s.key, label=s.label) for s in request.series],
-            y_format=request.y_format,
-            rows=_row_dicts(cached, keys),
-        )
-        return self._view_outcome(view_id, spec.model_dump(mode="json"), len(spec.rows))
-
-    def _next_view_id(self) -> str:
+    def next_view_id(self) -> str:
         """Unique within the answer (one assistant message), which is the
         scope the AI SDK client keys `data-view` parts by."""
         self.views_shown += 1
         return f"view-{self.views_shown}"
 
-    @staticmethod
-    def _view_outcome(view_id: str, spec: dict[str, Any], row_count: int) -> ToolOutcome:
-        output = {"view_id": view_id, "kind": spec["kind"], "rows_shown": row_count}
-        return ToolOutcome(output=output, model_content=wrap_untrusted(output), view=spec, view_id=view_id)
+
+# --- handlers --------------------------------------------------------------------
 
 
-def _error(message: str) -> ToolOutcome:
-    return ToolOutcome(error=message, model_content=wrap_untrusted({"error": message}))
+async def _run_sql(state: AnswerTools, request: RunSqlInput) -> ToolOutcome:
+    guarded = guard_sql(request.sql, ai_views=state.ai_views)
+    result = await state.executor.execute(guarded.wrapped_sql)
+    result_id = f"r{len(state.results) + 1}"
+    cached = CachedResult(
+        result_id=result_id,
+        columns=result.columns,
+        rows=result.rows[:ROW_LIMIT],
+        row_count=min(len(result.rows), ROW_LIMIT),
+        step=state.step,
+    )
+    state.results[result_id] = cached
+    return ToolSuccess(
+        output=model_payload(
+            result_id=result_id,
+            columns=[(column.name, column.type) for column in cached.columns],
+            rows=cached.rows,
+            row_count=cached.row_count,
+            row_count_is_capped=len(result.rows) > ROW_LIMIT,
+        )
+    )
+
+
+async def _show_table(state: AnswerTools, request: ShowTableInput) -> ToolOutcome:
+    cached = state.seen_result(request.result_id)
+    keys = [column.key for column in request.columns]
+    _require_columns(cached, keys)
+    spec = TableSpec(
+        id=state.next_view_id(),
+        title=request.title,
+        columns=[TableColumn(key=c.key, label=c.label, format=c.format) for c in request.columns],
+        rows=_row_dicts(cached, keys),
+    )
+    return _view_success(spec)
+
+
+async def _show_chart(state: AnswerTools, request: ShowChartInput) -> ToolOutcome:
+    cached = state.seen_result(request.result_id)
+    keys = [request.x, *(series.key for series in request.series)]
+    _require_columns(cached, keys)
+    types = {column.name: column.type for column in cached.columns}
+    if types[request.x] not in DATE_TYPES:
+        raise ToolError(f"x must be a date column; {request.x!r} is {types[request.x]}.")
+    for series in request.series:
+        if series.key == request.x:
+            raise ToolError(f"{series.key!r} is the x column; it cannot also be a series.")
+        if types[series.key] not in NUMERIC_TYPES:
+            raise ToolError(f"Series {series.key!r} must be numeric; it is {types[series.key]}.")
+    spec = TimeseriesChartSpec(
+        id=state.next_view_id(),
+        title=request.title,
+        x=request.x,
+        series=[ChartSeries(key=s.key, label=s.label) for s in request.series],
+        y_format=request.y_format,
+        rows=_row_dicts(cached, keys),
+    )
+    return _view_success(spec)
+
+
+def _view_success(spec: TableSpec | TimeseriesChartSpec) -> ToolSuccess:
+    return ToolSuccess(
+        output={"view_id": spec.id, "kind": spec.kind, "rows_shown": len(spec.rows)}, view=spec
+    )
 
 
 def _validation_summary(error: ValidationError) -> str:
@@ -307,7 +257,7 @@ def _validation_summary(error: ValidationError) -> str:
     return "; ".join(problems)
 
 
-def _unique_column_names(cached: CachedResult) -> list[str]:
+def _require_columns(cached: CachedResult, keys: list[str]) -> None:
     names = [column.name for column in cached.columns]
     duplicates = sorted({name for name in names if names.count(name) > 1})
     if duplicates:
@@ -315,10 +265,6 @@ def _unique_column_names(cached: CachedResult) -> list[str]:
             f"{cached.result_id} has duplicate column names ({', '.join(duplicates)}). "
             "Alias them in run_sql, then show the new result."
         )
-    return names
-
-
-def _require_columns(cached: CachedResult, keys: list[str], names: list[str]) -> None:
     missing = [key for key in keys if key not in names]
     if missing:
         raise ToolError(
@@ -329,79 +275,59 @@ def _require_columns(cached: CachedResult, keys: list[str], names: list[str]) ->
 
 def _row_dicts(cached: CachedResult, keys: list[str]) -> list[dict[str, Any]]:
     indexes = {column.name: i for i, column in enumerate(cached.columns)}
-    return [{key: json_value(row[indexes[key]]) for key in keys} for row in cached.rows]
+    return [{key: display_value(row[indexes[key]]) for key in keys} for row in cached.rows]
 
 
-# --- serialization ---------------------------------------------------------
+# --- definitions --------------------------------------------------------------------
 
 
-def json_value(value: Any, *, significant_digits: int | None = None) -> Any:
-    """A JSON-safe copy of a value asyncpg returned. With `significant_digits`,
-    non-integer numbers are rounded (integers such as ids and volumes stay exact)."""
-    if value is None or isinstance(value, bool | str | int):
-        return value
-    if isinstance(value, Decimal | float):
-        number = float(value)
-        if not math.isfinite(number):
-            return None
-        if significant_digits is not None:
-            number = float(f"{number:.{significant_digits}g}")
-        if number.is_integer() and abs(number) < 2**53:
-            return int(number)
-        return number
-    if isinstance(value, datetime | date | time):
-        return value.isoformat()
-    if isinstance(value, timedelta):
-        return str(value)
-    if isinstance(value, uuid.UUID):
-        return str(value)
-    if isinstance(value, list | tuple):
-        return [json_value(item, significant_digits=significant_digits) for item in value]
-    if isinstance(value, dict):
-        return {str(k): json_value(v, significant_digits=significant_digits) for k, v in value.items()}
-    return str(value)
+@dataclass(frozen=True)
+class ToolDefinition:
+    name: str
+    description: str
+    input_model: type[_ToolInput]
+    handler: Callable[[AnswerTools, Any], Awaitable[ToolOutcome]]
 
 
-def _clip(value: Any) -> tuple[Any, bool]:
-    if isinstance(value, str) and len(value) > MAX_CELL_CHARS:
-        return value[:MAX_CELL_CHARS] + " [cut]", True
-    return value, False
+RUN_SQL = ToolDefinition(
+    name="run_sql",
+    description=(
+        "Run one read-only SELECT against the ai views and functions. Returns result_id, columns, "
+        "up to 200 rows (numbers rounded to 6 significant digits), row_count, and truncated. "
+        "Errors come back as text you can use to fix the query."
+    ),
+    input_model=RunSqlInput,
+    handler=_run_sql,
+)
+SHOW_TABLE = ToolDefinition(
+    name="show_table",
+    description=(
+        "Display an earlier run_sql result to the user as a table. Use a result_id you have already "
+        "seen; call it on a later turn than the run_sql that produced it."
+    ),
+    input_model=ShowTableInput,
+    handler=_show_table,
+)
+SHOW_CHART = ToolDefinition(
+    name="show_chart",
+    description=(
+        "Display an earlier run_sql result to the user as a time-series line chart. x must be a date "
+        f"column; at most {MAX_CHART_SERIES} numeric series. Use a result_id you have already seen."
+    ),
+    input_model=ShowChartInput,
+    handler=_show_chart,
+)
+TOOLS: tuple[ToolDefinition, ...] = (RUN_SQL, SHOW_TABLE, SHOW_CHART)
+TOOLS_BY_NAME = {tool.name: tool for tool in TOOLS}
+TOOL_NAMES = frozenset(TOOLS_BY_NAME)
 
 
-def model_payload(cached: CachedResult, *, more_than_limit: bool) -> dict[str, Any]:
-    """The run_sql result the model reads: at most 200 rows and 16 KB."""
-    clipped_any = False
-    rows: list[list[Any]] = []
-    for row in cached.rows[:MODEL_ROW_LIMIT]:
-        cells = []
-        for value in row:
-            cell, clipped = _clip(json_value(value, significant_digits=SIGNIFICANT_DIGITS))
-            clipped_any = clipped_any or clipped
-            cells.append(cell)
-        rows.append(cells)
-
-    def payload(count: int) -> dict[str, Any]:
-        return {
-            "result_id": cached.result_id,
-            "columns": [{"name": column.name, "type": column.type} for column in cached.columns],
-            "rows": rows[:count],
-            "row_count": cached.row_count,
-            "row_count_is_capped": more_than_limit,
-            "truncated": more_than_limit or clipped_any or count < cached.row_count,
-        }
-
-    count = len(rows)
-    while count > 0 and _json_size(payload(count)) > MODEL_BYTE_LIMIT:
-        count = max(0, min(count - 1, count * MODEL_BYTE_LIMIT // _json_size(payload(count))))
-    return payload(count)
-
-
-def _json_size(value: Any) -> int:
-    return len(json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode())
-
-
-def wrap_untrusted(value: Any) -> str:
-    """JSON inside `<untrusted_data>` tags. `<` is escaped (valid JSON, same
-    value), so data can never close the tag early."""
-    body = json.dumps(value, separators=(",", ":"), ensure_ascii=False).replace("<", "\\u003c")
-    return f"<untrusted_data>{body}</untrusted_data>"
+def anthropic_tools() -> list[ToolParam]:
+    return [
+        ToolParam(
+            name=tool.name,
+            description=tool.description,
+            input_schema=inline_schema_refs(tool.input_model.model_json_schema()),
+        )
+        for tool in TOOLS
+    ]

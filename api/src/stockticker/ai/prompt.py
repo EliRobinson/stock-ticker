@@ -60,7 +60,7 @@ company whose filings report only per-class counts has no Market Cap row; say it
 rather than estimating it.
 - Live prices (`ai.quotes`) come from the free IEX feed only, not the consolidated tape, so they can \
 differ slightly from official closes.
-- The Constituent List is today's S&P 500 membership only. Companies that left the index are not \
+- The Constituent List is today's S&P 500 membership only. Companies that left the Constituent List are not \
 modeled, so results over the past have survivorship bias; mention it when it matters.
 - A Trading Day is a date in New York time with a market session. Use `ai.today_ny()` for "today", \
 never `now()::date` or `current_date`, which can already be tomorrow in UTC.

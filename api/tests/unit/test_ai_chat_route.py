@@ -8,9 +8,9 @@ from collections.abc import AsyncIterator
 import httpx
 import pytest
 import pytest_asyncio
+from ai_fakes import parse_sse
 from fastapi import FastAPI
 from starlette.middleware.gzip import GZipMiddleware
-from support.ai_fakes import parse_sse
 
 from stockticker.api.app import create_app
 from stockticker.config import get_settings
@@ -87,3 +87,25 @@ def test_openapi_documents_the_data_view_part(app: FastAPI) -> None:
     assert content["text/event-stream"]["schema"] == {"$ref": "#/components/schemas/DataViewPart"}
     data = spec["components"]["schemas"]["DataViewPart"]["properties"]["data"]
     assert data["discriminator"]["propertyName"] == "kind"
+
+
+def test_openapi_documents_the_request_body(app: FastAPI) -> None:
+    body = app.openapi()["paths"]["/api/v1/chat"]["post"]["requestBody"]
+    schema = body["content"]["application/json"]["schema"]
+    assert "messages" in schema["properties"]
+    assert "$ref" not in str(schema)
+
+
+async def test_a_body_over_1_mb_is_a_413_problem(app: FastAPI) -> None:
+    big = {**BODY, "messages": [BODY["messages"][0]] * 60, "padding": "x" * (1024 * 1024)}  # type: ignore[index]
+    response = await post(app, big)
+    assert response.status_code == 413
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.json()["detail"] == "The request is larger than 1 MB. Start a new chat."
+
+
+async def test_an_overlong_text_part_is_a_422_problem(app: FastAPI) -> None:
+    body = {"messages": [{"role": "user", "parts": [{"type": "text", "text": "x" * 32_001}]}]}
+    response = await post(app, body)
+    assert response.status_code == 422
+    assert response.headers["content-type"] == "application/problem+json"

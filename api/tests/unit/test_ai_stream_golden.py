@@ -8,11 +8,10 @@ review the diff."""
 from __future__ import annotations
 
 import os
-import time
 from decimal import Decimal
 from pathlib import Path
 
-from support.ai_fakes import (
+from ai_fakes import (
     FakeExecutor,
     MemoryLedger,
     ScriptedAnthropic,
@@ -168,7 +167,6 @@ async def test_wall_clock_exhausted_while_a_tool_runs() -> None:
     )
     executor = FakeExecutor(result([("name", "text")], [("Apple",)]), delay=5)
     deps = make_deps(anthropic, executor, limits=Limits(wall_seconds=0.2))
-    deps.clock = time.monotonic
     body = await render(deps)
     check("wall_clock_exhausted", body)
     assert part_types(body) == [

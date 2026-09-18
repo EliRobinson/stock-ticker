@@ -24,7 +24,7 @@ from stockticker.ai.convert import UIMessage
 from stockticker.ai.executor import Column, QueryResult, ToolError
 from stockticker.ai.loop import ChatDeps, Limits, PromptContext
 from stockticker.ai.pricing import TokenUsage
-from stockticker.ai.spend import DailyTokenBudgetReached, SpendGate, SpendLimitReached
+from stockticker.ai.spend import LedgerTotals, SpendGate, check_gate
 
 MODEL = "claude-sonnet-5"
 
@@ -149,7 +149,12 @@ class HttpError:
     headers: dict[str, str] = field(default_factory=dict)
 
 
-Scripted = str | HttpError
+@dataclass
+class ConnectionDrop:
+    """The connection fails before any response (no status, no message_start)."""
+
+
+Scripted = str | HttpError | ConnectionDrop
 
 
 class ScriptedAnthropic:
@@ -171,6 +176,8 @@ class ScriptedAnthropic:
         if not self.responses:
             raise AssertionError("the loop made more model calls than the test scripted")
         response = self.responses.pop(0)
+        if isinstance(response, ConnectionDrop):
+            raise httpx2.ConnectError("connection dropped", request=request)
         if isinstance(response, HttpError):
             body = {"type": "error", "error": {"type": response.error_type, "message": response.error_type}}
             return httpx2.Response(response.status, json=body, headers=response.headers)
@@ -246,11 +253,8 @@ class MemoryLedger:
 
     async def reserve(self, *, model: str, worst_case_usd: Decimal, gate: SpendGate) -> int:
         self.gates.append((worst_case_usd, gate))
-        if await self.spent_usd() + worst_case_usd > gate.limit_usd:
-            raise SpendLimitReached(gate.limit_usd)
         tokens = self.tokens_today + sum(row.usage.total_tokens for row in self.rows)
-        if tokens >= gate.daily_token_budget:
-            raise DailyTokenBudgetReached(gate.daily_token_budget)
+        check_gate(LedgerTotals(await self.spent_usd(), tokens), worst_case_usd, gate)
         self.rows.append(LedgerRow(model=model, state="reserved", cost_usd=worst_case_usd))
         return len(self.rows) - 1
 
@@ -266,16 +270,13 @@ class MemoryLedger:
 
 
 class FakeClock:
-    def __init__(self) -> None:
-        self.now = 1000.0
-        self.sleeps: list[float] = []
+    """Records retry waits instead of sleeping."""
 
-    def __call__(self) -> float:
-        return self.now
+    def __init__(self) -> None:
+        self.sleeps: list[float] = []
 
     async def sleep(self, seconds: float) -> None:
         self.sleeps.append(seconds)
-        self.now += seconds
 
 
 def prompt_context() -> PromptContext:
@@ -315,7 +316,6 @@ def make_deps(
         daily_token_budget=daily_token_budget,
         day_start=lambda: datetime(2026, 9, 17, 4, tzinfo=UTC),
         limits=limits or Limits(),
-        clock=clock,
         sleep=clock.sleep,
     )
 

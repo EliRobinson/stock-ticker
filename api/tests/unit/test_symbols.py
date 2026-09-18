@@ -1,6 +1,6 @@
 import pytest
 
-from stockticker.ingest.symbols import normalize_symbol
+from stockticker.ingest.symbols import is_valid_listing_ticker, normalize_symbol
 
 
 @pytest.mark.parametrize(
@@ -21,3 +21,24 @@ def test_normalize_symbol(raw: str, expected: str) -> None:
 def test_normalize_symbol_rejects_empty() -> None:
     with pytest.raises(ValueError, match="empty"):
         normalize_symbol("   ")
+
+
+@pytest.mark.parametrize(
+    ("symbol", "valid"),
+    [
+        ("A", True),
+        ("AAPL", True),
+        ("GOOGL", True),
+        ("BRK.B", True),
+        ("BF.B", True),
+        ("T131793", False),
+        ("T137FB9", False),
+        ("T3F04A1", False),
+        ("BRK.BB", False),
+        ("TOOLONG", False),
+        ("AAPL1", False),
+        ("brk.b", False),
+    ],
+)
+def test_is_valid_listing_ticker(symbol: str, valid: bool) -> None:
+    assert is_valid_listing_ticker(symbol) is valid

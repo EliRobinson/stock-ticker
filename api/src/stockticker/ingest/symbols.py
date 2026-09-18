@@ -9,6 +9,13 @@ reads from a provider before writing or querying by it.
 
 from __future__ import annotations
 
+import re
+
+# Constituent List / Listing tickers: 1–5 letters, optional single-letter
+# share class after a dot (`BRK.B`). Digits and longer junk (Wikipedia
+# footnote IDs like `T131793`) are rejected before they become Listings.
+LISTING_TICKER_RE = re.compile(r"^[A-Z]{1,5}(\.[A-Z])?$")
+
 
 def normalize_symbol(raw: str) -> str:
     """Return the canonical dot form of a ticker symbol.
@@ -21,3 +28,9 @@ def normalize_symbol(raw: str) -> str:
     if not cleaned:
         raise ValueError("symbol must not be empty")
     return cleaned.replace("-", ".")
+
+
+def is_valid_listing_ticker(symbol: str) -> bool:
+    """True when `symbol` is already in canonical form and matches the
+    Constituent List ticker shape (issue #38)."""
+    return bool(LISTING_TICKER_RE.fullmatch(symbol))

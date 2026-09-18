@@ -107,12 +107,17 @@ async def constituents_sync(ctx: JobContext) -> JobResult:
 async def run_constituents_sync(engine: AsyncEngine) -> JobResult:
     async with build_http_client(headers={"User-Agent": USER_AGENT}, follow_redirects=True) as client:
         html = await fetch_constituents_html(client)
-    rows = parse_constituents(html)
+    parsed = parse_constituents(html)
     async with engine.connect() as conn:
-        summary = await apply_constituents(conn, rows)
+        summary = await apply_constituents(conn, parsed.rows)
         await conn.commit()
-    logger.info("constituents_sync.applied", rows=len(rows), **_as_log(summary))
-    return JobResult(rows_written=summary.rows_written)
+    logger.info(
+        "constituents_sync.applied",
+        rows=len(parsed.rows),
+        rejected=len(parsed.rejected),
+        **_as_log(summary),
+    )
+    return JobResult(rows_written=summary.rows_written, failed_items=list(parsed.rejected))
 
 
 async def apply_constituents(

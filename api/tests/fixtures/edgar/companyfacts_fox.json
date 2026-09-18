@@ -1,0 +1,25 @@
+{
+ "cik": 1754301,
+ "entityName": "Fox Corporation",
+ "facts": {
+  "dei": {
+   "EntityCommonStockSharesOutstanding": {
+    "label": "Entity Common Stock, Shares Outstanding",
+    "units": {
+     "shares": [
+      {
+       "end": "2019-03-18",
+       "val": 1,
+       "accn": "0001564590-19-008308",
+       "fy": 2019,
+       "fp": "Q2",
+       "form": "10-Q",
+       "filed": "2019-03-18",
+       "frame": "CY2019Q1I"
+      }
+     ]
+    }
+   }
+  }
+ }
+}

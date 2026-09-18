@@ -1,0 +1,14 @@
+{
+ "cik": 1564708,
+ "entityName": "NEWS CORPORATION",
+ "facts": {
+  "us-gaap": {
+   "CommonStockSharesOutstanding": {
+    "label": "Common Stock, Shares, Outstanding",
+    "units": {
+     "shares": []
+    }
+   }
+  }
+ }
+}

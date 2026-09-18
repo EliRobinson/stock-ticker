@@ -6,7 +6,6 @@ See tests/integration/conftest.py for how to run these."""
 from __future__ import annotations
 
 import json
-import re
 import uuid
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
@@ -61,8 +60,6 @@ async def company(app_writer_engine: AsyncEngine) -> AsyncIterator[tuple[str, st
 def _mock_edgar(cik: str, companyfacts: httpx.Response, submissions: httpx.Response) -> None:
     respx.get(f"{EDGAR_BASE_URL}/api/xbrl/companyfacts/CIK{cik}.json").mock(return_value=companyfacts)
     respx.get(f"{EDGAR_BASE_URL}/submissions/CIK{cik}.json").mock(return_value=submissions)
-    # Every other active Company in the shared test database: no data.
-    respx.get(re.compile(rf"^{re.escape(EDGAR_BASE_URL)}/.*")).mock(return_value=httpx.Response(404))
 
 
 @respx.mock
@@ -76,9 +73,9 @@ async def test_edgar_sync_stores_shares_and_filing_events(
         httpx.Response(200, json=_fixture("submissions_aapl.json")),
     )
 
-    result = await run_edgar_sync(app_writer_engine, user_agent=USER_AGENT)
+    result = await run_edgar_sync(app_writer_engine, user_agent=USER_AGENT, ciks=[cik])
 
-    assert not [item for item in result.failed_items if item.key.startswith(cik)]
+    assert result.failed_items == []
     async with app_writer_engine.connect() as conn:
         shares = await conn.scalar(text("SELECT count(*) FROM shares_outstanding WHERE cik = :c"), {"c": cik})
         events = (
@@ -95,8 +92,8 @@ async def test_edgar_sync_stores_shares_and_filing_events(
     assert earnings.details["accession"] == "0000320193-26-000018"
     assert earnings.details["url"].endswith("/000032019326000018/aapl-20260730.htm")
 
-    again = await run_edgar_sync(app_writer_engine, user_agent=USER_AGENT)
-    assert not [item for item in again.failed_items if item.key.startswith(cik)]
+    again = await run_edgar_sync(app_writer_engine, user_agent=USER_AGENT, ciks=[cik])
+    assert again.failed_items == []
     async with app_writer_engine.connect() as conn:
         assert await conn.scalar(text("SELECT count(*) FROM events WHERE cik = :c"), {"c": cik}) == 4
 
@@ -108,9 +105,26 @@ async def test_edgar_sync_records_a_failed_item_and_keeps_going(
     cik, _ = company
     _mock_edgar(cik, httpx.Response(404), httpx.Response(200, json=_fixture("submissions_aapl.json")))
 
-    result = await run_edgar_sync(app_writer_engine, user_agent=USER_AGENT)
+    result = await run_edgar_sync(app_writer_engine, user_agent=USER_AGENT, ciks=[cik])
 
     mine = [item for item in result.failed_items if item.key == cik]
     assert [item.error for item in mine] == ["EDGAR has no companyfacts for this CIK"]
     async with app_writer_engine.connect() as conn:
         assert await conn.scalar(text("SELECT count(*) FROM events WHERE cik = :c"), {"c": cik}) == 4
+
+
+@respx.mock
+async def test_a_malformed_body_is_one_failed_item_not_a_failed_run(
+    app_writer_engine: AsyncEngine, company: tuple[str, str]
+) -> None:
+    cik, _ = company
+    _mock_edgar(
+        cik,
+        httpx.Response(200, text="<html>rate limited</html>"),
+        httpx.Response(200, json=_fixture("submissions_aapl.json")),
+    )
+
+    result = await run_edgar_sync(app_writer_engine, user_agent=USER_AGENT, ciks=[cik])
+
+    assert [item.key for item in result.failed_items] == [cik]
+    assert result.failed_items[0].error.startswith("EDGAR fetch or parse failed")

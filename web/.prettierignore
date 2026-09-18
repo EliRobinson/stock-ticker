@@ -4,5 +4,6 @@ out/
 build/
 dist/
 coverage/
+next-env.d.ts
 *.min.js
 *.min.css

@@ -402,9 +402,7 @@ class FakeClient:
         self.chunk_arrived.set()
 
     def body_text(self) -> str:
-        return "".join(
-            m.get("body", b"").decode() for m in self.sent if m["type"] == "http.response.body"
-        )
+        return "".join(m.get("body", b"").decode() for m in self.sent if m["type"] == "http.response.body")
 
 
 async def answer_text(deps: ChatDeps, messages: list[UIMessage] | None = None, message_id: str = "m") -> str:

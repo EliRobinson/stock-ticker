@@ -66,6 +66,7 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       AI_MODEL: ${AI_MODEL:-claude-sonnet-5}
       AI_DAILY_TOKEN_BUDGET: ${AI_DAILY_TOKEN_BUDGET:-2000000}
+      AI_SPEND_LIMIT_USD: ${AI_SPEND_LIMIT_USD:-5.00}
       WEB_ORIGIN: ${WEB_ORIGIN:-http://127.0.0.1:3000}
     volumes:
       - ./api:/app

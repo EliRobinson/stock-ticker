@@ -10,6 +10,7 @@ to surface it in `/api/v1/status`.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from decimal import Decimal
 from enum import StrEnum
 from functools import lru_cache
 from typing import ClassVar
@@ -59,6 +60,7 @@ class Settings(BaseSettings):
     anthropic_api_key: SecretStr | None = None
     ai_model: str = "claude-sonnet-5"
     ai_daily_token_budget: int = 2_000_000
+    ai_spend_limit_usd: Decimal = Decimal("5.00")
 
     # --- Web / HTTP ------------------------------------------------------
     web_origin: str = "http://127.0.0.1:3000"

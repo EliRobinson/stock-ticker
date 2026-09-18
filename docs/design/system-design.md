@@ -2,6 +2,8 @@
 
 Status: accepted after one critique round (data and ingest, AI/API/security, feasibility). The domain terms used here are defined in [CONTEXT.md](../../CONTEXT.md). Decisions that are hard to reverse are in [docs/adr/](../adr/). The UI states are in [brief.md](brief.md).
 
+Mermaid diagrams of this design are in [diagrams.md](diagrams.md).
+
 ## 1. Requirements
 
 ### Functional

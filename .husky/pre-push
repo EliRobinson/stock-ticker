@@ -10,14 +10,14 @@ run_step() {
   fi
 }
 
-run_step "type-check" pnpm type-check
-run_step "lint" pnpm lint
+run_step "type-check" pnpm --filter web type-check
+run_step "lint" pnpm --filter web lint
 run_step "format:check" pnpm format:check
-run_step "test" pnpm test
-run_step "build" pnpm build
+run_step "test" pnpm --filter web test
+run_step "build" pnpm --filter web build
 
 if [ "$RUN_E2E" = "1" ]; then
-  run_step "test:e2e" pnpm test:e2e
+  run_step "test:e2e" pnpm --filter web test:e2e
 else
   echo "Skipping E2E (RUN_E2E not set). Run with RUN_E2E=1 git push to include it."
 fi

@@ -247,6 +247,8 @@ Every PR updates `README.md`: the brief-to-status table, and the "How this was b
 
 ## Git Hooks (Husky)
 
+**GitHub Actions checks are disabled.** `.github/workflows/ci.yml` has its `quality`/`unit`/`e2e` jobs commented out, left with a single `hooks-notice` job so PRs still show a green check. The git hooks below are the actual gate - nothing runs in Actions. To restore CI, uncomment the jobs in `ci.yml` (they already use the `web`-scoped commands below).
+
 Hooks live at the repo root and run across the workspace.
 
 The `pre-commit` hook runs `lint-staged`:
@@ -256,7 +258,7 @@ The `pre-commit` hook runs `lint-staged`:
 
 The `commit-msg` hook runs `commitlint` to enforce Conventional Commits.
 
-The `pre-push` hook mirrors the fast CI jobs (`pnpm --filter web type-check`, `pnpm --filter web lint`, `pnpm format:check`, `pnpm --filter web test`) so a push that would fail CI fails locally first, before consuming a CI run. It intentionally skips `build` and `test:e2e` - those are slower and still run on the PR itself.
+The `pre-push` hook runs everything that used to run in CI: `pnpm --filter web type-check`, `pnpm --filter web lint`, `pnpm format:check`, `pnpm --filter web test`, and `pnpm --filter web build`, in that order, failing fast (`set -e`) and printing which step failed. E2E (Playwright) is skipped by default - it needs browsers installed and a build, which is too slow for every push - and prints a one-line note when skipped. Run `RUN_E2E=1 git push` to include it.
 
 To skip hooks in an emergency: `git commit --no-verify` / `git push --no-verify` (discouraged - fix the underlying issue instead).
 

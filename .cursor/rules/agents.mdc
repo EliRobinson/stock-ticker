@@ -1,4 +1,10 @@
-# Copilot instructions
+---
+description: Repo conventions live in AGENTS.md
+globs: ['**/*']
+alwaysApply: true
+---
+
+# Follow AGENTS.md
 
 This repo's coding conventions, stack, testing strategy, and commit standards
 are documented in `AGENTS.md` at the repo root (`CLAUDE.md` is a symlink to

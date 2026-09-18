@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from stockticker.config import Settings, get_settings
 from stockticker.db import get_app_writer_connection
+from stockticker.ingest.refetch import RefetchReason
 from stockticker.ingest.registry import JOBS
 from stockticker.marketdata import fetch_market_clock
 from stockticker.models.status import AiStatus, BackfillProgress, JobStatusEntry, StatusResponse
@@ -33,6 +34,7 @@ from stockticker.models.status import AiStatus, BackfillProgress, JobStatusEntry
 router = APIRouter(tags=["status"])
 
 _RECENT_RUNS_PER_JOB = 50
+_GAP_REASON: RefetchReason = "gap"
 
 
 async def _recent_runs_by_job(conn: AsyncConnection) -> dict[str, list[Row[Any]]]:
@@ -104,7 +106,8 @@ async def _data_as_of(conn: AsyncConnection) -> datetime | None:
 
 async def _open_gaps(conn: AsyncConnection) -> int:
     count = await conn.scalar(
-        text("SELECT count(*) FROM refetch_requests WHERE reason = 'gap' AND accepted_at IS NULL")
+        text("SELECT count(*) FROM refetch_requests WHERE reason = :reason AND accepted_at IS NULL"),
+        {"reason": _GAP_REASON},
     )
     return count or 0
 

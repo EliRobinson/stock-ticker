@@ -80,11 +80,11 @@ flowchart LR
 
 One diagram per container, one level in from diagram 2. Each component is tagged with the requirement(s) it serves. Mermaid's native `C4Component` diagram type renders poorly on GitHub, so these use `flowchart` with subgraphs instead, checked to render cleanly with mermaid-cli.
 
-Reflects [`feat/api-foundation`](https://github.com/EliRobinson/stock-ticker/tree/feat/api-foundation) @ `9436289fdc` for the `api` diagram; the same commit plus [`feat/ingest-reference`](https://github.com/EliRobinson/stock-ticker/tree/feat/ingest-reference) @ `9b5c63fe57` and [`feat/ingest-alpaca`](https://github.com/EliRobinson/stock-ticker/tree/feat/ingest-alpaca) @ `83d7e6f2dd` for the `worker` diagram; and the same commit plus [`feat/web-data`](https://github.com/EliRobinson/stock-ticker/tree/feat/web-data) @ `913e9decc0` for the hooks and lib layers of the `web` diagram. The `web` diagram's screens, containers, and shell have no branch yet (`feat/web-screens` doesn't exist), so those are drawn from the plan the #9 builder shared directly.
+Reflects [`feat/api-foundation`](https://github.com/EliRobinson/stock-ticker/tree/feat/api-foundation) @ `9436289fdc`, [`feat/api-read`](https://github.com/EliRobinson/stock-ticker/tree/feat/api-read) @ `0c1ea0ef9d`, and [`feat/ai-chat`](https://github.com/EliRobinson/stock-ticker/tree/feat/ai-chat) @ `c5fa2f3cc8` for the `api` diagram; `feat/api-foundation` plus [`feat/ingest-reference`](https://github.com/EliRobinson/stock-ticker/tree/feat/ingest-reference) @ `9b5c63fe57` and [`feat/ingest-alpaca`](https://github.com/EliRobinson/stock-ticker/tree/feat/ingest-alpaca) @ `83d7e6f2dd` for the `worker` diagram; and [`feat/web-data`](https://github.com/EliRobinson/stock-ticker/tree/feat/web-data) @ `913e9decc0` plus [`feat/web-screens`](https://github.com/EliRobinson/stock-ticker/tree/feat/web-screens) @ `a482291b8c` for the `web` diagram. None of these branches have merged into each other yet, so the diagrams show the intended shape once they do, not today's `main`.
 
 ### Component: api
 
-The `api` container: its HTTP routers, the AI module behind `POST /api/v1/chat`, and the two Postgres roles it connects as. Most routers below are still `501` stubs on `feat/api-foundation` (only `health` and `status` have real bodies), so this diagram is the shape the container is built around, not a claim that every edge already moves real data.
+The `api` container: its HTTP routers, the AI module behind `POST /api/v1/chat`, and the two Postgres roles it connects as. Every router and every AI module component here is real, though split across branches that have not merged into each other yet: `health` and `status` are on `feat/api-foundation`; `market`, `companies`, `bars`, `events`, and `notes` are on `feat/api-read`; `chat` and the whole `ai.*` module are on `feat/ai-chat`.
 
 ```mermaid
 flowchart TD
@@ -225,23 +225,24 @@ flowchart TD
 
 ### Component: web
 
-The `web` container: the shell, the four screens and their containers (all still planned, no `feat/web-screens` branch), and the TanStack Query hooks plus the `lib/` layer, which are real on `feat/web-data`. The `lib/api.ts` client is written against the target contract (an idempotent `PUT /api/v1/notes/{id}`, cursor pagination) rather than the `501` stubs currently on `feat/api-foundation`, by design: see the R3 code diagram below.
+The `web` container: the shell, the four screens and their containers, the TanStack Query hooks, and the `lib/` layer. Every node here is real: the shell and screens are on `feat/web-screens`, the hooks and `lib/` layer are on `feat/web-data`. `lib/api.ts`'s `putNote` was written against the target contract (an idempotent `PUT /api/v1/notes/{id}`) before `feat/api-read` shipped that exact route; see the R3 code diagram below for both sides now that they match. Ask is a docked panel inside `AppShell`, not a fourth route.
 
 ```mermaid
 flowchart TD
-    subgraph shellg["Shell (planned)"]
-        appShell["AppShell: nav, command palette, theme [R1]"]
-        statusStrip["StatusStrip: market status, data as of, backfill [R1]"]
+    subgraph shellg["Shell"]
+        appShell["AppShell: nav, command palette, theme, docks AskContainer [R1]"]
+        statusStrip["StatusStrip: market status, data as of, backfill, AI spend [R1]"]
     end
 
-    subgraph screens["Screens (planned)"]
-        marketScreen["MarketScreen, MarketTable/MarketList [R2]"]
-        companyScreen["CompanyScreen, PriceChart, NotesEventsPanel [R2][R3]"]
-        notesScreen["NotesScreen, NoteCard, NoteDialog [R3]"]
-        askPanel["AskPanel, AI Elements, ViewTable/ViewChart [R4]"]
+    subgraph screens["Screens"]
+        marketScreen["MarketScreen: MarketTable, MarketList [R2]"]
+        companyScreen["CompanyScreen: PriceChart, NotesEventsPanel [R2][R3]"]
+        notesScreen["NotesScreen: NoteDialog [R3]"]
+        askPanel["AskPanel: AI Elements, ViewTable, TimeseriesChart [R4]"]
     end
 
-    subgraph containers["Containers (planned)"]
+    subgraph containers["Containers"]
+        shellC["ShellContainer [R1]"]
         marketC["MarketContainer [R2]"]
         companyC["CompanyContainer [R2][R3]"]
         notesC["NotesContainer [R3]"]
@@ -266,25 +267,33 @@ flowchart TD
 
     api(["api, /api/v1"])
 
-    appShell -->|"job health, backfill progress"| statusStrip
+    shellC -->|"renders"| appShell
+    appShell --> statusStrip
     statusStrip --> useStatus
+    shellC --> useMarket
+    shellC --> useNotes
+    shellC --> useStatus
+    shellC -->|"docks"| askC
 
-    marketScreen --> marketC
-    companyScreen --> companyC
-    notesScreen --> notesC
-    askPanel --> askC
+    marketC -->|"renders"| marketScreen
+    companyC -->|"renders"| companyScreen
+    notesC -->|"renders"| notesScreen
+    askC -->|"renders"| askPanel
 
     marketC -->|"rows"| useMarket
-    marketC -->|"sort, filter, virtualize"| marketTable
+    marketC -->|"quotes health"| useStatus
+    marketC -->|"URL filter state"| marketTable
     companyC -->|"OHLC and adj_close"| useBars
     companyC -->|"company detail"| useCompany
     companyC -->|"event markers"| useEvents
-    companyC -->|"note markers, range shading"| useNotes
-    companyC -->|"series mapping"| chartData
-    notesC -->|"list, mutate"| useNotes
+    companyC -->|"note markers, save note"| useNotes
+    notesC -->|"list, save, delete"| useNotes
+    notesC -->|"company picker"| useMarket
     askC -->|"send and receive UIMessage"| chat
-    askC -->|"render data-view table"| marketTable
-    askC -->|"render data-view chart"| chartData
+    askC -->|"AI status, spend limit"| useStatus
+
+    marketScreen -->|"column defs"| marketTable
+    companyScreen -->|"candlestick/volume, markers"| chartData
 
     useMarket -->|"GET /market"| apiClient
     useBars -->|"GET /listings/symbol/bars"| apiClient
@@ -528,12 +537,12 @@ classDiagram
 
 ### Code: R3, notes tagged to dates or companies
 
-`Note` is a real Pydantic model on [`feat/api-foundation`](https://github.com/EliRobinson/stock-ticker/tree/feat/api-foundation) @ `9436289fdc`, but that commit's `notes` router has only `POST`, `PATCH`, and `DELETE` handlers, all still `501` stubs: no `PUT /notes/{id}` route exists server-side yet. `PutNoteBody`, `putNote`, `createNoteId`, `usePutNote`, `notesKeys`, `upsertNoteInPages`, `mapNotesToMarkers`, `snapToLoadedBar`, and `ChartMarker` are all real, from [`feat/web-data`](https://github.com/EliRobinson/stock-ticker/tree/feat/web-data) @ `913e9decc0`. The web client is written against the target contract (system-design.md §5's idempotent `PUT`) ahead of the API route existing, by design (`lib/api.ts`'s own comment says so), so calling it today 501s until the API side ships.
+Entirely real code, on both sides of the wire. `Note`, `NotePut`, and `put_note` (the idempotent `PUT /api/v1/notes/{id}` route, replacing the old `POST`/`PATCH` pair) are from [`feat/api-read`](https://github.com/EliRobinson/stock-ticker/tree/feat/api-read) @ `0c1ea0ef9d`. `PutNoteBody`, `putNote`, `createNoteId`, `usePutNote`, `notesKeys`, `upsertNoteInPages`, `mapNotesToMarkers`, `snapToLoadedBar`, and `ChartMarker` are from [`feat/web-data`](https://github.com/EliRobinson/stock-ticker/tree/feat/web-data) @ `913e9decc0`. The web side was written against the target contract before `feat/api-read` shipped the matching route; the two now agree.
 
 ```mermaid
 classDiagram
     class Note {
-        <<real type, api-foundation models/notes.py + web-data api-types.ts>>
+        <<real, api-read models/notes.py + web-data api-types.ts>>
         +UUID id
         +str cik
         +date start_date
@@ -541,6 +550,18 @@ classDiagram
         +str body
         +datetime created_at
         +datetime updated_at
+    }
+    class NotePut {
+        <<real, api-read, models/notes.py>>
+        +str cik
+        +date start_date
+        +date end_date
+        +str body
+    }
+    class put_note {
+        <<function, real, api-read, routers/notes.py>>
+        +PUT /api/v1/notes/note_id
+        +idempotent upsert: 201 created, 200 replaced
     }
     class PutNoteBody {
         <<real, web-data, lib/api.ts>>
@@ -552,7 +573,6 @@ classDiagram
     class putNote {
         <<function, real, web-data, lib/api.ts>>
         +putNote(id, body) Note
-        +PUT /api/v1/notes/id, not yet routed server-side
     }
     class createNoteId {
         <<function, real, web-data, hooks/useNotes.ts>>
@@ -590,9 +610,11 @@ classDiagram
         +str text
     }
 
-    usePutNote --> putNote : mutationFn
+    put_note --> NotePut : validates body against
+    put_note --> Note : returns
     putNote ..> PutNoteBody : sends
-    putNote --> Note : returns
+    putNote --> put_note : PUT /api/v1/notes/id
+    usePutNote --> putNote : mutationFn
     usePutNote --> createNoteId : caller supplies id
     usePutNote --> notesKeys : optimistic write via
     usePutNote --> upsertNoteInPages : onMutate calls
@@ -603,28 +625,28 @@ classDiagram
 
 ### Code: R4, AI that builds and interacts with tables and charts
 
-`TableColumn`, `TableSpec`, `ChartSeries`, `TimeseriesChartSpec`, and `ViewSpec` are real, from [`feat/api-foundation`](https://github.com/EliRobinson/stock-ticker/tree/feat/api-foundation) @ `9436289fdc` (`models/views.py`). `chat.py` on that commit is a `501` stub, and no `feat/ai-chat` branch exists yet. Everything else here is `planned`, using the class and module names (`ai.tools`, `ai.guard`, `ai.executor`, `ai.stream`, `ai.spend`) the #7 builder shared directly ahead of that branch being pushed, not a guess from system-design.md §6 alone.
+Entirely real code. `TableColumn`, `TableSpec`, `ChartSeries`, `TimeseriesChartSpec`, and `ViewSpec` are from [`feat/api-foundation`](https://github.com/EliRobinson/stock-ticker/tree/feat/api-foundation) @ `9436289fdc` (`models/views.py`). `ToolDefinition`, `RunSqlInput`, `ShowTableInput`, `ShowChartInput`, `AnswerTools`, `GuardedQuery`, `GuardError`, `guard_sql`, `AiReaderExecutor`, `ToolError`, `UIMessageStreamEncoder`, `SpendGate`, `PostgresSpendLedger`, and `stream_answer` are from [`feat/ai-chat`](https://github.com/EliRobinson/stock-ticker/tree/feat/ai-chat) @ `c5fa2f3cc8` (the `ai.tools`, `ai.guard`, `ai.executor`, `ai.stream`, `ai.spend`, and `ai.loop` modules).
 
 ```mermaid
 classDiagram
     class ToolDefinition {
-        <<planned, ai.tools>>
+        <<real, ai-chat, ai/tools.py>>
         +str name
         +type input_model
     }
-    class RunSqlTool {
-        <<planned, ai.tools, RUN_SQL>>
+    class RunSqlInput {
+        <<real, ai-chat, ai/tools.py>>
         +str sql
         +str purpose
     }
-    class ShowTableTool {
-        <<planned, ai.tools, SHOW_TABLE>>
+    class ShowTableInput {
+        <<real, ai-chat, ai/tools.py>>
         +str result_id
         +str title
         +list columns
     }
-    class ShowChartTool {
-        <<planned, ai.tools, SHOW_CHART>>
+    class ShowChartInput {
+        <<real, ai-chat, ai/tools.py>>
         +str result_id
         +str title
         +str x
@@ -632,35 +654,36 @@ classDiagram
         +str y_format
     }
     class AnswerTools {
-        <<planned, ai.tools>>
-        +cache: result_id to rows
+        <<real, ai-chat, ai/tools.py>>
+        +run(name, raw_input) ToolOutcome
+        +seen_result(result_id) CachedResult
     }
     class GuardedQuery {
-        <<planned, ai.guard>>
+        <<real, ai-chat, ai/guard.py>>
         +str sql
     }
     class GuardError {
-        <<planned, ai.guard>>
+        <<real, ai-chat, ai/guard.py>>
     }
     class guard_sql {
-        <<function, planned, ai.guard>>
-        +guard_sql(sql) GuardedQuery
+        <<function, real, ai-chat, ai/guard.py>>
+        +guard_sql(sql, ai_views) GuardedQuery
     }
     class AiReaderExecutor {
-        <<planned, ai.executor>>
-        +execute(query) rows
+        <<real, ai-chat, ai/executor.py>>
+        +execute(sql) QueryResult
     }
     class ToolError {
-        <<planned, ai.executor>>
+        <<real, ai-chat, ai/executor.py>>
     }
     class TableColumn {
-        <<real, models/views.py>>
+        <<real, api-foundation, models/views.py>>
         +str key
         +str label
         +str format
     }
     class TableSpec {
-        <<real, models/views.py>>
+        <<real, api-foundation, models/views.py>>
         +str kind
         +str id
         +str title
@@ -668,12 +691,12 @@ classDiagram
         +List~dict~ rows
     }
     class ChartSeries {
-        <<real, models/views.py>>
+        <<real, api-foundation, models/views.py>>
         +str key
         +str label
     }
     class TimeseriesChartSpec {
-        <<real, models/views.py>>
+        <<real, api-foundation, models/views.py>>
         +str kind
         +str id
         +str title
@@ -683,42 +706,49 @@ classDiagram
         +List~dict~ rows
     }
     class ViewSpec {
-        <<real, discriminated union>>
+        <<real, api-foundation, discriminated union>>
     }
     class UIMessageStreamEncoder {
-        <<planned, ai.stream>>
-        +encode(part) bytes
-        +fail(error) void
+        <<real, ai-chat, ai/stream.py>>
+        +tool_output_available(id, output) str
+        +data_view(view_id, spec) str
+        +fail(error_text) List~str~
+    }
+    class SpendGate {
+        <<real, ai-chat, ai/spend.py>>
+        +Decimal spend_limit_usd
+        +int daily_token_budget
     }
     class PostgresSpendLedger {
-        <<planned, ai.spend>>
-        +reserve(estimate) bool
-        +settle(actual) void
+        <<real, ai-chat, ai/spend.py>>
+        +reserve(model, worst_case_usd, gate) int
+        +settle(reservation_id, usage, cost_usd) void
     }
     class stream_answer {
-        <<function, planned, ai.loop>>
-        +stream_answer(deps, ui_messages, message_id)
+        <<function, real, ai-chat, ai/loop.py>>
+        +stream_answer(deps, ui_messages, message_id) AsyncIterator
     }
 
     stream_answer --> PostgresSpendLedger : reserve before each model call
+    PostgresSpendLedger --> SpendGate : checked against
     stream_answer --> AnswerTools : runs the tool loop
-    RunSqlTool --> guard_sql : validates
+    RunSqlInput --> guard_sql : validates
     guard_sql --> GuardedQuery : returns
     guard_sql --> GuardError : or raises
     GuardedQuery --> AiReaderExecutor : runs
     AiReaderExecutor --> ToolError : or raises
     AiReaderExecutor --> AnswerTools : caches rows under result_id
-    ShowTableTool --> TableSpec : builds
-    ShowChartTool --> TimeseriesChartSpec : builds
+    ShowTableInput --> TableSpec : builds
+    ShowChartInput --> TimeseriesChartSpec : builds
     TableSpec --> TableColumn
     TimeseriesChartSpec --> ChartSeries
     TableSpec ..> ViewSpec : member of union
     TimeseriesChartSpec ..> ViewSpec : member of union
     stream_answer --> UIMessageStreamEncoder : emits parts through
     UIMessageStreamEncoder --> ViewSpec : streams data-view
-    RunSqlTool --|> ToolDefinition
-    ShowTableTool --|> ToolDefinition
-    ShowChartTool --|> ToolDefinition
+    RunSqlInput --|> ToolDefinition
+    ShowTableInput --|> ToolDefinition
+    ShowChartInput --|> ToolDefinition
 ```
 
 ## 5. Ingest: sources and the startup chain (not a C4 diagram)

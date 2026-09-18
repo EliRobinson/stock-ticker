@@ -1,7 +1,7 @@
 """Parse the "List of S&P 500 companies" constituents table.
 
-selectolax, not `pandas.read_html`: this is one table with eight known
-columns, and selectolax is a single small wheel with no transitive
+selectolax, not `pandas.read_html`: this is one eight-column table, of
+which seven columns are read, and selectolax is a single small wheel with no transitive
 dependencies. `read_html` would pull in pandas, numpy, and lxml or
 bs4/html5lib (~60 MB) to produce a DataFrame we would immediately turn back
 into rows, and its type coercion would strip the CIK's leading zeros.
@@ -33,6 +33,8 @@ EXPECTED_COLUMNS: dict[str, str] = {
 
 _CLASS_SUFFIX = re.compile(r"\s*\((?:Class|Series) [A-Z]\)\s*$")
 _ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+# ASCII only: str.isdigit() and \d both accept other scripts' digits.
+_CIK = re.compile(r"[0-9]{1,10}")
 
 
 class ConstituentsParseError(Exception):
@@ -90,7 +92,7 @@ def _to_row(cells: list[str], index_of: dict[str, int], row_number: int) -> Cons
         raise ConstituentsParseError(f"row {row_number}: empty symbol") from exc
 
     cik_raw = field("cik")
-    if not cik_raw.isdigit() or len(cik_raw) > 10:
+    if not _CIK.fullmatch(cik_raw):
         raise ConstituentsParseError(f"row {row_number} ({symbol}): bad CIK {cik_raw!r}")
 
     name = _CLASS_SUFFIX.sub("", field("security"))

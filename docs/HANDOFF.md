@@ -76,7 +76,7 @@ Decisions already made: Company range, mode, and tab, plus the Notes filters, go
 ```bash
 cp .env.example .env    # then fill ALPACA_KEY_ID, ALPACA_SECRET_KEY, SEC_USER_AGENT, ANTHROPIC_API_KEY
 pnpm install --frozen-lockfile
-docker compose up --build
+./scripts/dev.sh
 ```
 
 Then open http://127.0.0.1:3000.
@@ -198,7 +198,7 @@ Docs-only PRs skip the gate.
 
 1. **Merge #27 (Alpaca).** Then run the full API suite on `main`.
 2. **Finish #9 (screens).** Run through the gate fixes above, then open the PR and merge it.
-3. **Load real data.** Run `docker compose up`. The worker's startup chain runs: constituents, then calendar, then backfill, EDGAR, and corporate actions together, then the market cap rebuild. The full backfill is roughly 1.1M bars. Watch `/api/v1/status` for backfill progress. Check that `/market` and a Company chart show real prices, and that NVDA's 2024 split is adjusted.
+3. **Load real data.** Run `./scripts/dev.sh`. The worker's startup chain runs: constituents, then calendar, then backfill, EDGAR, and corporate actions together, then the market cap rebuild. The full backfill is roughly 1.1M bars. Watch `/api/v1/status` for backfill progress. Check that `/market` and a Company chart show real prices, and that NVDA's 2024 split is adjusted.
 4. **Build #23 (evals).** Use about 15 golden questions, including the brief's COVID-decline question and the top-10-by-market-cap question. Checks are code-based, with an LLM judge for wording only. Keep each run under $0.50, and put the scorecard in the README.
 5. **Merge #32/#24 and #20** after their gates. Then do #26/#29 (ingest cleanups) and #31.
 6. **Refresh the diagrams.** Update the Level 4 code diagrams in `docs/design/diagrams.md` for the AI and screens code, which were drawn from the spec.

@@ -29,7 +29,7 @@ Fill in `.env`:
 - `POSTGRES_SUPERUSER_PASSWORD`, `POSTGRES_APP_WRITER_PASSWORD`, `POSTGRES_AI_READER_PASSWORD`: any random strings.
 
 ```bash
-docker compose up --build
+./scripts/dev.sh
 ```
 
 Open **http://127.0.0.1:3000**. Use `127.0.0.1`, not `localhost`: the API's CORS only allows the `127.0.0.1:3000` origin.
@@ -39,6 +39,8 @@ Open **http://127.0.0.1:3000**. Use `127.0.0.1`, not `localhost`: the API's CORS
 - The AI has a $5 spend cap (`AI_SPEND_LIMIT_USD`).
 
 **Tests:** web tests with `pnpm --filter web test`; API tests are described in [`docs/HANDOFF.md`](docs/HANDOFF.md#2-how-to-run-it).
+
+**Stopping:** press Ctrl+C in the `dev.sh` terminal — it cleans up automatically, removing the images this repo built (`api`, `migrate`, `worker`) so they don't pile up between runs. It never touches base images or other projects. Run `./scripts/down.sh` directly if the stack is already running in the background (e.g. you used plain `docker compose up -d`).
 
 ## Screens
 

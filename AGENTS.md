@@ -76,6 +76,8 @@ Functional copy - errors, empty states, helper and hint text, toasts, labels, bu
 
 If functional copy runs past two short sentences, it is explaining, reassuring, or selling - cut it back.
 
+**Use the `copywriting` skill for every piece of user-facing text** before it ships: UI chrome, empty and error states, toasts, labels, AI-facing error parts, and README prose. Load it with the Skill tool (`copywriting`), run your copy through it, and hold the result to both that skill and the rules above. The bar is production-ready text with no AI-isms: no "delve", "seamless", "robust", "leverage", "unlock", no em-dash asides, no filler, no hype.
+
 ---
 
 ## Project Overview
@@ -222,7 +224,7 @@ Three reviewers run in parallel on the branch diff. None of them edits code.
 
 1. **Thermonuclear code-quality review** (Opus, the `code-quality-review` skill). Covers maintainability, abstractions, and file size.
 2. **Correctness critic** (Opus). Covers edge cases, error paths, concurrency, data correctness, and whether the tests would catch a regression.
-3. **Spec and security critic** (Sonnet). Checks conformance with `docs/design/system-design.md` and `CONTEXT.md`, the security rules (roles, SQL guard, secrets, XSS), and the UI copy rules.
+3. **Spec, security, and copy critic** (Sonnet). Checks conformance with `docs/design/system-design.md` and `CONTEXT.md`, the security rules (roles, SQL guard, secrets, XSS), and every user-facing string, using the `copywriting` skill and the UI copy rules.
 
 The author checks each finding against the code and fixes the valid ones. Findings the author disagrees with are answered with evidence in the PR body, never dropped silently. The PR body gets a **Review** section that marks each finding as fixed, declined (and why), or filed (with an issue link). Anything that needs a human decision gets the `needs-eli` label.
 

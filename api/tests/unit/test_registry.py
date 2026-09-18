@@ -45,13 +45,23 @@ def test_noop_heartbeat_was_removed() -> None:
     assert "noop_heartbeat" not in {spec.name for spec in JOBS}
 
 
-def test_registry_holds_only_the_jobs_tuple() -> None:
+def test_registry_defines_no_functions_or_classes_of_its_own() -> None:
     # registry.py's whole job is `JOBS: tuple[JobSpec, ...]` -- JobSpec
-    # itself lives in job.py, and each handler lives in its own module
-    # (e.g. ingest/retention.py for ingest_runs_prune).
+    # itself lives in job.py, and every handler and trigger/key type it
+    # references is imported from elsewhere (e.g. ingest/retention.py for
+    # ingest_runs_prune). This checks that shape without pinning down
+    # *which* names it imports -- a fixed allowlist broke the moment
+    # another builder registered their own job, which needs its own
+    # handler (and possibly RequiredKey/trigger) imports.
+    import inspect
+
     import stockticker.ingest.registry as registry_module
 
-    public_names = {name for name in vars(registry_module) if not name.startswith("_")}
-    # "annotations" is the name `from __future__ import annotations` binds
-    # in the module namespace, not something registry.py defines itself.
-    assert public_names <= {"JOBS", "JobSpec", "ingest_runs_prune", "CronTrigger", "annotations"}
+    for name, value in vars(registry_module).items():
+        if name.startswith("_") or name == "JOBS":
+            continue
+        if inspect.isfunction(value) or inspect.isclass(value):
+            assert getattr(value, "__module__", None) != registry_module.__name__, (
+                f"registry.{name} is defined in registry.py itself -- registry.py should only "
+                "import and assemble JOBS, never define a handler or type of its own."
+            )

@@ -21,3 +21,38 @@ if [ "$RUN_E2E" = "1" ]; then
 else
   echo "Skipping E2E (RUN_E2E not set). Run with RUN_E2E=1 git push to include it."
 fi
+
+# api/'s own gate -- only when api/ actually changed relative to main, so a
+# web-only push on a branch that also carries api/ history doesn't pay for
+# it every time. No GitHub Actions job covers this (Eli disabled Actions on
+# purpose): this pre-push step, with REQUIRE_DB=1 failing instead of
+# skipping when the db isn't up, is the actual gate for api/ changes.
+API_BASE=""
+if git rev-parse --verify origin/main >/dev/null 2>&1; then
+  API_BASE="$(git merge-base origin/main HEAD 2>/dev/null || true)"
+fi
+if [ -z "$API_BASE" ] || ! git diff --quiet "$API_BASE" HEAD -- api/ 2>/dev/null; then
+  echo "==> api/ changed (or origin/main unavailable to compare against) -- running api's gate"
+  (
+    cd api
+    run_step "api:ruff-check" uv run ruff check src tests
+    run_step "api:ruff-format" uv run ruff format --check src tests
+    run_step "api:mypy" uv run mypy src tests
+  )
+  # pytest runs inside the compose network, not on the host: `db` is not
+  # published to the host (system design §8), so a host-side `uv run
+  # pytest` could never reach it regardless of whether it's up.
+  # --no-deps: this must NOT silently start db for the developer -- if
+  # it's not already up, REQUIRE_DB=1 turns the resulting "not reachable"
+  # into a clear pytest.fail message (tests/integration/conftest.py)
+  # instead of a skip.
+  echo "==> api:pytest (REQUIRE_DB=1, via docker compose)"
+  if ! docker compose run --rm --no-deps --entrypoint "" api sh -c "REQUIRE_DB=1 uv run --no-sync pytest tests -q"; then
+    echo "pre-push failed at: api:pytest" >&2
+    echo "If that was a DB-reachability failure: run \`docker compose up -d db\`" >&2
+    echo "(and \`docker compose run --rm migrate\` if the schema isn't current), then push again." >&2
+    exit 1
+  fi
+else
+  echo "Skipping api/ gate (no api/ changes since origin/main)."
+fi

@@ -186,7 +186,12 @@ async def upsert_events(conn: AsyncConnection, events: Sequence[EventRow]) -> Jo
                 "CAST(:sources AS text[]), CAST(:source_refs AS text[])) "
                 "AS t(cik, symbol, event_date, kind, title, details, source, source_ref) "
                 "ON CONFLICT (source, source_ref) DO UPDATE SET "
-                "cik = excluded.cik, symbol = excluded.symbol, event_date = excluded.event_date, "
+                "cik = excluded.cik, "
+                # A re-ingested event with a null symbol (e.g. edgar_sync
+                # for a Company with no active primary Listing right now)
+                # must not wipe a symbol a previous ingest already stored.
+                "symbol = COALESCE(excluded.symbol, events.symbol), "
+                "event_date = excluded.event_date, "
                 "kind = excluded.kind, title = excluded.title, details = excluded.details"
             ),
             {

@@ -325,6 +325,69 @@ async def test_upsert_events_two_item_batch_inserts_and_then_updates_on_conflict
         await conn.commit()
 
 
+async def test_upsert_events_a_null_symbol_on_reingest_does_not_wipe_the_stored_one(
+    app_writer_engine: AsyncEngine,
+) -> None:
+    """E.g. edgar_sync re-ingesting a filing for a Company that currently
+    has no active primary Listing must not erase the symbol a previous
+    ingest already recorded for that event."""
+    cik = f"9{uuid.uuid4().int % 10**8:08d}"
+    symbol = f"T{uuid.uuid4().hex[:6].upper()}"
+    source = f"test-{uuid.uuid4().hex[:8]}"
+
+    async with app_writer_engine.connect() as conn:
+        await conn.execute(
+            text("INSERT INTO companies (cik, name, sector) VALUES (:cik, 'Test Co', 'Test')"), {"cik": cik}
+        )
+        await conn.commit()
+
+        await upsert_events(
+            conn,
+            [
+                EventRow(
+                    cik=cik,
+                    symbol=symbol,
+                    event_date=date(2024, 1, 2),
+                    kind="filing_8k",
+                    title="First filing",
+                    details={},
+                    source=source,
+                    source_ref="ref-1",
+                )
+            ],
+        )
+        await conn.commit()
+
+        await upsert_events(
+            conn,
+            [
+                EventRow(
+                    cik=cik,
+                    symbol=None,
+                    event_date=date(2024, 1, 2),
+                    kind="filing_8k",
+                    title="First filing (re-ingested, no active listing)",
+                    details={},
+                    source=source,
+                    source_ref="ref-1",
+                )
+            ],
+        )
+        await conn.commit()
+
+        row = (
+            await conn.execute(
+                text("SELECT symbol FROM events WHERE source = :source AND source_ref = 'ref-1'"),
+                {"source": source},
+            )
+        ).one()
+        assert row.symbol == symbol
+
+        await conn.execute(text("DELETE FROM events WHERE source = :source"), {"source": source})
+        await conn.execute(text("DELETE FROM companies WHERE cik = :cik"), {"cik": cik})
+        await conn.commit()
+
+
 async def test_upsert_events_unknown_cik_is_a_failed_item(app_writer_engine: AsyncEngine) -> None:
     unknown_cik = f"7{uuid.uuid4().int % 10**8:08d}"
     source = f"test-{uuid.uuid4().hex[:8]}"

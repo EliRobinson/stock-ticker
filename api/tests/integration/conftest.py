@@ -21,13 +21,15 @@ silently pass its integration suite because the compose db wasn't up.
 from __future__ import annotations
 
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 
 import pytest
 import pytest_asyncio
+from fastapi.testclient import TestClient
 from sqlalchemy import URL, text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from stockticker.api.app import app
 from stockticker.config import get_settings
 
 
@@ -81,3 +83,21 @@ async def ai_reader_engine() -> AsyncIterator[AsyncEngine]:
 # Prefer app_writer_engine/ai_reader_engine; if a test genuinely needs
 # superuser (e.g. probing what a role *can't* do from outside it), it
 # needs a different, deliberate wiring, not a drop-in fixture.
+
+
+@pytest.fixture(scope="session")
+def api_client() -> Iterator[TestClient]:
+    """One `TestClient` for the whole session (system design §5 API
+    contract tests, `test_*_api.py`).
+
+    `stockticker.db`'s engine getters are `@lru_cache`d at process scope, so
+    the asyncpg connection pool they create on first use is bound to
+    whichever event loop was running then. `TestClient` runs the ASGI app on
+    its own dedicated background event loop for as long as the `with` block
+    is open -- a *second* `TestClient(app)` (a fresh instance, its own new
+    loop) reusing that already-bound pool raises "Future attached to a
+    different loop". One client, opened once for the session, keeps every
+    request on the same loop the engine was first created on.
+    """
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        yield client

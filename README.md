@@ -13,6 +13,8 @@ The [design brief](docs/design/brief.md) sets four requirements. All four are bu
 | Notes tagged to dates and companies        | A `PUT`/`DELETE` Notes API, last write wins. The web app renders Notes as chart markers, snapped to a real bar, and as a filterable list on the Notes screen.                                                                                                                                                                | [`api/src/stockticker/api/routers/notes.py`](api/src/stockticker/api/routers/notes.py), [`web/src/components/notes/`](web/src/components/notes)                                    |
 | AI that builds tables and charts           | A Claude tool loop runs over guarded, read-only SQL (`ai_reader`, an allow-listed function set, a 5s statement timeout) and streams the AI SDK UI message protocol from FastAPI. The web app renders the resulting `data-view` parts with the same table and chart components used everywhere else.                          | [`api/src/stockticker/ai/`](api/src/stockticker/ai), guard in [`guard.py`](api/src/stockticker/ai/guard.py), [`web/src/components/ask/`](web/src/components/ask)                   |
 
+[#20](https://github.com/EliRobinson/stock-ticker/issues/20) hardens Ask disconnect detection and typed UIMessage part validation at the chat boundary.
+
 ## Run it locally
 
 **Prerequisites:** [Docker Desktop](https://www.docker.com/products/docker-desktop/), free Alpaca paper-trading API keys ([alpaca.markets](https://alpaca.markets)), and an Anthropic API key.

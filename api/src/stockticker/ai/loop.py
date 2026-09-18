@@ -40,7 +40,6 @@ from stockticker.ai.stream import (
     Emit,
     FinishReason,
     UIMessageStreamEncoder,
-    never_disconnects,
     until_disconnected,
 )
 from stockticker.ai.tools import TOOL_NAMES, AnswerTools, ToolFailure, ToolOutcome, anthropic_tools
@@ -87,7 +86,7 @@ class ChatDeps:
 
 def stream_answer(deps: ChatDeps, ui_messages: list[UIMessage], message_id: str) -> AsyncIterator[str]:
     """The answer as SSE events, for a caller that reads to the end."""
-    return until_disconnected(answer_producer(deps, ui_messages, message_id), never_disconnects)
+    return until_disconnected(answer_producer(deps, ui_messages, message_id))
 
 
 def answer_producer(

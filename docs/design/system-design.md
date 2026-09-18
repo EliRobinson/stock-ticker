@@ -386,6 +386,7 @@ The canonical form is the dot form. Wikipedia and Alpaca use dots, and SEC uses 
 - Text maps to text.
 - Past tool calls map to `tool_use`/`tool_result` pairs, with the result shrunk to a 2 KB summary. A tool call left unfinished by a disconnect (no `tool-output-available` or `tool-output-error` in history) converts to an `is_error` `tool_result`, so a resumed conversation never replays a call that never returned.
 - `data-*` parts are dropped.
+- Parts are validated at the boundary as a Pydantic discriminated union that mirrors the AI SDK's `UIMessagePart`: `text`, `step-start`, tool parts by `state`, and `data-*`. A malformed known part is a 422. A part type the server does not know goes to a catch-all and is dropped, so a newer client never breaks the chat.
 
 The server keeps no history.
 

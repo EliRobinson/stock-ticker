@@ -1,6 +1,7 @@
 'use client'
 
 import { useStatus } from '@/hooks/useStatus'
+import type { StatusResponse } from '@/lib/api'
 import { useStockTickerChat } from '@/lib/chat'
 
 import { AskPanel } from '../ask/ask-panel'
@@ -9,11 +10,10 @@ import type { AskUnavailable } from '../ask/types'
 import { formatUsd } from '../shared/format'
 import type { AiStatus } from '../shell/status-strip'
 
-// /status carries `ai` once #7's block lands on the API; the generated types
-// don't include it yet, so it is read as optional.
-export function readAiStatus(status: unknown): AiStatus | null {
-  const ai = (status as { ai?: AiStatus } | undefined)?.ai
-  return ai ?? null
+export function readAiStatus(
+  status: StatusResponse | undefined
+): AiStatus | null {
+  return status?.ai ?? null
 }
 
 export function AskContainer({ onClose }: { onClose: () => void }) {

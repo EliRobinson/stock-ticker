@@ -81,6 +81,7 @@ async def run_corporate_actions_sync(engine: AsyncEngine, client: CorporateActio
     for batch in chunked(symbols, BATCH_SIZE):
         async with engine.connect() as conn:
             bootstrapped = await _bootstrapped_symbols(conn, batch)
+            await conn.commit()
         # A mixed-bootstrap batch still makes one request per symbol's own
         # start date would ideally be per-symbol, but Alpaca's endpoint
         # takes one range per call -- use the widest start any member of
@@ -197,12 +198,13 @@ async def _cik_by_symbol(conn: AsyncConnection, symbols: Sequence[str]) -> dict[
 
 
 async def _bootstrapped_symbols(conn: AsyncConnection, symbols: Sequence[str]) -> set[str]:
+    """Read-only; executes on `conn` without committing -- `run_corporate_actions_sync`
+    owns that decision (issue #26 item 3)."""
     stmt = text("SELECT key FROM ingest_watermarks WHERE job = :job_name AND key IN :keys").bindparams(
         bindparam("keys", expanding=True)
     )
     keys = [f"{BOOTSTRAP_KEY_PREFIX}{symbol}" for symbol in symbols]
     rows = (await conn.execute(stmt, {"job_name": JOB_NAME, "keys": keys})).all()
-    await conn.commit()
     return {row.key.removeprefix(BOOTSTRAP_KEY_PREFIX) for row in rows}
 
 

@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from stockticker.ingest.jobs.bars_backfill import (
     SymbolBackfillOutcome,
     SymbolBackfillPlan,
-    _commit_symbol,
+    _write_symbol,
     run_bars_backfill,
 )
 from stockticker.ingest.providers import ProviderBar
@@ -229,7 +229,8 @@ async def test_bars_backfill_does_not_delete_a_refetch_row_queued_after_selectio
         outcome = SymbolBackfillOutcome(symbol=symbol, rows=[], watermark=None, completed=False)
 
         async with app_writer_engine.connect() as conn:
-            await _commit_symbol(conn, plan, outcome)
+            await _write_symbol(conn, plan, outcome)
+            await conn.commit()
 
         async with app_writer_engine.connect() as conn:
             remaining = (

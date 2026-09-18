@@ -7,48 +7,7 @@ import {
   snapBackward,
   snapForward
 } from '@/lib/chart-data'
-import type { Bar, MarketEvent, Note } from '@/lib/api'
-
-function makeBar(overrides: Partial<Bar>): Bar {
-  return {
-    trade_date: '2024-06-03',
-    open: '100',
-    high: '105',
-    low: '99',
-    close: '104',
-    volume: 1_000_000,
-    adj_close: '104',
-    ...overrides
-  }
-}
-
-function makeNote(overrides: Partial<Note>): Note {
-  return {
-    id: 'note-1',
-    cik: '0000320193',
-    start_date: '2024-06-03',
-    end_date: '2024-06-03',
-    body: 'Looks cheap here.',
-    created_at: '2024-06-03T12:00:00.000Z',
-    updated_at: '2024-06-03T12:00:00.000Z',
-    ...overrides
-  }
-}
-
-function makeEvent(overrides: Partial<MarketEvent>): MarketEvent {
-  return {
-    id: 1,
-    cik: '0000320193',
-    symbol: 'AAPL',
-    event_date: '2024-06-03',
-    kind: 'split',
-    title: '4-for-1 split',
-    details: {},
-    source: 'sec',
-    source_ref: 'ref-1',
-    ...overrides
-  }
-}
+import { makeBar, makeEvent, makeNote } from '../fixtures'
 
 describe('mapBarsToCandlestickSeries', () => {
   it('scales OHLC by the adjusted-close factor', () => {

@@ -20,6 +20,7 @@ from ai_fakes import (
     make_deps,
     part_types,
     text_answer,
+    ui_message,
     user,
 )
 
@@ -65,9 +66,7 @@ def _conversation(turns: int, filler: int) -> list[UIMessage]:
     messages: list[UIMessage] = []
     for i in range(turns):
         messages.append(user(f"question {i} " + "x" * filler, f"u{i}"))
-        messages.append(
-            UIMessage(id=f"a{i}", role="assistant", parts=[{"type": "text", "text": f"answer {i}"}])
-        )
+        messages.append(ui_message("assistant", {"type": "text", "text": f"answer {i}"}, message_id=f"a{i}"))
     messages.append(user("the latest question", "last"))
     return messages
 

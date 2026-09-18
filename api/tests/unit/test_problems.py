@@ -1,10 +1,21 @@
 """No database needed: these routes (404/405/422/415, and every stub
-router) fail before any handler touches the DB."""
+router) fail before any handler touches the DB.
+
+`PUT /api/v1/notes/{id}` is a real route now (it isn't a stub), so its
+`conn: AsyncConnection = Depends(get_app_writer_connection)` *is* resolved
+even for a request whose body fails validation -- FastAPI solves every
+dependency together with body parsing, not body-first. `dependency_overrides`
+swaps in a connection-shaped stub that never touches a socket, so the 422
+tests below still need no database.
+"""
 
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncIterator, Iterator
+from typing import Any
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.middleware.cors import CORSMiddleware
@@ -12,9 +23,28 @@ from starlette.middleware.cors import CORSMiddleware
 from stockticker.api.app import app
 from stockticker.api.middleware import RequestIDMiddleware
 from stockticker.api.problems import Problem, problem_type_uri, register_problem_handlers, slug_for
+from stockticker.db import get_app_writer_connection
 
 client = TestClient(app, base_url="http://127.0.0.1")
 _NOTE_URL = f"/api/v1/notes/{uuid.uuid4()}"
+
+
+async def _fake_connection() -> AsyncIterator[Any]:
+    yield None
+
+
+@pytest.fixture
+def db_free() -> Iterator[None]:
+    """Overrides `get_app_writer_connection` for the app's own `client` for
+    the duration of one test, then restores it -- `app` is a shared module
+    object, so a leaked override would silently give other test modules
+    (the real-DB integration tests especially) a fake connection instead of
+    a real one."""
+    app.dependency_overrides[get_app_writer_connection] = _fake_connection
+    try:
+        yield
+    finally:
+        del app.dependency_overrides[get_app_writer_connection]
 
 
 def test_slug_for_kebab_cases_the_reason_phrase() -> None:
@@ -44,7 +74,7 @@ def test_405_is_problem_json() -> None:
     assert response.headers["content-type"] == "application/problem+json"
 
 
-def test_422_is_problem_json_with_field_errors() -> None:
+def test_422_is_problem_json_with_field_errors(db_free: None) -> None:
     response = client.put(_NOTE_URL, json={})
     assert response.status_code == 422
     body = response.json()
@@ -70,7 +100,10 @@ def test_415_response_still_carries_request_id() -> None:
 
 
 def test_stub_router_returns_501_problem_json() -> None:
-    response = client.get("/api/v1/market")
+    # /api/v1/chat is the one router still out of scope for this issue
+    # (system design §6) -- every other router in this package now has a
+    # real implementation instead of a 501 stub.
+    response = client.post("/api/v1/chat", json={})
     assert response.status_code == 501
     assert response.headers["content-type"] == "application/problem+json"
 

@@ -3,7 +3,9 @@
 One row per Anthropic call. A row starts as a `reserved` worst-case cost,
 written under an advisory lock before the call, and is `recorded` with the
 usage the SDK reported once the call ends, including calls that fail partway.
-The sum of `cost_usd` is what `AI_SPEND_LIMIT_USD` is checked against.
+A reservation the process never settled (it died mid-call) is marked
+`expired` after 10 minutes and keeps its reserved, worst-case cost. The sum of
+`cost_usd` is what `AI_SPEND_LIMIT_USD` is checked against.
 
 Like 0001, this runs as the bootstrap superuser and does its DDL as
 `app_owner`. The `pg_advisory_xact_lock(bigint)` grant is made as the
@@ -29,7 +31,7 @@ def upgrade() -> None:
           created_at timestamptz NOT NULL DEFAULT now(),
           settled_at timestamptz,
           model text NOT NULL,
-          state text NOT NULL CHECK (state IN ('reserved', 'recorded')),
+          state text NOT NULL CHECK (state IN ('reserved', 'recorded', 'expired')),
           input_tokens integer NOT NULL DEFAULT 0 CHECK (input_tokens >= 0),
           cache_creation_input_tokens integer NOT NULL DEFAULT 0 CHECK (cache_creation_input_tokens >= 0),
           cache_read_input_tokens integer NOT NULL DEFAULT 0 CHECK (cache_read_input_tokens >= 0),

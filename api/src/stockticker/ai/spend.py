@@ -7,7 +7,9 @@ for the call's worst-case cost only if that still fits under the limit. Two
 browser tabs therefore can never both pass the check with room for one.
 `settle()` then replaces the reservation with the cost of the usage the SDK
 reported. A reservation that is never settled (the process died mid-call)
-keeps its worst-case cost, so the ledger errs high, never low.
+keeps its worst-case cost, so the ledger errs high, never low; the next
+reservation marks any older than 10 minutes `expired`, so they stop counting
+as in flight, without refunding them.
 
 `AI_DAILY_TOKEN_BUDGET` is checked in the same transaction, against tokens
 recorded since midnight New York time.
@@ -16,7 +18,7 @@ recorded since midnight New York time.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Protocol
 
@@ -63,6 +65,25 @@ class SpendLedger(Protocol):
     async def spent_usd(self) -> Decimal: ...
 
 
+STALE_RESERVATION = timedelta(minutes=10)
+
+
+@dataclass(frozen=True)
+class LedgerTotals:
+    spent_usd: Decimal
+    tokens_today: int
+
+
+def check_gate(totals: LedgerTotals, worst_case_usd: Decimal, gate: SpendGate) -> None:
+    """The gate rule, shared by every ledger: the call's worst case must fit
+    under the limit (landing exactly on it is allowed), and today's tokens
+    must be under the daily budget."""
+    if totals.spent_usd + worst_case_usd > gate.limit_usd:
+        raise SpendLimitReached(gate.limit_usd)
+    if totals.tokens_today >= gate.daily_token_budget:
+        raise DailyTokenBudgetReached(gate.daily_token_budget)
+
+
 class PostgresSpendLedger:
     def __init__(self, engine: AsyncEngine) -> None:
         self._engine = engine
@@ -70,7 +91,14 @@ class PostgresSpendLedger:
     async def reserve(self, *, model: str, worst_case_usd: Decimal, gate: SpendGate) -> int:
         async with self._engine.begin() as conn:
             await conn.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": SPEND_LOCK_KEY})
-            totals = (
+            await conn.execute(
+                text(
+                    "UPDATE ai_usage SET state = 'expired', settled_at = now() "
+                    "WHERE state = 'reserved' AND created_at < now() - make_interval(secs => :seconds)"
+                ),
+                {"seconds": STALE_RESERVATION.total_seconds()},
+            )
+            row = (
                 await conn.execute(
                     text(
                         "SELECT coalesce(sum(cost_usd), 0) AS spent, "
@@ -81,10 +109,7 @@ class PostgresSpendLedger:
                     {"day_start": gate.day_start},
                 )
             ).one()
-            if Decimal(totals.spent) + worst_case_usd > gate.limit_usd:
-                raise SpendLimitReached(gate.limit_usd)
-            if int(totals.tokens_today) >= gate.daily_token_budget:
-                raise DailyTokenBudgetReached(gate.daily_token_budget)
+            check_gate(LedgerTotals(Decimal(row.spent), int(row.tokens_today)), worst_case_usd, gate)
             reservation_id = await conn.scalar(
                 text(
                     "INSERT INTO ai_usage (model, state, cost_usd) "

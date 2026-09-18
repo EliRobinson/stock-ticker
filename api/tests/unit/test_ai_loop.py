@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 from ai_fakes import (
     MODEL,
+    FakeClient,
     FakeClock,
     FakeExecutor,
     HttpError,
@@ -24,6 +25,8 @@ from ai_fakes import (
     parse_sse,
     part_types,
     result,
+    stalling_text_answer,
+    start_event,
     stream_error,
     text_answer,
     text_block,
@@ -349,28 +352,10 @@ async def test_no_key() -> None:
 # --- disconnect ----------------------------------------------------------------
 
 
-class Client:
-    """The request's ASGI `receive`: it answers `http.disconnect` once `leave()` is called."""
-
-    def __init__(self) -> None:
-        self.gone = asyncio.Event()
-        self.reads = 0
-
-    def leave(self) -> None:
-        self.gone.set()
-
-    async def receive(self) -> dict[str, Any]:
-        self.reads += 1
-        await self.gone.wait()
-        return {"type": "http.disconnect"}
-
-
 async def test_disconnect_during_the_model_stream_cancels_it_and_sends_nothing_more() -> None:
-    anthropic = ScriptedAnthropic(
-        message_start() + text_block(0, "a", "b", "c") + message_end("end_turn"), stall_after_first_chunk=True
-    )
+    anthropic = stalling_text_answer("a", "b", "c")
     ledger = MemoryLedger()
-    client = Client()
+    client = FakeClient()
 
     received: list[str] = []
     relay = until_disconnected(
@@ -391,7 +376,7 @@ async def test_disconnect_during_the_model_stream_cancels_it_and_sends_nothing_m
 async def test_disconnect_during_a_query_cancels_it() -> None:
     anthropic = ScriptedAnthropic(tool_call("t1", "run_sql", {"sql": SQL, "purpose": "p"}))
     executor = FakeExecutor(one_row(), delay=30)
-    client = Client()
+    client = FakeClient()
 
     async def leave_once_the_query_runs() -> None:
         while not executor.queries:
@@ -414,16 +399,34 @@ async def test_a_client_gone_before_the_first_part_gets_nothing_and_the_answer_i
     cancelled = asyncio.Event()
 
     async def producer(emit: Any) -> None:
-        await emit('data: {"type":"start","messageId":"m"}\n\n')
+        await emit(start_event())
         try:
             await asyncio.sleep(3600)
         except asyncio.CancelledError:
             cancelled.set()
             raise
 
-    client = Client()
+    client = FakeClient()
     client.leave()
     received = [c async for c in until_disconnected(producer, client.receive)]
     assert received == []
     await asyncio.wait_for(cancelled.wait(), timeout=2)
     assert client.reads == 1
+
+
+async def test_a_failing_receive_does_not_truncate_the_answer() -> None:
+    class BrokenReceive:
+        async def __call__(self) -> dict[str, Any]:
+            raise RuntimeError("Unexpected message received: http.request")
+
+    anthropic = ScriptedAnthropic(text_answer("hello"))
+    out = "".join(
+        [
+            c
+            async for c in until_disconnected(
+                answer_producer(make_deps(anthropic), [user("q")], "m"), BrokenReceive()
+            )
+        ]
+    )
+    assert part_types(out)[-2:] == ["finish", "[DONE]"]
+    assert "hello" in out

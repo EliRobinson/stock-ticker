@@ -15,6 +15,7 @@ import {
   type NotesResponse,
   type PutNoteBody
 } from '@/lib/api'
+import { NOTES_STALE_TIME_MS } from '@/lib/query-config'
 
 export const notesKeys = {
   all: ['notes'] as const,
@@ -22,15 +23,13 @@ export const notesKeys = {
     [...notesKeys.all, params] as const
 }
 
-const STALE_TIME_MS = 60 * 1000
-
 export function useNotes(params: Omit<GetNotesParams, 'cursor'> = {}) {
   return useInfiniteQuery({
     queryKey: notesKeys.list(params),
     queryFn: ({ pageParam }) => getNotes({ ...params, cursor: pageParam }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
-    staleTime: STALE_TIME_MS
+    staleTime: NOTES_STALE_TIME_MS
   })
 }
 

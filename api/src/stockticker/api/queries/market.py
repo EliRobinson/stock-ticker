@@ -28,19 +28,15 @@ cases). `public.prev_trading_day(anchor date)` is now the one place that
 rule is written.
 
 **`change`/`change_pct`.** Computed here, in SQL, rather than in Python
-after the query runs (issue #24) -- both are null whenever `price` or
-`prev_close` is null (an unmatched `LEFT JOIN`, e.g. no Quote yet, or a
-gap in `daily_bars`), and `change_pct` is additionally null when
-`prev_close` is zero (`quotes.price`/`daily_bars.close` both carry a `> 0`
-CHECK, so this only ever fires for a legacy/malformed row, never in
-practice -- still guarded explicitly rather than trusting NULLIF's
-division-by-zero-avoidance alone to read as intentional). `trim_scale`
-strips the padded trailing zeros a `numeric` division produces, matching
-the precision `Decimal` division gave when this ran in Python (`5/100` ->
-`0.05`, not `0.050000...`); `change` is a same-scale subtraction and needs
-no trimming. Every column here is named to match `MarketRow` directly, so
-`routers/market.py::_market_row` is a plain `model_validate` with no
-Python-side dict merging.
+after the query runs (issue #24). Null `price`/`prev_close` (unmatched
+`LEFT JOIN`) propagate through subtraction and division; `NULLIF(prev_close,
+0)` makes `change_pct` null on a zero close (defensive -- both columns
+carry a `> 0` CHECK). `trim_scale` strips the padded trailing zeros a
+`numeric` division produces, matching the precision `Decimal` division gave
+when this ran in Python (`5/100` -> `0.05`, not `0.050000...`); `change` is
+a same-scale subtraction and needs no trimming. Every column here is named
+to match `MarketRow` directly, so `routers/market.py::_market_row` is a
+plain `model_validate` with no Python-side dict merging.
 """
 
 from __future__ import annotations
@@ -67,12 +63,8 @@ MARKET_QUERY = text(
       q.observed_at,
       pb.close AS prev_close,
       pb.volume AS volume,
-      CASE WHEN q.price IS NOT NULL AND pb.close IS NOT NULL
-        THEN q.price - pb.close
-      END AS change,
-      CASE WHEN q.price IS NOT NULL AND pb.close IS NOT NULL AND pb.close <> 0
-        THEN trim_scale((q.price - pb.close) / pb.close)
-      END AS change_pct,
+      q.price - pb.close AS change,
+      trim_scale((q.price - pb.close) / NULLIF(pb.close, 0)) AS change_pct,
       mc.market_cap,
       COALESCE(mc.is_multi_class, false) AS market_cap_is_approx
     FROM listings l

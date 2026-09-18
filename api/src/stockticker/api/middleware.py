@@ -1,6 +1,5 @@
 """Request-scoped middleware: request IDs, JSON content-type enforcement on
-writes, and a `TrustedHostMiddleware` wrapper that speaks problem+json
-(system design §5)."""
+writes, and a TrustedHost check that speaks problem+json (system design §5)."""
 
 from __future__ import annotations
 
@@ -8,7 +7,7 @@ import uuid
 from collections.abc import Awaitable, Callable, Sequence
 
 import structlog
-from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.datastructures import Headers
 from starlette.requests import Request
 from starlette.responses import Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -17,6 +16,7 @@ from stockticker.api.problems import cors_headers, problem_response
 
 REQUEST_ID_HEADER = "X-Request-ID"
 WRITE_METHODS = frozenset({"POST", "PUT", "PATCH"})
+ENFORCE_DOMAIN_WILDCARD = "Domain wildcard patterns must be like '*.example.com'."
 
 
 class RequestIDMiddleware:
@@ -80,47 +80,51 @@ async def enforce_json_content_type(
 
 
 class ProblemJSONTrustedHostMiddleware:
-    """Wraps Starlette's `TrustedHostMiddleware` so a rejected host is
-    reported as `application/problem+json`, like every other error in this
-    API, instead of `TrustedHostMiddleware`'s own `PlainTextResponse`.
+    """Rejects an unknown `Host` with `application/problem+json`, matching
+    Starlette's `TrustedHostMiddleware` host rules (exact match or
+    `*.suffix` wildcard) but without wrapping that middleware's `send`.
 
-    Delegates the actual host matching to the real `TrustedHostMiddleware`
-    (wildcard patterns, the `www.` redirect) and only intercepts the one
-    response shape it can produce for a rejection: a plain-text 400. This
-    middleware sits where `TrustedHostMiddleware` used to -- *inside*
-    `CORSMiddleware` (`app.py` adds `TrustedHostMiddleware` before
-    `CORSMiddleware`) -- so a rejection still passes back through
-    `CORSMiddleware` normally and needs no CORS headers added here."""
+    An earlier version proxied `TrustedHostMiddleware` and rewrote every
+    status-400 response it saw -- including legitimate app 400s on an
+    allowed host -- as `invalid-host-header`. Matching the host here and
+    forwarding to `self.app` on success avoids that.
+
+    This middleware sits where `TrustedHostMiddleware` used to -- *inside*
+    `CORSMiddleware` (`app.py` adds it before `CORSMiddleware`) -- so a
+    rejection still passes back through `CORSMiddleware` normally and needs
+    no CORS headers added here."""
 
     def __init__(self, app: ASGIApp, *, allowed_hosts: Sequence[str]) -> None:
         self.app = app
-        self._inner = TrustedHostMiddleware(app, allowed_hosts=list(allowed_hosts))
+        for pattern in allowed_hosts:
+            assert "*" not in pattern[1:], ENFORCE_DOMAIN_WILDCARD
+            if pattern.startswith("*") and pattern != "*":
+                assert pattern.startswith("*."), ENFORCE_DOMAIN_WILDCARD
+        self.allowed_hosts = list(allowed_hosts)
+        self.allow_any = "*" in allowed_hosts
+
+    def _host_allowed(self, host: str) -> bool:
+        for pattern in self.allowed_hosts:
+            if host == pattern or (pattern.startswith("*") and host.endswith(pattern[1:])):
+                return True
+        return False
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http":
-            await self._inner(scope, receive, send)
+        if self.allow_any or scope["type"] not in ("http", "websocket"):
+            await self.app(scope, receive, send)
             return
 
-        rejected = False
+        headers = Headers(scope=scope)
+        host = headers.get("host", "").split(":")[0]
+        if self._host_allowed(host):
+            await self.app(scope, receive, send)
+            return
 
-        async def capturing_send(message: Message) -> None:
-            nonlocal rejected
-            if message["type"] == "http.response.start":
-                rejected = message["status"] == 400
-                if rejected:
-                    return
-            elif rejected:
-                return
-            await send(message)
-
-        await self._inner(scope, receive, capturing_send)
-
-        if rejected:
-            request = Request(scope, receive=receive)
-            response = problem_response(
-                request,
-                status_code=400,
-                detail="Invalid host header.",
-                slug="invalid-host-header",
-            )
-            await response(scope, receive, send)
+        request = Request(scope, receive=receive)
+        response = problem_response(
+            request,
+            status_code=400,
+            detail="Invalid host header.",
+            slug="invalid-host-header",
+        )
+        await response(scope, receive, send)

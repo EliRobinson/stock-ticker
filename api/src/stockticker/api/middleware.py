@@ -11,6 +11,8 @@ from starlette.requests import Request
 from starlette.responses import Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from stockticker.api.problems import problem_response
+
 REQUEST_ID_HEADER = "X-Request-ID"
 WRITE_METHODS = frozenset({"POST", "PUT", "PATCH"})
 
@@ -27,9 +29,10 @@ class RequestIDMiddleware:
     time the 500 was logged.)
 
     `X-Request-ID` on the response is still added here for the normal
-    (non-exception) path; `stockticker.api.problems._respond` adds it again
-    for every problem+json response, since a 500's response is built
-    outside this middleware and never passes back through `send_wrapper`.
+    (non-exception) path; `stockticker.api.problems.problem_response` adds
+    it again for every problem+json response, since a 500's response is
+    built outside this middleware and never passes back through
+    `send_wrapper`.
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -58,10 +61,8 @@ async def enforce_json_content_type(
 ) -> Response:
     if request.method in WRITE_METHODS:
         content_type = request.headers.get("content-type", "")
-        if content_type.split(";")[0].strip() != "application/json":
-            from stockticker.api.problems import _respond
-
-            return _respond(
+        if content_type.split(";")[0].strip().lower() != "application/json":
+            return problem_response(
                 request,
                 status_code=415,
                 detail="Writes must send 'Content-Type: application/json'.",

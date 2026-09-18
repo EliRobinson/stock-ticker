@@ -32,7 +32,7 @@ services:
   migrate:
     build:
       context: ./api
-    command: uv run alembic upgrade head
+    command: uv run --no-sync alembic upgrade head
     environment:
       POSTGRES_HOST: db
       POSTGRES_PORT: '5432'
@@ -52,7 +52,7 @@ services:
   api:
     build:
       context: ./api
-    command: uv run uvicorn stockticker.api.app:app --host 0.0.0.0 --port 8000 --reload
+    command: uv run --no-sync uvicorn stockticker.api.app:app --host 0.0.0.0 --port 8000 --reload --reload-dir src
     environment:
       ENVIRONMENT: development
       POSTGRES_HOST: db
@@ -94,7 +94,10 @@ services:
   worker:
     build:
       context: ./api
-    command: uv run stockticker-worker
+    # watchfiles restarts the worker on any change under src/, the same way
+    # --reload does for api (uvicorn owns its own reload; the worker has no
+    # framework doing this for it).
+    command: uv run --no-sync watchfiles "python -m stockticker.worker" src
     environment:
       ENVIRONMENT: development
       POSTGRES_HOST: db
@@ -136,6 +139,11 @@ services:
       NEXT_PUBLIC_API_URL: http://127.0.0.1:8000
     volumes:
       - .:/app
+      # Two named volumes, not one (see AGENTS.md, "Compose"): a single
+      # shared volume lets the workspace's hoisted root node_modules and
+      # web/node_modules collide, and native binaries built on a macOS
+      # host end up in a Linux container.
+      - web_node_modules_root:/app/node_modules
       - web_node_modules:/app/web/node_modules
     ports:
       - '127.0.0.1:3000:3000'
@@ -143,4 +151,5 @@ services:
 volumes:
   db_data:
   api_venv:
+  web_node_modules_root:
   web_node_modules:

@@ -36,10 +36,10 @@ class BackfillProgress(BaseModel):
 
 
 class AiStatus(BaseModel):
-    """Populated once the AI chat agent's `ai_usage` table (migration
-    0002+) and pricing module exist; see `_ai_status` in
-    `api/routers/status.py` for exactly what's real today versus a
-    placeholder."""
+    """Owned end to end by the AI chat agent's `stockticker.ai.status.
+    ai_status(settings)` (issue #7's agreed contract) -- this model just
+    gives it a shape to return. `StatusResponse.ai` is null until that
+    module exists and `api/routers/status.py` calls it."""
 
     spend_usd: float
     limit_usd: float
@@ -54,4 +54,6 @@ class StatusResponse(BaseModel):
     missing_keys: list[str]
     data_as_of: datetime | None
     open_gaps: int
-    ai: AiStatus
+    # Null until stockticker.ai.status.ai_status exists (issue #7, agreed
+    # contract) and the router wires it in.
+    ai: AiStatus | None

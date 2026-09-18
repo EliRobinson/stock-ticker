@@ -203,18 +203,62 @@ def _revoke_dangerous_functions_from_public() -> None:
         FROM PUBLIC;
         """
     )
+    # Every lo_* function (lo_create, lo_import, lo_export, lo_open,
+    # lo_read/lo_write, lo_from_bytea, lo_get/lo_put, ...) plus the two
+    # that don't start with "lo_" (loread, lowrite) -- looped over pg_proc
+    # instead of named one by one, so a version with a different overload
+    # set is still fully covered. Large objects are their own privilege
+    # system, entirely separate from table grants: without this, a role
+    # with no table-level INSERT/UPDATE anywhere (ai_reader) could still
+    # persist arbitrary binary data via lo_from_bytea(...) -- found during
+    # review, and confirmed to work even inside a transaction whose
+    # *session default* is read-only, since `BEGIN READ WRITE` overrides
+    # that default per-transaction regardless of any GUC.
     op.execute(
         """
-        REVOKE EXECUTE ON FUNCTION
-          pg_catalog.lo_import(text),
-          pg_catalog.lo_import(text, oid),
-          pg_catalog.lo_export(oid, text)
-        FROM PUBLIC;
+        DO $$
+        DECLARE
+          r record;
+        BEGIN
+          FOR r IN
+            SELECT p.oid::regprocedure AS sig
+            FROM pg_proc p
+            JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = 'pg_catalog'
+              AND (p.proname LIKE 'lo\\_%' ESCAPE '\\' OR p.proname IN ('loread', 'lowrite'))
+          LOOP
+            EXECUTE format('REVOKE EXECUTE ON FUNCTION %s FROM PUBLIC', r.sig);
+          END LOOP;
+        END
+        $$;
         """
     )
     # dblink is a contrib extension and is not installed by this migration,
     # so there is nothing to revoke; if it is ever added later, Postgres
     # grants EXECUTE only to the installing role by default, not PUBLIC.
+
+    # NOT done: `REVOKE SET ON PARAMETER statement_timeout/work_mem/
+    # default_transaction_read_only FROM PUBLIC`. Tried it, verified empirically
+    # it does not do what it looks like it does: PG15's per-parameter ACL system
+    # (`GRANT/REVOKE ... ON PARAMETER`) governs `ALTER SYSTEM SET` only --
+    # confirmed by reproducing "permission denied to set parameter" for
+    # ai_reader on `ALTER SYSTEM SET work_mem` after the revoke. A plain
+    # session-scoped `SET work_mem = '2GB'` is governed by the parameter's
+    # own `context` in pg_settings (`user` for all three of these, by
+    # Postgres design), which the ACL system does not touch -- the revoke
+    # changed nothing for it; also reproduced directly. There is no
+    # Postgres mechanism to block a plain SET of a user-context GUC by a
+    # non-superuser role.
+    #
+    # This session-level tampering is caught three other ways instead:
+    # `DISCARD ALL` resets it before the connection returns to the pool
+    # (system design §6), so it can't persist across guarded calls; the
+    # guard's own `SET LOCAL statement_timeout='5s'` etc. is transaction-
+    # scoped and applies regardless of the session default; and the guard's
+    # sqlglot parse ("must be exactly one SELECT or WITH ... SELECT") means
+    # a `SET` statement can never be submitted through `run_sql` in the
+    # first place -- this finding only reaches the database at all via a
+    # direct connection that bypasses the guard entirely.
 
 
 def _create_tables() -> None:
@@ -601,7 +645,7 @@ def _create_ai_views() -> None:
 
     op.execute(
         "CREATE VIEW ai.events AS "
-        "SELECT id, cik, symbol, event_date, kind, title, details, source FROM events;"
+        "SELECT id, cik, symbol, event_date, kind, title, details, source, source_ref FROM events;"
     )
     op.execute(
         "COMMENT ON VIEW ai.events IS "
@@ -631,6 +675,12 @@ def _create_ai_views() -> None:
         "filing accession/url) as JSON.';"
     )
     op.execute("COMMENT ON COLUMN ai.events.source IS 'Data source: alpaca, sec, or wikipedia.';")
+    op.execute(
+        "COMMENT ON COLUMN ai.events.source_ref IS "
+        "'The source''s own id for this event -- SEC accession number, Alpaca corporate-action "
+        "id, or Wikipedia revision id. Unique together with source; cite it as the provenance "
+        "for a claim drawn from this row.';"
+    )
 
     op.execute(
         "CREATE VIEW ai.notes AS "
@@ -665,15 +715,28 @@ def _create_ai_views() -> None:
           q.symbol,
           q.price,
           q.observed_at,
-          q.price / NULLIF(prev.close, 0) - 1 AS change_pct
+          q.price / NULLIF(prev_bar.close, 0) - 1 AS change_pct
         FROM quotes q
         LEFT JOIN LATERAL (
-          SELECT b.close
-          FROM daily_bars b
-          WHERE b.symbol = q.symbol AND b.trade_date < CURRENT_DATE
-          ORDER BY b.trade_date DESC
+          -- Anchored to the Quote's OWN New York date, not to today's --
+          -- a quote observed before today's open, or a stale weekend/
+          -- holiday quote still showing Friday's trade, must compare
+          -- against the close *before* the day it was actually observed,
+          -- not against "yesterday" relative to whenever this view happens
+          -- to be queried (which is wrong before the open, on weekends,
+          -- and on holidays, and would compare a stale quote to itself).
+          SELECT td.trade_date
+          FROM trading_days td
+          WHERE td.trade_date < (q.observed_at AT TIME ZONE 'America/New_York')::date
+          ORDER BY td.trade_date DESC
           LIMIT 1
-        ) prev ON true;
+        ) prev_day ON true
+        -- Joined on the *exact* previous Trading Day found above, not "the
+        -- nearest earlier daily_bars row" -- if that specific day's bar is
+        -- missing (an ingest gap), this must come back null, not silently
+        -- fall back to an older close and misreport change_pct.
+        LEFT JOIN daily_bars prev_bar
+          ON prev_bar.symbol = q.symbol AND prev_bar.trade_date = prev_day.trade_date;
         """
     )
     op.execute(
@@ -870,6 +933,14 @@ _SHARE_CLASS_RULES = [
         "NWSA",
         "1",
         "News Corp: NWSA and NWS are the same share count; NWSA priced.",
+    ),
+    (
+        "0000014693",
+        "Brown-Forman Corporation",
+        "Consumer Staples",
+        "BF.B",
+        "1",
+        "Brown-Forman: Class A and B have equal economic value.",
     ),
 ]
 

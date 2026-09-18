@@ -1,13 +1,13 @@
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
-from stockticker.ingest.job import JobResult
-from stockticker.ingest.registry import (
+from stockticker.ingest.job import (
     CRON_MISFIRE_GRACE_SECONDS,
     INTERVAL_MISFIRE_GRACE_SECONDS,
-    JOBS,
+    JobResult,
     JobSpec,
 )
+from stockticker.ingest.registry import JOBS
 
 
 async def _noop(ctx: object) -> JobResult:  # pragma: no cover - never called
@@ -43,3 +43,15 @@ def test_jobs_tuple_has_no_duplicate_names() -> None:
 
 def test_noop_heartbeat_was_removed() -> None:
     assert "noop_heartbeat" not in {spec.name for spec in JOBS}
+
+
+def test_registry_holds_only_the_jobs_tuple() -> None:
+    # registry.py's whole job is `JOBS: tuple[JobSpec, ...]` -- JobSpec
+    # itself lives in job.py, and each handler lives in its own module
+    # (e.g. ingest/retention.py for ingest_runs_prune).
+    import stockticker.ingest.registry as registry_module
+
+    public_names = {name for name in vars(registry_module) if not name.startswith("_")}
+    # "annotations" is the name `from __future__ import annotations` binds
+    # in the module namespace, not something registry.py defines itself.
+    assert public_names <= {"JOBS", "JobSpec", "ingest_runs_prune", "CronTrigger", "annotations"}

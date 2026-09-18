@@ -7,16 +7,3 @@ coverage/
 pnpm-lock.yaml
 *.min.js
 *.min.css
-
-# Written verbatim by `pnpm ds init --agents`. Formatting them here would show
-# up as a diff every time they are regenerated.
-.claude/skills/design-system/SKILL.md
-.cursor/rules/design-system.mdc
-.github/copilot-instructions.md
-
-# Same, for `ds-resync artifacts --write`: generated skill trees, including the
-# UI-kit prototype sources that are reference material rather than app code.
-.claude/ds-artifacts.json
-.claude/skills/design-system-reference/
-.claude/skills/ds-resync/
-.claude/skills/miltinson-design/

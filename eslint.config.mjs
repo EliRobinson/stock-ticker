@@ -1,4 +1,3 @@
-import designSystem from '@elirobinson/eslint-config'
 import prettierConfig from 'eslint-config-prettier'
 import nextCoreWebVitals from 'eslint-config-next/core-web-vitals'
 import nextTypeScript from 'eslint-config-next/typescript'
@@ -15,10 +14,6 @@ const eslintConfig = [
       'build/**',
       'dist/**',
       'coverage/**',
-      // Agent instructions and the skill trees written by the design system's
-      // own generators. The UI-kit files there are prototype references, not
-      // app code — they are never built, and a fix would be overwritten by the
-      // next `ds-resync artifacts --write`.
       '.claude/**'
     ]
   },
@@ -43,11 +38,6 @@ const eslintConfig = [
       'no-console': ['warn', { allow: ['warn', 'error'] }]
     }
   },
-  // The statically checkable half of `pnpm ds contracts`: no foreign UI
-  // libraries, no bare design system imports, no hardcoded design values.
-  // shadcn/ui output is the sanctioned gap-filler, so direct primitive
-  // imports are allowed there and nowhere else.
-  ...designSystem({ gapFiller: ['src/components/ui/**'] }),
   // Prettier must be last to disable conflicting formatting rules
   prettierConfig
 ]

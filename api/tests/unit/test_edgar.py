@@ -22,9 +22,8 @@ from stockticker.ingest.edgar.parse import (
 from stockticker.ingest.edgar.sync import (
     EDGAR_BASE_URL,
     build_edgar_client,
-    fetch_companyfacts,
+    fetch_company,
     fetch_filings,
-    fetch_submissions,
 )
 from stockticker.ingest.http import reset_rate_budgets
 
@@ -170,44 +169,80 @@ def test_parse_filings_tolerates_an_empty_submissions_document() -> None:
     assert parse_filings({}, AAPL_CIK) == []
 
 
+def _mock_company(cik: str, companyfacts: httpx.Response, submissions: httpx.Response) -> list[respx.Route]:
+    return [
+        respx.get(f"{EDGAR_BASE_URL}/api/xbrl/companyfacts/CIK{cik}.json").mock(return_value=companyfacts),
+        respx.get(f"{EDGAR_BASE_URL}/submissions/CIK{cik}.json").mock(return_value=submissions),
+    ]
+
+
 @respx.mock
-async def test_fetches_go_to_data_sec_gov_with_the_user_agent() -> None:
-    facts = respx.get(f"{EDGAR_BASE_URL}/api/xbrl/companyfacts/CIK{AAPL_CIK}.json").mock(
-        return_value=httpx.Response(200, json=_fixture("companyfacts_aapl.json"))
-    )
-    submissions = respx.get(f"{EDGAR_BASE_URL}/submissions/CIK{AAPL_CIK}.json").mock(
-        return_value=httpx.Response(200, json=_fixture("submissions_aapl.json"))
+async def test_fetch_company_goes_to_data_sec_gov_with_the_user_agent() -> None:
+    routes = _mock_company(
+        AAPL_CIK,
+        httpx.Response(200, json=_fixture("companyfacts_aapl.json")),
+        httpx.Response(200, json=_fixture("submissions_aapl.json")),
     )
 
     async with build_edgar_client(USER_AGENT) as client:
-        facts_json = await fetch_companyfacts(client, AAPL_CIK)
-        submissions_json = await fetch_submissions(client, AAPL_CIK)
+        documents = await fetch_company(client, AAPL_CIK)
 
-    assert facts_json is not None and facts_json["entityName"] == "Apple Inc."
-    assert submissions_json["name"] == "Apple Inc."
-    for route in (facts, submissions):
+    assert documents.has_companyfacts
+    assert len(documents.shares) == 15
+    assert len(documents.filings) == 4
+    for route in routes:
         request = route.calls[0].request
         assert request.url.host == "data.sec.gov"
         assert request.headers["User-Agent"] == USER_AGENT
 
 
 @respx.mock
-async def test_companyfacts_404_means_no_facts() -> None:
-    respx.get(f"{EDGAR_BASE_URL}/api/xbrl/companyfacts/CIK{GOOGL_CIK}.json").mock(
-        return_value=httpx.Response(404)
-    )
+async def test_companyfacts_404_means_no_facts_but_filings_still_load() -> None:
+    _mock_company(AAPL_CIK, httpx.Response(404), httpx.Response(200, json=_fixture("submissions_aapl.json")))
 
     async with build_edgar_client(USER_AGENT) as client:
-        assert await fetch_companyfacts(client, GOOGL_CIK) is None
+        documents = await fetch_company(client, AAPL_CIK)
+
+    assert not documents.has_companyfacts
+    assert documents.shares == []
+    assert len(documents.filings) == 4
 
 
 @respx.mock
 async def test_submissions_404_is_an_error() -> None:
-    respx.get(f"{EDGAR_BASE_URL}/submissions/CIK{GOOGL_CIK}.json").mock(return_value=httpx.Response(404))
+    _mock_company(GOOGL_CIK, httpx.Response(200, json={"facts": {}}), httpx.Response(404))
 
     async with build_edgar_client(USER_AGENT) as client:
         with pytest.raises(httpx.HTTPStatusError):
-            await fetch_submissions(client, GOOGL_CIK)
+            await fetch_company(client, GOOGL_CIK)
+
+
+@respx.mock
+async def test_a_body_that_is_not_an_object_is_a_value_error() -> None:
+    _mock_company(GOOGL_CIK, httpx.Response(200, json=[1, 2]), httpx.Response(200, json={}))
+
+    async with build_edgar_client(USER_AGENT) as client:
+        with pytest.raises(ValueError, match="expected a JSON object, got list"):
+            await fetch_company(client, GOOGL_CIK)
+
+
+@pytest.mark.parametrize("name", ["fox", "nws"])
+def test_fox_and_news_corp_have_no_usable_whole_company_count(name: str) -> None:
+    """Real companyfacts (2016 on): News Corp reports no non-dimensional
+    count at all, and Fox's only one is a placeholder `1` on the cover page,
+    which the rebuild ignores because multi-class issuers use us-gaap only."""
+    facts = parse_shares(_fixture(f"companyfacts_{name}.json")).facts
+
+    assert [fact.concept for fact in facts if fact.concept == US_GAAP_SHARES] == []
+    assert all(fact.shares == 1 for fact in facts if fact.concept == DEI_SHARES)
+
+
+def test_brown_forman_reports_whole_company_counts_in_us_gaap_only() -> None:
+    facts = parse_shares(_fixture("companyfacts_bf.json")).facts
+
+    assert {fact.concept for fact in facts} == {US_GAAP_SHARES}
+    latest = max(facts, key=lambda fact: (fact.filed_date, fact.as_of_date))
+    assert latest.shares == 472_669_000
 
 
 def test_older_filing_pages_keeps_only_pages_that_reach_2018() -> None:

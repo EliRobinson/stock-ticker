@@ -321,8 +321,13 @@ def make_deps(
     )
 
 
+def ui_message(role: str, *parts: dict[str, Any], message_id: str = "") -> UIMessage:
+    """A UIMessage as the request body carries it, validated the same way."""
+    return UIMessage.model_validate({"id": message_id, "role": role, "parts": list(parts)})
+
+
 def user(text: str, message_id: str = "u1") -> UIMessage:
-    return UIMessage(id=message_id, role="user", parts=[{"type": "text", "text": text}])
+    return ui_message("user", {"type": "text", "text": text}, message_id=message_id)
 
 
 def parse_sse(body: str) -> list[dict[str, Any] | str]:

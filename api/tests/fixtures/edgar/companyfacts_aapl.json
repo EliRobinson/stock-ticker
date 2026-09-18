@@ -1,0 +1,59 @@
+{
+  "cik": 320193,
+  "entityName": "Apple Inc.",
+  "facts": {
+    "dei": {
+      "EntityCommonStockSharesOutstanding": {
+        "label": "Entity Common Stock, Shares Outstanding",
+        "description": "Indicate number of shares or other units outstanding of each of registrant's classes of capital or common stock or other ownership interest, if and as stated on cover of related periodic report. Where multiple classes or units exist define each class/interest by adding class of stock items such as Common Class A [Member], Common Class B [Member] or Partnership Interest [Member] onto the Instrument [Domain] of the Entity Listings, Instrument.",
+        "units": {
+          "shares": [
+            {"end": "2015-10-16", "val": 5544583000, "accn": "0001193125-15-356351", "fy": 2015, "fp": "FY", "form": "10-K", "filed": "2015-10-28", "frame": "CY2015Q3I"},
+            {"end": "2019-10-18", "val": 4443265000, "accn": "0000320193-19-000119", "fy": 2019, "fp": "FY", "form": "10-K", "filed": "2019-10-31", "frame": "CY2019Q3I"},
+            {"end": "2020-01-17", "val": 4375480000, "accn": "0000320193-20-000010", "fy": 2020, "fp": "Q1", "form": "10-Q", "filed": "2020-01-29", "frame": "CY2019Q4I"},
+            {"end": "2020-04-17", "val": 4334335000, "accn": "0000320193-20-000052", "fy": 2020, "fp": "Q2", "form": "10-Q", "filed": "2020-05-01", "frame": "CY2020Q1I"},
+            {"end": "2020-07-17", "val": 4275634000, "accn": "0000320193-20-000062", "fy": 2020, "fp": "Q3", "form": "10-Q", "filed": "2020-07-31", "frame": "CY2020Q2I"},
+            {"end": "2020-10-16", "val": 17001802000, "accn": "0000320193-20-000096", "fy": 2020, "fp": "FY", "form": "10-K", "filed": "2020-10-30", "frame": "CY2020Q3I"},
+            {"end": "2021-01-15", "val": 16788096000, "accn": "0000320193-21-000010", "fy": 2021, "fp": "Q1", "form": "10-Q", "filed": "2021-01-28", "frame": "CY2020Q4I"}
+          ]
+        }
+      },
+      "EntityPublicFloat": {
+        "label": "Entity Public Float",
+        "description": "The aggregate market value of the voting and non-voting common equity held by non-affiliates.",
+        "units": {
+          "USD": [
+            {"end": "2020-03-27", "val": 1070633000000, "accn": "0000320193-20-000096", "fy": 2020, "fp": "FY", "form": "10-K", "filed": "2020-10-30", "frame": "CY2020Q1I"}
+          ]
+        }
+      }
+    },
+    "us-gaap": {
+      "CommonStockSharesOutstanding": {
+        "label": "Common Stock, Shares, Outstanding",
+        "description": "Number of shares of common stock outstanding. Common stock represent the ownership interest in a corporation.",
+        "units": {
+          "shares": [
+            {"end": "2019-09-28", "val": 4443236000, "accn": "0000320193-20-000010", "fy": 2020, "fp": "Q1", "form": "10-Q", "filed": "2020-01-29"},
+            {"end": "2019-09-28", "val": 4443236000, "accn": "0000320193-20-000052", "fy": 2020, "fp": "Q2", "form": "10-Q", "filed": "2020-05-01"},
+            {"end": "2019-09-28", "val": 4443236000, "accn": "0000320193-20-000062", "fy": 2020, "fp": "Q3", "form": "10-Q", "filed": "2020-07-31"},
+            {"end": "2019-09-28", "val": 17772945000, "accn": "0000320193-20-000096", "fy": 2020, "fp": "FY", "form": "10-K", "filed": "2020-10-30", "frame": "CY2019Q3I"},
+            {"end": "2019-12-28", "val": 4384959000, "accn": "0000320193-20-000010", "fy": 2020, "fp": "Q1", "form": "10-Q", "filed": "2020-01-29", "frame": "CY2019Q4I"},
+            {"end": "2020-03-28", "val": 4323987000, "accn": "0000320193-20-000052", "fy": 2020, "fp": "Q2", "form": "10-Q", "filed": "2020-05-01", "frame": "CY2020Q1I"},
+            {"end": "2020-06-27", "val": 4283939000, "accn": "0000320193-20-000062", "fy": 2020, "fp": "Q3", "form": "10-Q", "filed": "2020-07-31", "frame": "CY2020Q2I"},
+            {"end": "2020-09-26", "val": 16976763000, "accn": "0000320193-20-000096", "fy": 2020, "fp": "FY", "form": "10-K", "filed": "2020-10-30"},
+            {"end": "2020-09-26", "val": 16976763000, "accn": "0000320193-21-000010", "fy": 2021, "fp": "Q1", "form": "10-Q", "filed": "2021-01-28"}
+          ]
+        }
+      },
+      "Revenues": {
+        "label": "Revenues",
+        "units": {
+          "USD": [
+            {"start": "2019-09-29", "end": "2020-09-26", "val": 274515000000, "accn": "0000320193-20-000096", "fy": 2020, "fp": "FY", "form": "10-K", "filed": "2020-10-30", "frame": "CY2020"}
+          ]
+        }
+      }
+    }
+  }
+}

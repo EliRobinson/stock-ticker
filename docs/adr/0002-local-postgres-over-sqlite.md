@@ -1,0 +1,3 @@
+# Local Postgres over SQLite
+
+The app runs locally only, and SQLite would be simpler to ship. We chose Postgres in Docker for two reasons. First, the ingest worker, the API, and Note writes all write at the same time, and SQLite locks the whole file for each write. Second, the AI runs model-written SQL, and Postgres can enforce the safety rules in the database itself: a login that can only read, a statement timeout, and access to a limited set of views. In SQLite, "read-only" is only a flag on the connection. At about 1.1M Daily Bars with a (listing, date) key, a plain Postgres table is fast enough, so time-series extensions like TimescaleDB are not needed.

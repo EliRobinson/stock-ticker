@@ -139,6 +139,7 @@ services:
     environment:
       NEXT_PUBLIC_API_URL: ${PUBLIC_API_URL:-http://127.0.0.1:8000}
       PUBLIC_WEB_HOST: ${PUBLIC_WEB_HOST:-}
+      SHARE_PASSWORD: ${SHARE_PASSWORD:-}
     volumes:
       - .:/app
       # Two named volumes, not one (see AGENTS.md, "Compose"): a single

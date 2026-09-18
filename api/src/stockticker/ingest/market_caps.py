@@ -48,11 +48,11 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from sqlalchemy import text
-from sqlalchemy.exc import DBAPIError, OperationalError
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from stockticker.ingest.edgar.parse import DEI_SHARES, MERGER_ITEM, shares_key
-from stockticker.ingest.job import FailedItem, JobResult, JobSkipped
+from stockticker.ingest.job import FailedItem, JobContext, JobResult, JobSkipped
 from stockticker.logging import get_logger
 
 logger = get_logger(__name__)
@@ -325,10 +325,8 @@ async def _companies_to_rebuild(conn: AsyncConnection) -> list[str]:
     return [row.cik for row in result]
 
 
-async def market_caps_rebuild(conn: AsyncConnection) -> JobResult:
-    """Job handler. `conn` holds the wrapper's advisory lock; the work runs
-    on a connection of its own."""
-    return await run_market_caps_rebuild(conn.engine)
+async def market_caps_rebuild(ctx: JobContext) -> JobResult:
+    return await run_market_caps_rebuild(ctx.engine)
 
 
 async def run_market_caps_rebuild(engine: AsyncEngine) -> JobResult:
@@ -342,9 +340,9 @@ async def run_market_caps_rebuild(engine: AsyncEngine) -> JobResult:
             try:
                 rebuilt = await rebuild_company(conn, cik)
                 await conn.commit()
-            except OperationalError:
-                raise
             except (SplitRatioError, DBAPIError) as exc:
+                if isinstance(exc, DBAPIError) and exc.connection_invalidated:
+                    raise  # the connection is gone; every later Company would fail the same way
                 await conn.rollback()
                 result.failed_items.append(FailedItem(key=cik, error=f"rebuild skipped: {exc}"))
                 continue

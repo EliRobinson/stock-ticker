@@ -24,9 +24,8 @@ import httpx
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-from stockticker.config import get_settings
-from stockticker.ingest.http import build_http_client, request
-from stockticker.ingest.job import JobResult
+from stockticker.ingest.http import RateBudgetName, build_http_client, request
+from stockticker.ingest.job import JobContext, JobResult
 from stockticker.ingest.wikipedia.parser import ConstituentRow, parse_constituents
 from stockticker.logging import get_logger
 
@@ -76,7 +75,7 @@ def user_agent(contact: str | None) -> str:
 
 
 async def fetch_constituents_html(client: httpx.AsyncClient) -> str:
-    response = await request(client, "GET", WIKIPEDIA_URL)
+    response = await request(client, "GET", WIKIPEDIA_URL, rate_budget=RateBudgetName.WIKIPEDIA)
     return response.text
 
 
@@ -286,10 +285,8 @@ async def _deactivate(conn: AsyncConnection, table: str, key_column: str, keys: 
     return result.rowcount or 0
 
 
-async def constituents_sync(conn: AsyncConnection) -> JobResult:
-    """Job handler. `conn` holds the wrapper's advisory lock; the work runs
-    on connections of its own."""
-    return await run_constituents_sync(conn.engine, contact=get_settings().sec_user_agent)
+async def constituents_sync(ctx: JobContext) -> JobResult:
+    return await run_constituents_sync(ctx.engine, contact=ctx.settings.sec_user_agent)
 
 
 def _as_log(summary: ConstituentsSyncSummary) -> dict[str, int]:

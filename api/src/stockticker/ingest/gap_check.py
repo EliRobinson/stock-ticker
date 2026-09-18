@@ -30,7 +30,7 @@ from datetime import date
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-from stockticker.ingest.job import JobResult, JobSkipped
+from stockticker.ingest.job import JobContext, JobResult, JobSkipped
 from stockticker.logging import get_logger
 
 logger = get_logger(__name__)
@@ -70,10 +70,8 @@ class GapCheckSummary:
     accepted: int = 0
 
 
-async def gap_check(conn: AsyncConnection) -> JobResult:
-    """Job handler. `conn` holds the wrapper's advisory lock; the work runs
-    on a connection of its own."""
-    return await run_gap_check(conn.engine)
+async def gap_check(ctx: JobContext) -> JobResult:
+    return await run_gap_check(ctx.engine)
 
 
 async def run_gap_check(engine: AsyncEngine) -> JobResult:

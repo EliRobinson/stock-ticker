@@ -17,7 +17,7 @@ import httpx
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-from stockticker.config import get_settings
+from stockticker.config import RequiredKey
 from stockticker.ingest.edgar.parse import (
     FilingEvent,
     SharesFact,
@@ -25,8 +25,8 @@ from stockticker.ingest.edgar.parse import (
     parse_filings,
     parse_shares,
 )
-from stockticker.ingest.http import build_http_client, request
-from stockticker.ingest.job import ConfigMissingError, FailedItem, JobResult, JobSkipped
+from stockticker.ingest.http import RateBudgetName, build_http_client, request
+from stockticker.ingest.job import ConfigMissingError, FailedItem, JobContext, JobResult, JobSkipped
 from stockticker.logging import get_logger
 
 logger = get_logger(__name__)
@@ -43,7 +43,7 @@ async def fetch_companyfacts(client: httpx.AsyncClient, cik: str) -> dict[str, A
     """`None` when EDGAR has no XBRL facts for the CIK (404)."""
     try:
         response = await request(
-            client, "GET", f"/api/xbrl/companyfacts/{cik_path(cik)}.json", rate_budget="sec"
+            client, "GET", f"/api/xbrl/companyfacts/{cik_path(cik)}.json", rate_budget=RateBudgetName.SEC
         )
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 404:
@@ -54,7 +54,9 @@ async def fetch_companyfacts(client: httpx.AsyncClient, cik: str) -> dict[str, A
 
 
 async def fetch_submissions(client: httpx.AsyncClient, cik: str) -> dict[str, Any]:
-    response = await request(client, "GET", f"/submissions/{cik_path(cik)}.json", rate_budget="sec")
+    response = await request(
+        client, "GET", f"/submissions/{cik_path(cik)}.json", rate_budget=RateBudgetName.SEC
+    )
     data: dict[str, Any] = response.json()
     return data
 
@@ -96,13 +98,11 @@ async def run_edgar_sync(engine: AsyncEngine, *, user_agent: str) -> JobResult:
     return result
 
 
-async def edgar_sync(conn: AsyncConnection) -> JobResult:
-    """Job handler. `conn` holds the wrapper's advisory lock; the work runs
-    on connections of its own."""
-    user_agent = get_settings().sec_user_agent
-    if not user_agent:
-        raise ConfigMissingError(["SEC_USER_AGENT"])
-    return await run_edgar_sync(conn.engine, user_agent=user_agent)
+async def edgar_sync(ctx: JobContext) -> JobResult:
+    user_agent = ctx.settings.sec_user_agent
+    if not user_agent:  # registry's requires_keys already checks; this narrows the type
+        raise ConfigMissingError([RequiredKey.SEC_USER_AGENT.value])
+    return await run_edgar_sync(ctx.engine, user_agent=user_agent)
 
 
 async def _active_companies(conn: AsyncConnection) -> list[tuple[str, str | None]]:

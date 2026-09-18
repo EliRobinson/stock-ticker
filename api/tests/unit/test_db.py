@@ -33,7 +33,7 @@ def test_each_purpose_gets_its_own_engine_with_the_right_pool_size() -> None:
     assert isinstance(ai_engine.pool, QueuePool)
     assert api_engine.pool.size() == 5
     assert worker_engine.pool.size() == 6
-    assert quotes_engine.pool.size() == 1
+    assert quotes_engine.pool.size() == 2
     # App DB keeps ai_reader at the migration's server-side cap of 3; the
     # pytest DB drops to 1 so integration fixtures can open short-lived
     # engines without TooManyConnectionsError (#38).

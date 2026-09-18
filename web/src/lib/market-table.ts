@@ -1,30 +1,6 @@
-import type { ColumnDef, FilterFn, SortingFn } from '@tanstack/react-table'
+import type { ColumnDef, FilterFn } from '@tanstack/react-table'
+import { toNumber } from './format'
 import type { MarketRow } from './api'
-
-function toNumber(value: string | number | null | undefined): number | null {
-  if (value === null || value === undefined || value === '') return null
-  const n = typeof value === 'number' ? value : Number(value)
-  return Number.isFinite(n) ? n : null
-}
-
-/**
- * Numeric columns (`price`, `change`, `market_cap`, ...) arrive as decimal
- * strings, and can be null before a Listing has a Quote. Nulls sort last
- * regardless of sort direction, so an unpriced row never jumps to the top
- * of a descending sort.
- */
-export const numericStringSortingFn: SortingFn<MarketRow> = (
-  rowA,
-  rowB,
-  columnId
-) => {
-  const a = toNumber(rowA.getValue<string | number | null>(columnId))
-  const b = toNumber(rowB.getValue<string | number | null>(columnId))
-  if (a === null && b === null) return 0
-  if (a === null) return 1
-  if (b === null) return -1
-  return a - b
-}
 
 export const searchFilterFn: FilterFn<MarketRow> = (
   row,
@@ -39,25 +15,6 @@ export const searchFilterFn: FilterFn<MarketRow> = (
   )
 }
 
-/**
- * `observed_at` sorts last-priced-first by default (nulls, meaning never
- * quoted, sort last in either direction) so the UI can offer "sort by
- * staleness" without a separate age column - age itself depends on the
- * parent /market response's server_time, which isn't on MarketRow.
- */
-export const nullableDateStringSortingFn: SortingFn<MarketRow> = (
-  rowA,
-  rowB,
-  columnId
-) => {
-  const a = rowA.getValue<string | null>(columnId)
-  const b = rowB.getValue<string | null>(columnId)
-  if (a === null && b === null) return 0
-  if (a === null) return 1
-  if (b === null) return -1
-  return a < b ? -1 : a > b ? 1 : 0
-}
-
 export const sectorFilterFn: FilterFn<MarketRow> = (
   row,
   _columnId,
@@ -69,11 +26,31 @@ export const sectorFilterFn: FilterFn<MarketRow> = (
   return active.includes(row.original.sector)
 }
 
+function numericColumn(
+  id: keyof MarketRow,
+  header: string
+): ColumnDef<MarketRow> {
+  return {
+    id,
+    // TanStack's `sortUndefined: 'last'` handles the null-before-Quote
+    // case in one place, for both sort directions - a hand-written
+    // comparator returning a fixed +1/-1 gets its sign flipped by the
+    // table for a descending sort, which put nulls FIRST instead of last
+    // (see #8 review). accessorFn (not accessorKey) is what lets
+    // `sortUndefined` see `undefined` instead of `null`, which is the only
+    // value it recognizes.
+    accessorFn: (row) =>
+      toNumber(row[id] as string | number | null) ?? undefined,
+    header,
+    sortUndefined: 'last'
+  }
+}
+
 export const marketTableColumns: ColumnDef<MarketRow>[] = [
   {
     id: 'symbol',
     accessorKey: 'symbol',
-    header: 'Symbol',
+    header: 'Ticker',
     filterFn: searchFilterFn
   },
   {
@@ -88,42 +65,20 @@ export const marketTableColumns: ColumnDef<MarketRow>[] = [
     header: 'Sector',
     filterFn: sectorFilterFn
   },
-  {
-    id: 'price',
-    accessorKey: 'price',
-    header: 'Price',
-    sortingFn: numericStringSortingFn
-  },
-  {
-    id: 'change',
-    accessorKey: 'change',
-    header: 'Change',
-    sortingFn: numericStringSortingFn
-  },
-  {
-    id: 'change_pct',
-    accessorKey: 'change_pct',
-    header: 'Change %',
-    sortingFn: numericStringSortingFn
-  },
-  {
-    id: 'volume',
-    accessorKey: 'volume',
-    header: 'Volume',
-    sortingFn: numericStringSortingFn
-  },
+  numericColumn('price', 'Price'),
+  numericColumn('change', 'Change'),
+  numericColumn('change_pct', 'Change %'),
+  numericColumn('volume', 'Volume'),
   {
     id: 'observed_at',
-    accessorKey: 'observed_at',
-    header: 'Quote time',
-    sortingFn: nullableDateStringSortingFn
+    // Sorts by recency; age itself depends on the parent /market
+    // response's server_time, which isn't on MarketRow, so it stays a
+    // sortable timestamp column rather than a synthesized "age" one.
+    accessorFn: (row) => row.observed_at ?? undefined,
+    header: 'Last Quote',
+    sortUndefined: 'last'
   },
-  {
-    id: 'market_cap',
-    accessorKey: 'market_cap',
-    header: 'Market Cap',
-    sortingFn: numericStringSortingFn
-  }
+  numericColumn('market_cap', 'Market Cap')
 ]
 
 export const marketSortableColumnIds = new Set(
@@ -144,17 +99,19 @@ export const defaultMarketFilterState: MarketFilterState = {
   sort: null
 }
 
-export function parseMarketFilterState(
-  searchParams: URLSearchParams | Record<string, string | undefined>
-): MarketFilterState {
-  const get = (key: string): string | null => {
-    if (searchParams instanceof URLSearchParams) return searchParams.get(key)
-    return searchParams[key] ?? null
-  }
+/** Matches both `URLSearchParams` and Next.js's `ReadonlyURLSearchParams`
+ * (from `useSearchParams()`) - either one already has `.get()`, so there's
+ * no need to special-case a plain object as a second input shape. */
+export interface SearchParamsLike {
+  get(key: string): string | null
+}
 
-  const q = get('q') ?? ''
-  const sector = get('sector')
-  const sortParam = get('sort')
+export function parseMarketFilterState(
+  searchParams: SearchParamsLike
+): MarketFilterState {
+  const q = searchParams.get('q') ?? ''
+  const sector = searchParams.get('sector')
+  const sortParam = searchParams.get('sort')
 
   let sort: MarketFilterState['sort'] = null
   if (sortParam) {

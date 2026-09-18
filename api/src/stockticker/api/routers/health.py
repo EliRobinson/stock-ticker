@@ -10,25 +10,15 @@ migrations; `api` no longer does)."""
 
 from __future__ import annotations
 
-from typing import Literal
-
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncConnection
 
 from stockticker.api.migrations import get_head_revision
-from stockticker.db import get_app_writer_connection
-from stockticker.models.health import HealthResponse
+from stockticker.db import get_api_app_writer_engine
+from stockticker.models.health import HealthResponse, ReadyResponse
 from stockticker.models.problem import ProblemDetail
 
 router = APIRouter(tags=["health"])
-
-
-class ReadyResponse(BaseModel):
-    status: Literal["ok"]
-    database: Literal["ok"]
-    migration: Literal["ok"]
 
 
 @router.get("/health/live", response_model=HealthResponse)
@@ -41,9 +31,15 @@ async def health_live() -> HealthResponse:
     response_model=ReadyResponse,
     responses={503: {"model": ProblemDetail}},
 )
-async def health_ready(conn: AsyncConnection = Depends(get_app_writer_connection)) -> ReadyResponse:
+async def health_ready() -> ReadyResponse:
+    # The connection is acquired here, inside this try, rather than via a
+    # FastAPI Depends(...) generator dependency: a dependency that fails to
+    # connect raises during FastAPI's own dependency-resolution phase,
+    # before the route body (and its try/except) ever runs -- that turned
+    # a DB-down 503 into an unhandled 500 (found during review).
     try:
-        db_revision = await conn.scalar(text("SELECT version_num FROM alembic_version LIMIT 1"))
+        async with get_api_app_writer_engine().connect() as conn:
+            db_revision = await conn.scalar(text("SELECT version_num FROM alembic_version LIMIT 1"))
     except Exception as exc:
         raise HTTPException(status_code=503, detail="database unreachable") from exc
 

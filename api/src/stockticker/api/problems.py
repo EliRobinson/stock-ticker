@@ -7,7 +7,7 @@ a kebab-case slug of the HTTP reason phrase for the generic handlers
 (`Problem("unknown-cik", 422, "...")` -> `.../problems/unknown-cik`), so a
 client can switch on `type` instead of the numeric status.
 
-A response built by `_respond` carries `X-Request-ID` and the CORS
+A response built by `problem_response` carries `X-Request-ID` and the CORS
 allow-origin header itself, rather than relying on `RequestIDMiddleware`/
 `CORSMiddleware` to add them: an exception handler registered for the bare
 `Exception` type (i.e. `unhandled_exception_handler`, for a genuine 500) is
@@ -81,7 +81,7 @@ def _extra_headers(request: Request) -> dict[str, str]:
     return headers
 
 
-def _respond(
+def problem_response(
     request: Request,
     *,
     status_code: int,
@@ -111,12 +111,12 @@ async def http_exception_handler(request: Request, exc: Exception) -> JSONRespon
     # broader `Exception` parameter type is what add_exception_handler's
     # signature requires.
     assert isinstance(exc, StarletteHTTPException)
-    return _respond(request, status_code=exc.status_code, detail=str(exc.detail))
+    return problem_response(request, status_code=exc.status_code, detail=str(exc.detail))
 
 
 async def validation_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, RequestValidationError)
-    return _respond(
+    return problem_response(
         request,
         status_code=422,
         detail="Request validation failed.",
@@ -126,7 +126,7 @@ async def validation_exception_handler(request: Request, exc: Exception) -> JSON
 
 async def problem_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, Problem)
-    return _respond(request, status_code=exc.status, detail=exc.detail, slug=exc.slug)
+    return problem_response(request, status_code=exc.status, detail=exc.detail, slug=exc.slug)
 
 
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
@@ -134,7 +134,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     logger.error(
         "api.unhandled_exception", path=request.url.path, error=str(exc), request_id=request_id, exc_info=exc
     )
-    return _respond(request, status_code=500, detail="An unexpected error occurred.")
+    return problem_response(request, status_code=500, detail="An unexpected error occurred.")
 
 
 def register_problem_handlers(app: FastAPI) -> None:

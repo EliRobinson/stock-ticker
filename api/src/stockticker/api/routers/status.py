@@ -7,8 +7,10 @@ the union of every registered job's `requires_keys`, so it reports exactly
 what's gating *this build's* registered work, not a fixed list of four env
 vars regardless of whether anything needs them yet. `market_clock` is
 `None` until `stockticker.marketdata.fetch_market_clock` is implemented.
-`open_gaps` reads the latest `gap_check` run's `items_failed`, since the
-schema keeps no dedicated gaps table -- `gap_check` (§4) is the only writer.
+`open_gaps` counts `refetch_requests` rows with `reason = 'gap'` and
+`accepted_at IS NULL` -- `gap_check` inserts one per unfilled gap and sets
+`accepted_at` once it gives up after 3 attempts (§4), so an open gap is
+exactly a row that's neither been filled nor accepted yet.
 """
 
 from __future__ import annotations
@@ -20,7 +22,6 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from sqlalchemy.engine import Row
-from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from stockticker.config import Settings, get_settings
@@ -102,33 +103,24 @@ async def _data_as_of(conn: AsyncConnection) -> datetime | None:
 
 
 async def _open_gaps(conn: AsyncConnection) -> int:
-    row = (
-        await conn.execute(
-            text(
-                "SELECT items_failed FROM ingest_runs WHERE job = 'gap_check' "
-                "ORDER BY started_at DESC LIMIT 1"
-            )
-        )
-    ).first()
-    return row.items_failed if row else 0
+    count = await conn.scalar(
+        text("SELECT count(*) FROM refetch_requests WHERE reason = 'gap' AND accepted_at IS NULL")
+    )
+    return count or 0
 
 
-async def _ai_status(conn: AsyncConnection, settings: Settings) -> AiStatus:
-    """`ai_usage` is owned by the AI chat agent's migration (0002+, chained
-    after this one); read defensively so /api/v1/status still works before
-    that migration has run. `enabled` doesn't yet check
-    `stockticker.ai.pricing.price_for(settings.ai_model)` -- that module
-    doesn't exist in this codebase yet either; the AI chat agent extends
-    this condition once it does."""
+async def _ai_status(settings: Settings) -> AiStatus | None:
+    # stockticker.ai.status.ai_status(settings) is issue #7's agreed
+    # contract (the AI chat agent owns it end to end); imported here at
+    # call time, not at module level, so this branch keeps working before
+    # #7 merges to main and that module exists. Once it does, this starts
+    # returning real status with no further change here.
     try:
-        raw_spend = await conn.scalar(text("SELECT coalesce(sum(cost_usd), 0) FROM ai_usage"))
-        spend_usd = float(raw_spend or 0)
-    except DBAPIError:
-        await conn.rollback()
-        spend_usd = 0.0
-    limit_usd = float(settings.ai_spend_limit_usd)
-    enabled = bool(settings.anthropic_api_key) and spend_usd < limit_usd
-    return AiStatus(spend_usd=spend_usd, limit_usd=limit_usd, enabled=enabled)
+        from stockticker.ai.status import ai_status
+    except ImportError:
+        return None
+    result: AiStatus = await ai_status(settings)
+    return result
 
 
 @router.get("/status", response_model=StatusResponse)
@@ -145,5 +137,5 @@ async def status(
         missing_keys=settings.missing_keys(required_keys),
         data_as_of=await _data_as_of(conn),
         open_gaps=await _open_gaps(conn),
-        ai=await _ai_status(conn, settings),
+        ai=await _ai_status(settings),
     )

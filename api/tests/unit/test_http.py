@@ -8,7 +8,9 @@ import respx
 
 from stockticker.ingest.http import (
     RATE_BUDGETS,
+    RETRY_AFTER_CAP_SECONDS,
     RateBudgetName,
+    _parse_retry_after,
     build_http_client,
     request,
     reset_rate_budgets,
@@ -56,3 +58,29 @@ async def test_request_gives_up_after_max_attempts() -> None:
         with pytest.raises(Exception, match="retryable status"):
             await request(client, "GET", "/always-503", rate_budget=RateBudgetName.SEC)
     assert route.call_count == 4
+
+
+def test_parse_retry_after_numeric_seconds() -> None:
+    assert _parse_retry_after("5") == 5.0
+
+
+def test_parse_retry_after_none_when_header_absent() -> None:
+    assert _parse_retry_after(None) is None
+
+
+def test_parse_retry_after_caps_an_oversized_value() -> None:
+    assert _parse_retry_after("999999") == RETRY_AFTER_CAP_SECONDS
+
+
+def test_parse_retry_after_ignores_non_finite_values() -> None:
+    assert _parse_retry_after("inf") is None
+    assert _parse_retry_after("-inf") is None
+    assert _parse_retry_after("nan") is None
+
+
+def test_parse_retry_after_clamps_negative_to_zero() -> None:
+    assert _parse_retry_after("-5") == 0.0
+
+
+def test_parse_retry_after_unparseable_value_is_none() -> None:
+    assert _parse_retry_after("not a date or a number") is None

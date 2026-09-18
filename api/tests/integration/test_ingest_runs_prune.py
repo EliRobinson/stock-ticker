@@ -10,7 +10,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from stockticker.config import get_settings
-from stockticker.ingest.job import JobContext, ingest_runs_prune
+from stockticker.ingest.job import JobContext
+from stockticker.ingest.retention import ingest_runs_prune
 from stockticker.logging import get_logger
 
 
@@ -48,10 +49,16 @@ async def test_ingest_runs_prune_removes_old_succeeded_and_keeps_recent(
         await _insert_run(app_writer_engine, old_failure_kept, "failed", timedelta(days=8))
         await _insert_run(app_writer_engine, very_old_failure, "failed", timedelta(days=91))
 
-        ctx = JobContext(
-            engine=app_writer_engine, run_id=0, settings=get_settings(), log=get_logger(__name__)
-        )
-        await ingest_runs_prune(ctx)
+        async with app_writer_engine.connect() as lock_conn:
+            ctx = JobContext(
+                engine=app_writer_engine,
+                quotes_engine=app_writer_engine,
+                run_id=0,
+                settings=get_settings(),
+                log=get_logger(__name__),
+                _lock_conn=lock_conn,
+            )
+            await ingest_runs_prune(ctx)
 
         assert await _status_for(app_writer_engine, old_success) is None
         assert await _status_for(app_writer_engine, recent_success) == "succeeded"

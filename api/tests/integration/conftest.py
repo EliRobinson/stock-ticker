@@ -21,13 +21,13 @@ from collections.abc import AsyncIterator
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import text
+from sqlalchemy import URL, text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from stockticker.config import get_settings
 
 
-async def _connectable(dsn: str) -> AsyncEngine | None:
+async def _connectable(dsn: URL) -> AsyncEngine | None:
     engine = create_async_engine(dsn)
     try:
         async with engine.connect() as conn:

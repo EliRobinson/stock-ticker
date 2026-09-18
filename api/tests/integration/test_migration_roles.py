@@ -124,3 +124,44 @@ async def test_set_read_only_off_does_not_grant_ai_reader_a_write(ai_reader_engi
                     "VALUES (current_date, current_date, 'x')"
                 )
             )
+
+
+async def test_ai_reader_cannot_persist_a_large_object_after_read_only_off(
+    ai_reader_engine: AsyncEngine,
+) -> None:
+    """The actual escape found during review: large objects are their own
+    privilege system, independent of table grants, so `BEGIN READ WRITE`
+    (which overrides the session's read-only default per-transaction,
+    regardless of any GUC) plus `lo_from_bytea` could persist arbitrary
+    binary data even though ai_reader has no INSERT anywhere. Closed by
+    revoking EXECUTE on every lo_*/loread/lowrite function from PUBLIC."""
+    async with ai_reader_engine.connect() as conn:
+        await conn.execute(text("SET default_transaction_read_only = off"))
+        with pytest.raises(DBAPIError):
+            await conn.execute(text("BEGIN READ WRITE"))
+            await conn.execute(text("SELECT lo_from_bytea(0, 'x')"))
+
+
+async def test_setting_statement_timeout_or_work_mem_does_not_escape_the_guard(
+    ai_reader_engine: AsyncEngine,
+) -> None:
+    """Also found during review: `SET statement_timeout = 0` and
+    `SET work_mem = '2GB'` both succeed for ai_reader -- Postgres has no
+    mechanism to block a plain SET of a 'user'-context GUC by a
+    non-superuser role (`REVOKE SET ON PARAMETER`, tried first, governs
+    only `ALTER SYSTEM SET`; verified empirically, see the migration's
+    comment at that block). Documented rather than silently left broken:
+    it doesn't defeat the guard, because `DISCARD ALL` resets it before
+    the connection returns to the pool, the guard's own
+    `SET LOCAL statement_timeout='5s'` is transaction-scoped regardless of
+    the session default, and a `SET` statement can never be submitted
+    through `run_sql` in the first place (the guard requires exactly one
+    parsed SELECT)."""
+    async with ai_reader_engine.connect() as conn:
+        await conn.execute(text("SET statement_timeout = 0"))
+        await conn.execute(text("SET work_mem = '2GB'"))
+        assert await conn.scalar(text("SHOW statement_timeout")) == "0"
+        assert await conn.scalar(text("SHOW work_mem")) == "2GB"
+
+        with pytest.raises(DBAPIError):
+            await conn.execute(text("ALTER SYSTEM SET work_mem = '2GB'"))

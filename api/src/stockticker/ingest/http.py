@@ -10,13 +10,15 @@ from __future__ import annotations
 
 import asyncio
 import email.utils
+import math
+import random
 import time
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import lru_cache
 
 import httpx
-from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt
+from tenacity import AsyncRetrying, RetryCallState, retry_if_exception_type, stop_after_attempt
 
 DEFAULT_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=30.0, pool=30.0)
 
@@ -24,6 +26,7 @@ RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 MAX_ATTEMPTS = 4
 BACKOFF_BASE_SECONDS = 1.0
 BACKOFF_CAP_SECONDS = 30.0
+RETRY_AFTER_CAP_SECONDS = 60.0
 
 
 class RateBudgetName(StrEnum):
@@ -83,41 +86,54 @@ def reset_rate_budgets() -> None:
     get_rate_budget.cache_clear()
 
 
-class RetryableStatusError(Exception):
+class RetryableStatusError(httpx.HTTPStatusError):
+    """A 429/5xx we've decided to retry. Subclasses `httpx.HTTPStatusError`
+    (not a bare `Exception`) so it carries the request/response pair the
+    same way `response.raise_for_status()` would, for any caller that
+    catches the httpx type -- `retry_after` is the only thing we add."""
+
     def __init__(self, response: httpx.Response) -> None:
-        self.response = response
         self.retry_after = _parse_retry_after(response.headers.get("retry-after"))
-        super().__init__(f"retryable status {response.status_code} from {response.request.url}")
+        super().__init__(
+            f"retryable status {response.status_code} from {response.request.url}",
+            request=response.request,
+            response=response,
+        )
 
 
 def _parse_retry_after(value: str | None) -> float | None:
+    """A `Retry-After` we've already decided to honor, clamped to
+    `[0, RETRY_AFTER_CAP_SECONDS]` -- a misbehaving or malicious upstream
+    can otherwise send an unbounded or non-finite (`inf`/`nan`) value and
+    stall the retry loop far past `BACKOFF_CAP_SECONDS`."""
     if value is None:
         return None
     try:
-        return max(0.0, float(value))
+        seconds = float(value)
     except ValueError:
-        pass
-    try:
-        dt = email.utils.parsedate_to_datetime(value)
-    except (TypeError, ValueError):
+        seconds = None
+    if seconds is None:
+        try:
+            dt = email.utils.parsedate_to_datetime(value)
+        except (TypeError, ValueError):
+            return None
+        seconds = (dt - dt.now(dt.tzinfo)).total_seconds()
+    if not math.isfinite(seconds):
         return None
-    return max(0.0, (dt - dt.now(dt.tzinfo)).total_seconds())
+    return min(RETRY_AFTER_CAP_SECONDS, max(0.0, seconds))
 
 
-def _wait(retry_state) -> float:  # type: ignore[no-untyped-def]
+def _wait(retry_state: RetryCallState) -> float:
     attempt = retry_state.attempt_number
-    exp = min(BACKOFF_CAP_SECONDS, BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)))
-    jittered = exp * (0.5 + 0.5 * _jitter())
+    cap = min(BACKOFF_CAP_SECONDS, BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)))
+    # Full jitter (not "equal jitter"): sample uniformly from [0, cap]
+    # rather than [cap/2, cap] -- spreads retries out more and is what
+    # AWS's backoff writeup recommends as the default.
+    jittered = random.uniform(0.0, cap)
     exc = retry_state.outcome.exception() if retry_state.outcome else None
     if isinstance(exc, RetryableStatusError) and exc.retry_after is not None:
-        return float(max(jittered, exc.retry_after))
-    return float(jittered)
-
-
-def _jitter() -> float:
-    import random
-
-    return random.random()
+        return max(jittered, exc.retry_after)
+    return jittered
 
 
 def build_http_client(

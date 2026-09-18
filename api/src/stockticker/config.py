@@ -17,6 +17,7 @@ from typing import ClassVar
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy import URL
 
 # Role names are part of the contract with the migration in
 # api/alembic/versions/ — do not rename without updating both.
@@ -66,40 +67,51 @@ class Settings(BaseSettings):
     web_origin: str = "http://127.0.0.1:3000"
     allowed_hosts: list[str] = ["127.0.0.1", "localhost"]
 
-    def _dsn(self, user: str, password: str | None, *, driver: str = "postgresql+asyncpg") -> str:
-        auth = user if password is None else f"{user}:{password}"
-        return f"{driver}://{auth}@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+    def _url(self, user: str, password: str | None, *, driver: str = "postgresql+asyncpg") -> URL:
+        """`URL.create` builds and percent-encodes the DSN component by
+        component, so a password containing `@`, `:`, `/`, or any other
+        URL-special character round-trips correctly -- an f-string
+        concatenation would silently produce a wrong (or unparseable) DSN
+        for exactly those passwords."""
+        return URL.create(
+            drivername=driver,
+            username=user,
+            password=password,
+            host=self.postgres_host,
+            port=self.postgres_port,
+            database=self.postgres_db,
+        )
 
     @property
-    def app_writer_dsn(self) -> str:
+    def app_writer_dsn(self) -> URL:
         password = (
             self.postgres_app_writer_password.get_secret_value()
             if self.postgres_app_writer_password
             else None
         )
-        return self._dsn(APP_WRITER_ROLE, password)
+        return self._url(APP_WRITER_ROLE, password)
 
     @property
-    def ai_reader_dsn(self) -> str:
+    def ai_reader_dsn(self) -> URL:
         password = (
             self.postgres_ai_reader_password.get_secret_value() if self.postgres_ai_reader_password else None
         )
-        return self._dsn(AI_READER_ROLE, password)
+        return self._url(AI_READER_ROLE, password)
 
     @property
-    def superuser_dsn(self) -> str:
+    def superuser_dsn(self) -> URL:
         password = (
             self.postgres_superuser_password.get_secret_value() if self.postgres_superuser_password else None
         )
-        return self._dsn(self.postgres_superuser, password)
+        return self._url(self.postgres_superuser, password)
 
     @property
-    def superuser_dsn_sync(self) -> str:
+    def superuser_dsn_sync(self) -> URL:
         """Used by Alembic (`api/alembic/env.py`), which runs synchronously."""
         password = (
             self.postgres_superuser_password.get_secret_value() if self.postgres_superuser_password else None
         )
-        return self._dsn(self.postgres_superuser, password, driver="postgresql+psycopg")
+        return self._url(self.postgres_superuser, password, driver="postgresql+psycopg")
 
     _KEY_FIELDS: ClassVar[dict[RequiredKey, str]] = {
         RequiredKey.ALPACA_KEY_ID: "alpaca_key_id",

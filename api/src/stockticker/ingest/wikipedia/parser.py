@@ -15,7 +15,7 @@ from datetime import date
 
 from selectolax.parser import HTMLParser, Node
 
-from stockticker.ingest.symbols import normalize_symbol
+from stockticker.ingest.symbols import normalize_cik, normalize_symbol
 
 MIN_ROWS = 480
 
@@ -108,7 +108,7 @@ def _to_row(cells: list[str], index_of: dict[str, int], row_number: int) -> Cons
         sub_industry=field("sub_industry") or None,
         headquarters=field("headquarters") or None,
         date_added=date.fromisoformat(date_match.group(0)) if date_match else None,
-        cik=cik_raw.zfill(10),
+        cik=normalize_cik(cik_raw),
     )
 
 

@@ -1,18 +1,25 @@
 import { describe, expect, it } from 'vitest'
-import type { Row } from '@tanstack/react-table'
+import { renderHook } from '@testing-library/react'
+import { useState } from 'react'
+import {
+  getCoreRowModel,
+  getSortedRowModel,
+  useReactTable,
+  type Row,
+  type SortingState
+} from '@tanstack/react-table'
 import {
   defaultMarketFilterState,
   marketFilterStateToSearchParams,
-  nullableDateStringSortingFn,
-  numericStringSortingFn,
+  marketTableColumns,
   parseMarketFilterState,
   searchFilterFn,
   sectorFilterFn
 } from '@/lib/market-table'
 import type { MarketRow } from '@/lib/api'
 
-function makeRow(overrides: Partial<MarketRow>): Row<MarketRow> {
-  const original: MarketRow = {
+function makeRow(overrides: Partial<MarketRow>): MarketRow {
+  return {
     symbol: 'AAPL',
     cik: '0000320193',
     name: 'Apple Inc.',
@@ -28,6 +35,10 @@ function makeRow(overrides: Partial<MarketRow>): Row<MarketRow> {
     first_bar_date: '2018-01-02',
     ...overrides
   }
+}
+
+function makeFilterRow(overrides: Partial<MarketRow>): Row<MarketRow> {
+  const original = makeRow(overrides)
   return {
     original,
     getValue: (columnId: string) => original[columnId as keyof MarketRow]
@@ -38,34 +49,38 @@ const noopAddMeta = () => {}
 
 describe('searchFilterFn', () => {
   it('matches on symbol', () => {
-    expect(searchFilterFn(makeRow({}), 'symbol', 'aap', noopAddMeta)).toBe(true)
+    expect(
+      searchFilterFn(makeFilterRow({}), 'symbol', 'aap', noopAddMeta)
+    ).toBe(true)
   })
 
   it('matches on company name', () => {
-    expect(searchFilterFn(makeRow({}), 'symbol', 'apple', noopAddMeta)).toBe(
-      true
-    )
+    expect(
+      searchFilterFn(makeFilterRow({}), 'symbol', 'apple', noopAddMeta)
+    ).toBe(true)
   })
 
   it('rejects a non-matching query', () => {
-    expect(searchFilterFn(makeRow({}), 'symbol', 'msft', noopAddMeta)).toBe(
-      false
-    )
+    expect(
+      searchFilterFn(makeFilterRow({}), 'symbol', 'msft', noopAddMeta)
+    ).toBe(false)
   })
 
   it('matches everything for an empty query', () => {
-    expect(searchFilterFn(makeRow({}), 'symbol', '', noopAddMeta)).toBe(true)
+    expect(searchFilterFn(makeFilterRow({}), 'symbol', '', noopAddMeta)).toBe(
+      true
+    )
   })
 
   it('is case-insensitive', () => {
-    expect(searchFilterFn(makeRow({}), 'symbol', 'APPLE', noopAddMeta)).toBe(
-      true
-    )
+    expect(
+      searchFilterFn(makeFilterRow({}), 'symbol', 'APPLE', noopAddMeta)
+    ).toBe(true)
   })
 })
 
 describe('sectorFilterFn', () => {
-  const row = makeRow({ sector: 'Technology' })
+  const row = makeFilterRow({ sector: 'Technology' })
 
   it('matches the exact sector', () => {
     expect(sectorFilterFn(row, 'sector', 'Technology', noopAddMeta)).toBe(true)
@@ -86,66 +101,87 @@ describe('sectorFilterFn', () => {
   })
 })
 
-describe('numericStringSortingFn', () => {
-  it('sorts ascending by numeric value of a decimal string column', () => {
-    const rowA = makeRow({ symbol: 'A', price: '10' })
-    const rowB = makeRow({ symbol: 'B', price: '2' })
-    expect(numericStringSortingFn(rowA, rowB, 'price')).toBeGreaterThan(0)
+function useSortedTestTable(data: MarketRow[], initialSorting: SortingState) {
+  const [sorting, setSorting] = useState<SortingState>(initialSorting)
+  return useReactTable({
+    data,
+    columns: marketTableColumns,
+    state: { sorting },
+    onSortingChange: setSorting,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel()
   })
+}
 
-  it('sorts a null price after any priced row, in either direction', () => {
-    const rowA = makeRow({ symbol: 'A', price: null })
-    const rowB = makeRow({ symbol: 'B', price: '2' })
-    expect(numericStringSortingFn(rowA, rowB, 'price')).toBeGreaterThan(0)
-    expect(numericStringSortingFn(rowB, rowA, 'price')).toBeLessThan(0)
-  })
+function sortedSymbols(rows: { original: MarketRow }[]): string[] {
+  return rows.map((row) => row.original.symbol)
+}
 
-  it('treats two nulls as equal', () => {
-    const rowA = makeRow({ symbol: 'A', price: null })
-    const rowB = makeRow({ symbol: 'B', price: null })
-    expect(numericStringSortingFn(rowA, rowB, 'price')).toBe(0)
-  })
-
-  it('sorts an integer column (volume) numerically', () => {
-    const rowA = makeRow({ symbol: 'A', volume: 100 })
-    const rowB = makeRow({ symbol: 'B', volume: 9000 })
-    expect(numericStringSortingFn(rowA, rowB, 'volume')).toBeLessThan(0)
-  })
-})
-
-describe('nullableDateStringSortingFn', () => {
-  it('sorts chronologically', () => {
-    const rowA = makeRow({
-      symbol: 'A',
-      observed_at: '2024-06-03T15:00:00.000Z'
-    })
-    const rowB = makeRow({
-      symbol: 'B',
-      observed_at: '2024-06-04T15:00:00.000Z'
-    })
-    expect(nullableDateStringSortingFn(rowA, rowB, 'observed_at')).toBeLessThan(
-      0
+describe('marketTableColumns sorting (via getSortedRowModel)', () => {
+  it('sorts a null price last when ascending', () => {
+    const data = [
+      makeRow({ symbol: 'A', price: null }),
+      makeRow({ symbol: 'B', price: '50' }),
+      makeRow({ symbol: 'C', price: '10' })
+    ]
+    const { result } = renderHook(() =>
+      useSortedTestTable(data, [{ id: 'price', desc: false }])
     )
+    expect(sortedSymbols(result.current.getSortedRowModel().rows)).toEqual([
+      'C',
+      'B',
+      'A'
+    ])
   })
 
-  it('sorts a never-quoted row after any quoted row, in either direction', () => {
-    const rowA = makeRow({ symbol: 'A', observed_at: null })
-    const rowB = makeRow({
-      symbol: 'B',
-      observed_at: '2024-06-03T15:00:00.000Z'
-    })
-    expect(
-      nullableDateStringSortingFn(rowA, rowB, 'observed_at')
-    ).toBeGreaterThan(0)
-    expect(nullableDateStringSortingFn(rowB, rowA, 'observed_at')).toBeLessThan(
-      0
+  it('sorts a null price last when descending too - not first', () => {
+    const data = [
+      makeRow({ symbol: 'A', price: null }),
+      makeRow({ symbol: 'B', price: '50' }),
+      makeRow({ symbol: 'C', price: '10' })
+    ]
+    const { result } = renderHook(() =>
+      useSortedTestTable(data, [{ id: 'price', desc: true }])
     )
+    expect(sortedSymbols(result.current.getSortedRowModel().rows)).toEqual([
+      'B',
+      'C',
+      'A'
+    ])
   })
 
-  it('treats two nulls as equal', () => {
-    const rowA = makeRow({ symbol: 'A', observed_at: null })
-    const rowB = makeRow({ symbol: 'B', observed_at: null })
-    expect(nullableDateStringSortingFn(rowA, rowB, 'observed_at')).toBe(0)
+  it('sorts volume (an integer column) numerically', () => {
+    const data = [
+      makeRow({ symbol: 'A', volume: 9000 }),
+      makeRow({ symbol: 'B', volume: 100 })
+    ]
+    const { result } = renderHook(() =>
+      useSortedTestTable(data, [{ id: 'volume', desc: false }])
+    )
+    expect(sortedSymbols(result.current.getSortedRowModel().rows)).toEqual([
+      'B',
+      'A'
+    ])
+  })
+
+  it('sorts a never-quoted row (observed_at null) last in both directions', () => {
+    const data = [
+      makeRow({ symbol: 'A', observed_at: null }),
+      makeRow({ symbol: 'B', observed_at: '2024-06-04T00:00:00.000Z' })
+    ]
+    const asc = renderHook(() =>
+      useSortedTestTable(data, [{ id: 'observed_at', desc: false }])
+    )
+    expect(sortedSymbols(asc.result.current.getSortedRowModel().rows)).toEqual([
+      'B',
+      'A'
+    ])
+    const desc = renderHook(() =>
+      useSortedTestTable(data, [{ id: 'observed_at', desc: true }])
+    )
+    expect(sortedSymbols(desc.result.current.getSortedRowModel().rows)).toEqual(
+      ['B', 'A']
+    )
   })
 })
 
@@ -178,8 +214,11 @@ describe('parseMarketFilterState', () => {
     )
   })
 
-  it('accepts a plain record in place of URLSearchParams', () => {
-    expect(parseMarketFilterState({ q: 'apple' })).toEqual({
+  it('accepts anything structurally shaped like URLSearchParams', () => {
+    const fakeSearchParams = {
+      get: (key: string) => (key === 'q' ? 'apple' : null)
+    }
+    expect(parseMarketFilterState(fakeSearchParams)).toEqual({
       q: 'apple',
       sector: null,
       sort: null

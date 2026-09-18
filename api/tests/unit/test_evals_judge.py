@@ -3,6 +3,7 @@ Anthropic client is a fake; the ledger is the in-memory one the Ask tests use.""
 
 from __future__ import annotations
 
+import inspect
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
@@ -10,6 +11,7 @@ from typing import Any
 
 import pytest
 from ai_fakes import MemoryLedger
+from anthropic.resources.messages import AsyncMessages
 
 from stockticker.ai.pricing import TokenUsage, cost_usd, price_for
 from stockticker.ai.spend import SpendLimitReached
@@ -139,7 +141,8 @@ async def test_grade_reserves_then_settles_the_real_cost_in_the_ledger() -> None
     result = await grader.grade("Q?", transcript(), ["no_invented_numbers"])
     assert [v.passed for v in result.verdicts] == [True]
     assert messages.requests[0]["model"] == JUDGE_MODEL
-    assert messages.requests[0]["temperature"] == 0
+    accepted = set(inspect.signature(AsyncMessages.create).parameters)
+    assert set(messages.requests[0]) <= accepted, "the judge sends a parameter the SDK does not take"
     [row] = ledger.rows
     assert row.model == JUDGE_MODEL
     assert row.state == "recorded"

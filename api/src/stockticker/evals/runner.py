@@ -28,13 +28,11 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Protocol
 
-import anthropic
 import httpx
 
-from stockticker.ai.spend import SpendGateError
 from stockticker.evals.cases import Case, SeedNote
 from stockticker.evals.graders import CheckResult, ReferenceRows, run_checks
-from stockticker.evals.judge import JudgeError, JudgeResult, Verdict
+from stockticker.evals.judge import JudgeResult, Verdict
 from stockticker.evals.transcript import Transcript, TranscriptBuilder
 
 CHAT_TIMEOUT_SECONDS = 150.0
@@ -273,9 +271,11 @@ class Runner:
 
         watermark = await self.usage.watermark()
         result = CaseResult(case, Outcome.ERROR)
+        # Broad on purpose: by now the case has spent money, and one case's
+        # failure must not lose the scorecard for the cases already run.
         try:
             result.transcript = await self._ask_with_notes(case)
-        except (httpx.HTTPError, ValueError) as error:
+        except Exception as error:
             result.reason = f"{type(error).__name__}: {error}"
         else:
             result.checks = run_checks(case.checks, result.transcript, references)
@@ -325,6 +325,7 @@ class Runner:
         assert self.judge is not None
         try:
             graded = await self.judge.grade(case.question, transcript, case.judge)
-        except (JudgeError, anthropic.APIError, SpendGateError) as error:
-            return [Verdict(criterion, False, f"judge error: {error}") for criterion in case.judge]
+        except Exception as error:
+            reason = f"judge error: {type(error).__name__}: {error}"
+            return [Verdict(criterion, False, reason) for criterion in case.judge]
         return graded.verdicts

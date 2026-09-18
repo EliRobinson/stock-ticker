@@ -1,0 +1,23 @@
+{
+  "id": "msg-golden",
+  "role": "assistant",
+  "parts": [
+    {
+      "type": "step-start"
+    },
+    {
+      "type": "text",
+      "text": "Let me check.",
+      "state": "done"
+    },
+    {
+      "type": "tool-run_sql",
+      "toolCallId": "toolu_01",
+      "state": "input-available",
+      "input": {
+        "sql": "SELECT c.name, m.market_cap FROM ai.market_caps m JOIN ai.companies c ON c.cik = m.cik ORDER BY m.market_cap DESC LIMIT 2",
+        "purpose": "Rank by market cap"
+      }
+    }
+  ]
+}

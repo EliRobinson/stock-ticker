@@ -1,0 +1,16 @@
+data: {"type":"start","messageId":"msg-golden"}
+
+data: {"type":"start-step"}
+
+data: {"type":"tool-input-available","toolCallId":"toolu_01","toolName":"run_sql","input":{"sql":"SELECT c.name, m.market_cap FROM ai.market_caps m JOIN ai.companies c ON c.cik = m.cik ORDER BY m.market_cap DESC LIMIT 2","purpose":"Rank by market cap"}}
+
+data: {"type":"tool-output-available","toolCallId":"toolu_01","output":{"result_id":"r1","columns":[{"name":"name","type":"text"},{"name":"market_cap","type":"numeric"}],"rows":[["Apple Inc.",3100000000000]],"row_count":1,"row_count_is_capped":false,"truncated":false}}
+
+data: {"type":"finish-step"}
+
+data: {"type":"error","errorText":"AI spend limit reached ($5.00). Raise AI_SPEND_LIMIT_USD to continue."}
+
+data: {"type":"finish","finishReason":"error"}
+
+data: [DONE]
+

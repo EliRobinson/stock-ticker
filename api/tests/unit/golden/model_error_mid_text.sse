@@ -1,0 +1,16 @@
+data: {"type":"start","messageId":"msg-golden"}
+
+data: {"type":"start-step"}
+
+data: {"type":"text-start","id":"msg-golden-text-1"}
+
+data: {"type":"text-delta","id":"msg-golden-text-1","delta":"Apple is"}
+
+data: {"type":"text-end","id":"msg-golden-text-1"}
+
+data: {"type":"error","errorText":"Anthropic returned an error (overloaded_error), so the answer stopped. Try again."}
+
+data: {"type":"finish","finishReason":"error"}
+
+data: [DONE]
+

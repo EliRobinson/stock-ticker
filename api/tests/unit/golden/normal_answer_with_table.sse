@@ -1,0 +1,42 @@
+data: {"type":"start","messageId":"msg-golden"}
+
+data: {"type":"start-step"}
+
+data: {"type":"text-start","id":"msg-golden-text-1"}
+
+data: {"type":"text-delta","id":"msg-golden-text-1","delta":"Let me check."}
+
+data: {"type":"text-end","id":"msg-golden-text-1"}
+
+data: {"type":"tool-input-available","toolCallId":"toolu_01","toolName":"run_sql","input":{"sql":"SELECT c.name, m.market_cap FROM ai.market_caps m JOIN ai.companies c ON c.cik = m.cik ORDER BY m.market_cap DESC LIMIT 2","purpose":"Rank by market cap"}}
+
+data: {"type":"tool-output-available","toolCallId":"toolu_01","output":{"result_id":"r1","columns":[{"name":"name","type":"text"},{"name":"market_cap","type":"numeric"}],"rows":[["Apple Inc.",3123460000000]],"row_count":1,"row_count_is_capped":false,"truncated":false}}
+
+data: {"type":"finish-step"}
+
+data: {"type":"start-step"}
+
+data: {"type":"tool-input-available","toolCallId":"toolu_02","toolName":"show_table","input":{"result_id":"r1","title":"Largest companies","columns":[{"key":"name","label":"Company"},{"key":"market_cap","label":"Market cap","format":"compact_currency"}]}}
+
+data: {"type":"tool-output-available","toolCallId":"toolu_02","output":{"view_id":"view-1","kind":"table","rows_shown":1}}
+
+data: {"type":"data-view","id":"view-1","data":{"kind":"table","id":"view-1","title":"Largest companies","columns":[{"key":"name","label":"Company","format":null},{"key":"market_cap","label":"Market cap","format":"compact_currency"}],"rows":[{"name":"Apple Inc.","market_cap":3123456789012}]}}
+
+data: {"type":"finish-step"}
+
+data: {"type":"start-step"}
+
+data: {"type":"text-start","id":"msg-golden-text-2"}
+
+data: {"type":"text-delta","id":"msg-golden-text-2","delta":"Apple is the largest"}
+
+data: {"type":"text-delta","id":"msg-golden-text-2","delta":" at $3.12T."}
+
+data: {"type":"text-end","id":"msg-golden-text-2"}
+
+data: {"type":"finish-step"}
+
+data: {"type":"finish","finishReason":"stop"}
+
+data: [DONE]
+

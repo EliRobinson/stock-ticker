@@ -1,0 +1,27 @@
+{
+  "id": "msg-golden",
+  "role": "assistant",
+  "parts": [
+    {
+      "type": "step-start"
+    },
+    {
+      "type": "tool-run_sql",
+      "toolCallId": "toolu_01",
+      "state": "output-error",
+      "input": {
+        "sql": "SELECT * FROM pg_catalog.pg_authid",
+        "purpose": "Look"
+      },
+      "errorText": "Schema 'pg_catalog' is not readable. Only the ai views are: ai.companies, ai.daily_prices, ai.listings, ai.market_caps."
+    },
+    {
+      "type": "step-start"
+    },
+    {
+      "type": "text",
+      "text": "I can only read the ai views, so I cannot answer that.",
+      "state": "done"
+    }
+  ]
+}

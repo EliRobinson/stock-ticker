@@ -3,6 +3,8 @@ router) fail before any handler touches the DB."""
 
 from __future__ import annotations
 
+import uuid
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.middleware.cors import CORSMiddleware
@@ -12,6 +14,7 @@ from stockticker.api.middleware import RequestIDMiddleware
 from stockticker.api.problems import Problem, problem_type_uri, register_problem_handlers, slug_for
 
 client = TestClient(app, base_url="http://127.0.0.1")
+_NOTE_URL = f"/api/v1/notes/{uuid.uuid4()}"
 
 
 def test_slug_for_kebab_cases_the_reason_phrase() -> None:
@@ -42,7 +45,7 @@ def test_405_is_problem_json() -> None:
 
 
 def test_422_is_problem_json_with_field_errors() -> None:
-    response = client.post("/api/v1/notes", json={})
+    response = client.put(_NOTE_URL, json={})
     assert response.status_code == 422
     body = response.json()
     assert body["status"] == 422
@@ -51,7 +54,7 @@ def test_422_is_problem_json_with_field_errors() -> None:
 
 
 def test_write_without_json_content_type_is_415() -> None:
-    response = client.post("/api/v1/notes", content=b"{}", headers={"content-type": "text/plain"})
+    response = client.put(_NOTE_URL, content=b"{}", headers={"content-type": "text/plain"})
     assert response.status_code == 415
     assert response.headers["content-type"] == "application/problem+json"
 
@@ -62,7 +65,7 @@ def test_every_response_carries_request_id() -> None:
 
 
 def test_415_response_still_carries_request_id() -> None:
-    response = client.post("/api/v1/notes", content=b"{}", headers={"content-type": "text/plain"})
+    response = client.put(_NOTE_URL, content=b"{}", headers={"content-type": "text/plain"})
     assert response.headers.get("x-request-id")
 
 

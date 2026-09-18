@@ -28,3 +28,8 @@ class Event(BaseModel):
     details: dict[str, Any]
     source: str
     source_ref: str
+
+
+class EventsPage(BaseModel):
+    items: list[Event]
+    next_cursor: str | None = None

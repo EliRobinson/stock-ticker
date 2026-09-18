@@ -36,7 +36,13 @@ from stockticker.ai.model_call import CallSettings, ModelCall, Spend, input_toke
 from stockticker.ai.pricing import price_for
 from stockticker.ai.serialize import tool_result_block
 from stockticker.ai.spend import SpendLedger
-from stockticker.ai.stream import Emit, FinishReason, UIMessageStreamEncoder, until_disconnected
+from stockticker.ai.stream import (
+    Emit,
+    FinishReason,
+    UIMessageStreamEncoder,
+    never_disconnects,
+    until_disconnected,
+)
 from stockticker.ai.tools import TOOL_NAMES, AnswerTools, ToolFailure, ToolOutcome, anthropic_tools
 from stockticker.logging import get_logger
 
@@ -81,17 +87,13 @@ class ChatDeps:
 
 def stream_answer(deps: ChatDeps, ui_messages: list[UIMessage], message_id: str) -> AsyncIterator[str]:
     """The answer as SSE events, for a caller that reads to the end."""
-    return until_disconnected(answer_producer(deps, ui_messages, message_id), _never)
+    return until_disconnected(answer_producer(deps, ui_messages, message_id), never_disconnects)
 
 
 def answer_producer(
     deps: ChatDeps, ui_messages: list[UIMessage], message_id: str
 ) -> Callable[[Emit], Awaitable[None]]:
     return partial(run_answer, deps, ui_messages, message_id)
-
-
-async def _never() -> bool:
-    return False
 
 
 async def run_answer(deps: ChatDeps, ui_messages: list[UIMessage], message_id: str, emit: Emit) -> None:

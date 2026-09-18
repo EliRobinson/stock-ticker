@@ -85,8 +85,8 @@ async def _add_bar(conn: AsyncConnection, symbol: str, day: date) -> None:
 async def _request(conn: AsyncConnection, symbol: str, reason: str = "gap") -> Any:
     result = await conn.execute(
         text(
-            "SELECT from_date, attempts, last_error, accepted_at FROM refetch_requests "
-            "WHERE symbol = :s AND reason = :r"
+            "SELECT from_date, attempts, last_error, accepted_at, requested_at "
+            "FROM refetch_requests WHERE symbol = :s AND reason = :r"
         ),
         {"s": symbol, "r": reason},
     )
@@ -170,11 +170,38 @@ async def test_a_request_being_retried_is_left_waiting(conn: AsyncConnection) ->
 async def test_an_earlier_gap_widens_a_waiting_request(conn: AsyncConnection) -> None:
     symbol = await _listing(conn, _without(DAYS[4]))
     await check_gaps(conn)
+    # `now()` is transaction-stable; pin an older stamp so a real widen's
+    # renew is observable inside this test's single transaction.
+    await conn.execute(
+        text("UPDATE refetch_requests SET requested_at = :t WHERE symbol = :s AND reason = 'gap'"),
+        {"s": symbol, "t": datetime(2020, 1, 1, tzinfo=UTC)},
+    )
     await _drop_bar(conn, symbol, DAYS[1])
 
     await check_gaps(conn)
 
-    assert (await _request(conn, symbol)).from_date == DAYS[1]
+    request = await _request(conn, symbol)
+    assert request.from_date == DAYS[1]
+    assert request.requested_at > datetime(2020, 1, 1, tzinfo=UTC)
+
+
+async def test_a_noop_widen_does_not_renew_requested_at(conn: AsyncConnection) -> None:
+    """gap_check calls _widen every night for every waiting row. Renewing
+    `requested_at` when `from_date` is unchanged would defeat finish_refetch
+    after an overlapping bars_backfill."""
+    symbol = await _listing(conn, _without(DAYS[4]))
+    await check_gaps(conn)
+    pinned = datetime(2020, 1, 1, tzinfo=UTC)
+    await conn.execute(
+        text("UPDATE refetch_requests SET requested_at = :t WHERE symbol = :s AND reason = 'gap'"),
+        {"s": symbol, "t": pinned},
+    )
+
+    await check_gaps(conn)
+
+    request = await _request(conn, symbol)
+    assert request.from_date == DAYS[4]
+    assert request.requested_at == pinned
 
 
 async def test_a_gap_is_accepted_after_three_failed_refetches(conn: AsyncConnection) -> None:

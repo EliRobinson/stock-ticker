@@ -19,7 +19,7 @@ from anthropic.types import ToolParam
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from stockticker.ai.executor import Column, SqlExecutor, ToolError
-from stockticker.ai.guard import AI_VIEWS, ROW_LIMIT, GuardError, guard_sql
+from stockticker.ai.guard import DEFAULT_SURFACE, ROW_LIMIT, AiSurface, GuardError, guard_sql
 from stockticker.ai.serialize import (
     MODEL_ROW_LIMIT,
     SIGNIFICANT_DIGITS,
@@ -146,7 +146,7 @@ class AnswerTools:
     """Tool state for one answer: the result cache and the current step."""
 
     executor: SqlExecutor
-    ai_views: frozenset[str] = AI_VIEWS
+    surface: AiSurface = DEFAULT_SURFACE
     step: int = 0
     results: dict[str, CachedResult] = field(default_factory=dict)
     views_shown: int = 0
@@ -192,7 +192,7 @@ class AnswerTools:
 
 
 async def _run_sql(state: AnswerTools, request: RunSqlInput) -> ToolOutcome:
-    guarded = guard_sql(request.sql, ai_views=state.ai_views)
+    guarded = guard_sql(request.sql, surface=state.surface)
     result = await state.executor.execute(guarded.wrapped_sql)
     result_id = f"r{len(state.results) + 1}"
     cached = CachedResult(

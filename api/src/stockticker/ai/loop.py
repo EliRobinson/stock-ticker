@@ -31,6 +31,7 @@ from anthropic.types import MessageParam, TextBlockParam, ToolParam, ToolUseBloc
 from stockticker.ai import errors
 from stockticker.ai.convert import UIMessage, to_anthropic_messages
 from stockticker.ai.executor import SqlExecutor
+from stockticker.ai.guard import AiSurface
 from stockticker.ai.model_call import CallSettings, ModelCall, Spend, input_token_bound
 from stockticker.ai.pricing import price_for
 from stockticker.ai.serialize import tool_result_block
@@ -61,7 +62,7 @@ class Limits:
 @dataclass(frozen=True)
 class PromptContext:
     system: list[TextBlockParam]
-    ai_views: frozenset[str]
+    surface: AiSurface
 
 
 @dataclass
@@ -179,7 +180,7 @@ class _Answer:
             raise errors.AnswerStopped(errors.DATABASE_UNREACHABLE) from None
         tool_params = anthropic_tools()
         fitted = self._fit_history(context.system, tool_params, messages)
-        tools = AnswerTools(executor=self.deps.executor, ai_views=context.ai_views)
+        tools = AnswerTools(executor=self.deps.executor, surface=context.surface)
 
         for step in range(1, self.limits.max_steps + 1):
             self.steps = step

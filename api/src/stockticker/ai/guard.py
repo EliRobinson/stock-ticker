@@ -27,6 +27,25 @@ AI_VIEWS = frozenset(
 )
 AI_FUNCTIONS = frozenset({"returns_between", "today_ny"})
 
+
+@dataclass(frozen=True)
+class AiSurface:
+    """What the model may name in the `ai` schema. At runtime it comes from
+    the database catalog (`SchemaCatalog.surface`); the defaults here are the
+    design's list, for callers without a catalog."""
+
+    views: frozenset[str] = AI_VIEWS
+    functions: frozenset[str] = AI_FUNCTIONS
+
+    def view_list(self) -> str:
+        return ", ".join(sorted(f"ai.{name}" for name in self.views))
+
+    def function_list(self) -> str:
+        return ", ".join(sorted(f"ai.{name}" for name in self.functions))
+
+
+DEFAULT_SURFACE = AiSurface()
+
 # Names as sqlglot reports them: an unknown function keeps its Postgres name,
 # a known one reports sqlglot's canonical name (both lowercased here).
 # Anything not listed is rejected.
@@ -70,8 +89,6 @@ _ARRAY_JSON = {
 }  # fmt: skip
 # Boolean connectives and a few predicates are `Func` nodes in sqlglot's tree.
 _SYNTAX = {"and", "or", "xor", "not", "exists", "any", "all", "in", "struct", "paren"}
-
-_AI_FUNCTION_LIST = ", ".join(sorted(f"ai.{name}" for name in AI_FUNCTIONS))
 
 ALLOWED_FUNCTIONS = frozenset(
     _AGGREGATE | _WINDOW | _MATH | _DATE_TIME | _STRING | _CONDITIONAL | _CASTS | _ARRAY_JSON | _SYNTAX
@@ -153,7 +170,7 @@ class GuardedQuery:
     """`sql` wrapped with the row cap. This is what runs."""
 
 
-def guard_sql(sql: str, *, ai_views: frozenset[str] = AI_VIEWS) -> GuardedQuery:
+def guard_sql(sql: str, *, surface: AiSurface = DEFAULT_SURFACE) -> GuardedQuery:
     if len(sql) > MAX_SQL_CHARS:
         raise GuardError(
             f"Query is {len(sql)} characters; the limit is {MAX_SQL_CHARS}. Write a shorter query."
@@ -172,7 +189,7 @@ def guard_sql(sql: str, *, ai_views: frozenset[str] = AI_VIEWS) -> GuardedQuery:
 
     _check_top_level(statement)
     for node in statement.walk():
-        _check_node(node, ai_views)
+        _check_node(node, surface)
 
     try:
         checked = statement.sql(dialect="postgres", comments=False)
@@ -188,7 +205,7 @@ def _check_top_level(statement: exp.Expr) -> None:
         raise GuardError(f"Only SELECT (or WITH ... SELECT) is allowed; got {kind}.")
 
 
-def _check_node(node: exp.Expr, ai_views: frozenset[str]) -> None:
+def _check_node(node: exp.Expr, surface: AiSurface) -> None:
     if isinstance(node, exp.Into):
         raise GuardError("SELECT ... INTO is not allowed. Return rows instead.")
     if isinstance(node, exp.Lock):
@@ -196,40 +213,36 @@ def _check_node(node: exp.Expr, ai_views: frozenset[str]) -> None:
     if isinstance(node, _FORBIDDEN_NODES):
         raise GuardError(f"{node.key.upper()} is not allowed. Only SELECT queries can run.")
     if isinstance(node, exp.Table):
-        _check_table(node, ai_views)
+        _check_table(node, surface)
     elif isinstance(node, exp.Func):
-        _check_function(node)
+        _check_function(node, surface)
     elif isinstance(node, exp.DataType) and isinstance(node.parent, exp.Cast | exp.TryCast):
         _check_cast_type(node)
 
 
-def _check_table(table: exp.Table, ai_views: frozenset[str]) -> None:
+def _check_table(table: exp.Table, surface: AiSurface) -> None:
     if table.catalog:
         raise GuardError(f"Cross-database references are not allowed: {table.sql(dialect='postgres')}.")
     schema = _folded(table.args.get("db"))
     if schema and schema != AI_SCHEMA:
         raise GuardError(
-            f"Schema '{table.db}' is not readable. Only the ai views are: "
-            f"{', '.join(sorted(f'ai.{v}' for v in ai_views))}."
+            f"Schema '{table.db}' is not readable. Only the ai views are: {surface.view_list()}."
         )
     if isinstance(table.this, exp.Func):
         return  # a table function: checked by `_check_function` when the walk reaches it
     name = _folded(table.this)
     if schema == AI_SCHEMA:
-        if name not in ai_views:
-            raise GuardError(
-                f"ai.{table.name} does not exist. The ai views are: {', '.join(sorted(ai_views))}."
-            )
+        if name not in surface.views:
+            raise GuardError(f"ai.{table.name} does not exist. The ai views are: {surface.view_list()}.")
         return
     if name in _visible_cte_names(table):
         return
-    if name in ai_views:
+    if name in surface.views:
         # Pin the schema, so what runs never depends on search_path.
         table.set("db", exp.to_identifier(AI_SCHEMA))
         return
     raise GuardError(
-        f"Table '{table.name}' is not an ai view or a CTE in scope. "
-        f"The ai views are: {', '.join(sorted(ai_views))}."
+        f"Table '{table.name}' is not an ai view or a CTE in scope. The ai views are: {surface.view_list()}."
     )
 
 
@@ -282,21 +295,21 @@ def _function_name(func: exp.Func) -> str:
     return func.sql_name().lower()
 
 
-def _check_function(func: exp.Func) -> None:
+def _check_function(func: exp.Func, surface: AiSurface) -> None:
     name = _function_name(func)
     qualifier = _function_qualifier(func)
     if qualifier is not None:
-        if qualifier == AI_SCHEMA and name in AI_FUNCTIONS:
+        if qualifier == AI_SCHEMA and name in surface.functions:
             return
         raise GuardError(
             f"Function {qualifier}.{name}() is not allowed. The only schema-qualified functions "
-            f"allowed are {', '.join(sorted(f'ai.{f}' for f in AI_FUNCTIONS))}."
+            f"allowed are {surface.function_list()}."
         )
-    if name in ALLOWED_FUNCTIONS or name in AI_FUNCTIONS:
+    if name in ALLOWED_FUNCTIONS or name in surface.functions:
         return
     raise GuardError(
         f"Function {name}() is not on the allow-list. Use aggregates, window functions, math, "
-        f"date/time, string, coalesce/nullif/greatest/least, casts, or {_AI_FUNCTION_LIST}."
+        f"date/time, string, coalesce/nullif/greatest/least, casts, or {surface.function_list()}."
     )
 
 

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from stockticker.ai.guard import MAX_SQL_CHARS, GuardError, guard_sql
+from stockticker.ai.guard import MAX_SQL_CHARS, AiSurface, GuardError, guard_sql
 
 
 def rejected(sql: str) -> str:
@@ -401,6 +401,18 @@ def test_order_by_nulls_last_survives_the_rewrite() -> None:
 
 
 def test_unqualified_names_must_be_known_views() -> None:
-    guard_sql("SELECT * FROM quotes", ai_views=frozenset({"quotes"}))
+    guard_sql("SELECT * FROM quotes", surface=AiSurface(views=frozenset({"quotes"})))
     with pytest.raises(GuardError):
-        guard_sql("SELECT * FROM quotes", ai_views=frozenset({"companies"}))
+        guard_sql("SELECT * FROM quotes", surface=AiSurface(views=frozenset({"companies"})))
+
+
+def test_functions_come_from_the_surface() -> None:
+    guard_sql(
+        "SELECT ai.prev_trading_day(ai.today_ny())",
+        surface=AiSurface(functions=frozenset({"prev_trading_day", "today_ny"})),
+    )
+    with pytest.raises(GuardError, match="ai.today_ny"):
+        guard_sql(
+            "SELECT ai.returns_between(date '2020-01-01', date '2020-02-01')",
+            surface=AiSurface(functions=frozenset({"today_ny"})),
+        )

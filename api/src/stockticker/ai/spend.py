@@ -23,7 +23,7 @@ from decimal import Decimal
 from typing import Protocol
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from stockticker.ai.pricing import TokenUsage
 
@@ -109,17 +109,7 @@ class PostgresSpendLedger:
                 ),
                 {"seconds": STALE_RESERVATION.total_seconds()},
             )
-            row = (
-                await conn.execute(
-                    text(
-                        "SELECT coalesce(sum(cost_usd), 0) AS spent, "
-                        f"coalesce(sum({_TOKEN_SUM}) FILTER (WHERE created_at >= :day_start), 0) "
-                        "AS tokens_today FROM ai_usage"
-                    ),
-                    {"day_start": gate.day_start},
-                )
-            ).one()
-            check_gate(LedgerTotals(Decimal(row.spent), int(row.tokens_today)), worst_case_usd, gate)
+            check_gate(await _totals(conn, gate.day_start), worst_case_usd, gate)
             reservation_id = await conn.scalar(
                 text(
                     "INSERT INTO ai_usage (model, state, cost_usd) "
@@ -152,3 +142,23 @@ class PostgresSpendLedger:
         async with self._engine.connect() as conn:
             spent = await conn.scalar(text("SELECT coalesce(sum(cost_usd), 0) FROM ai_usage"))
         return Decimal(spent)
+
+    async def totals(self, day_start: datetime) -> LedgerTotals:
+        async with self._engine.connect() as conn:
+            return await _totals(conn, day_start)
+
+
+async def _totals(conn: AsyncConnection, day_start: datetime) -> LedgerTotals:
+    """Spend so far (settled calls and open reservations) and the tokens
+    recorded since `day_start`."""
+    row = (
+        await conn.execute(
+            text(
+                "SELECT coalesce(sum(cost_usd), 0) AS spent, "
+                f"coalesce(sum({_TOKEN_SUM}) FILTER (WHERE created_at >= :day_start), 0) AS tokens_today "
+                "FROM ai_usage"
+            ),
+            {"day_start": day_start},
+        )
+    ).one()
+    return LedgerTotals(spent_usd=Decimal(row.spent), tokens_today=int(row.tokens_today))

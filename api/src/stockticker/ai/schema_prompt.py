@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from stockticker.ai.guard import AiSurface
+
 _VIEW_COLUMNS_SQL = """
 SELECT c.relname AS view_name,
        obj_description(c.oid, 'pg_class') AS view_comment,
@@ -68,6 +70,14 @@ class SchemaCatalog:
     @property
     def view_names(self) -> frozenset[str]:
         return frozenset(view.name for view in self.views)
+
+    @property
+    def function_names(self) -> frozenset[str]:
+        return frozenset(function.name for function in self.functions)
+
+    @property
+    def surface(self) -> AiSurface:
+        return AiSurface(views=self.view_names, functions=self.function_names)
 
     def render(self) -> str:
         lines = ["Views (schema `ai`):"]

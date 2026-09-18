@@ -1,8 +1,11 @@
 """`GET /api/v1/status` (system design §5).
 
-`jobs` enumerates `worker.JOBS` (the registry), not just jobs that happen to
-have a row in `ingest_runs` -- a job that has never fired yet still shows up
-with `status: null` rather than being silently absent. `market_clock` is
+`jobs` enumerates `ingest.registry.JOBS`, not just jobs that happen to have
+a row in `ingest_runs` -- a job that has never fired yet still shows up
+with `status: null` rather than being silently absent. `missing_keys` is
+the union of every registered job's `requires_keys`, so it reports exactly
+what's gating *this build's* registered work, not a fixed list of four env
+vars regardless of whether anything needs them yet. `market_clock` is
 `None` until `stockticker.marketdata.fetch_market_clock` is implemented.
 `open_gaps` reads the latest `gap_check` run's `items_failed`, since the
 schema keeps no dedicated gaps table -- `gap_check` (§4) is the only writer.
@@ -21,9 +24,9 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from stockticker.config import Settings, get_settings
 from stockticker.db import get_app_writer_connection
+from stockticker.ingest.registry import JOBS
 from stockticker.marketdata import fetch_market_clock
 from stockticker.models.status import BackfillProgress, JobStatusEntry, StatusResponse
-from stockticker.worker import JOBS, register_default_jobs
 
 router = APIRouter(tags=["status"])
 
@@ -80,7 +83,6 @@ def _job_status_entry(job_name: str, runs: list[Row[Any]]) -> JobStatusEntry:
 
 
 async def _job_statuses(conn: AsyncConnection) -> list[JobStatusEntry]:
-    register_default_jobs()  # idempotent; ensures JOBS is populated even if worker.main() never ran here
     by_job = await _recent_runs_by_job(conn)
     return [_job_status_entry(spec.name, by_job.get(spec.name, [])) for spec in JOBS]
 
@@ -88,10 +90,7 @@ async def _job_statuses(conn: AsyncConnection) -> list[JobStatusEntry]:
 async def _backfill_progress(conn: AsyncConnection) -> BackfillProgress:
     total = await conn.scalar(text("SELECT count(*) FROM listings WHERE is_active"))
     done = await conn.scalar(
-        text(
-            "SELECT count(*) FROM listings l WHERE l.is_active "
-            "AND EXISTS (SELECT 1 FROM daily_bars b WHERE b.symbol = l.symbol)"
-        )
+        text("SELECT count(*) FROM listings WHERE is_active AND backfill_completed_at IS NOT NULL")
     )
     return BackfillProgress(listings_done=done or 0, listings_total=total or 0)
 
@@ -118,12 +117,13 @@ async def status(
     conn: AsyncConnection = Depends(get_app_writer_connection),
     settings: Settings = Depends(get_settings),
 ) -> StatusResponse:
+    required_keys = {key for spec in JOBS for key in spec.requires_keys}
     return StatusResponse(
         server_time=datetime.now(UTC),
         market_clock=await fetch_market_clock(),
         jobs=await _job_statuses(conn),
         backfill=await _backfill_progress(conn),
-        missing_keys=settings.missing_keys(),
+        missing_keys=settings.missing_keys(required_keys),
         data_as_of=await _data_as_of(conn),
         open_gaps=await _open_gaps(conn),
     )

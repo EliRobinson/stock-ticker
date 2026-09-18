@@ -12,6 +12,7 @@ import asyncio
 import email.utils
 import time
 from dataclasses import dataclass
+from enum import StrEnum
 from functools import lru_cache
 
 import httpx
@@ -25,19 +26,23 @@ BACKOFF_BASE_SECONDS = 1.0
 BACKOFF_CAP_SECONDS = 30.0
 
 
+class RateBudgetName(StrEnum):
+    ALPACA_QUOTES = "alpaca_quotes"
+    ALPACA = "alpaca"
+    SEC = "sec"
+
+
 @dataclass(frozen=True, slots=True)
 class RateBudget:
-    name: str
+    name: RateBudgetName
     capacity: int
     per_seconds: float
 
 
-# Names are part of the contract other ingest modules depend on — do not
-# rename without updating every caller.
-RATE_BUDGETS: dict[str, RateBudget] = {
-    "alpaca_quotes": RateBudget("alpaca_quotes", capacity=40, per_seconds=60.0),
-    "alpaca": RateBudget("alpaca", capacity=100, per_seconds=60.0),
-    "sec": RateBudget("sec", capacity=5, per_seconds=1.0),
+RATE_BUDGETS: dict[RateBudgetName, RateBudget] = {
+    RateBudgetName.ALPACA_QUOTES: RateBudget(RateBudgetName.ALPACA_QUOTES, capacity=40, per_seconds=60.0),
+    RateBudgetName.ALPACA: RateBudget(RateBudgetName.ALPACA, capacity=100, per_seconds=60.0),
+    RateBudgetName.SEC: RateBudget(RateBudgetName.SEC, capacity=5, per_seconds=1.0),
 }
 
 
@@ -66,7 +71,7 @@ class TokenBucket:
 
 
 @lru_cache
-def get_rate_budget(name: str) -> TokenBucket:
+def get_rate_budget(name: RateBudgetName) -> TokenBucket:
     budget = RATE_BUDGETS[name]
     return TokenBucket(budget.capacity, budget.per_seconds)
 
@@ -127,14 +132,15 @@ async def request(
     method: str,
     url: str,
     *,
-    rate_budget: str | None = None,
+    rate_budget: RateBudgetName,
     **kwargs: object,
 ) -> httpx.Response:
     """Issue one HTTP request under the named rate budget, with the shared
     retry policy: connection errors, 429, and 5xx retry with exponential
     backoff and full jitter (1s base, 30s cap, 4 attempts total), honoring
-    `Retry-After`. Any other 4xx fails immediately."""
-    bucket = get_rate_budget(rate_budget) if rate_budget else None
+    `Retry-After`. Any other 4xx fails immediately. `rate_budget` is
+    required -- every provider call belongs to exactly one budget."""
+    bucket = get_rate_budget(rate_budget)
 
     async for attempt in AsyncRetrying(
         retry=retry_if_exception_type((httpx.TransportError, RetryableStatusError)),
@@ -143,8 +149,7 @@ async def request(
         reraise=True,
     ):
         with attempt:
-            if bucket is not None:
-                await bucket.acquire()
+            await bucket.acquire()
             response = await client.request(method, url, **kwargs)  # type: ignore[arg-type]
             if response.status_code in RETRYABLE_STATUS_CODES:
                 raise RetryableStatusError(response)

@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable
 
 import structlog
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 REQUEST_ID_HEADER = "X-Request-ID"
@@ -16,9 +16,21 @@ WRITE_METHODS = frozenset({"POST", "PUT", "PATCH"})
 
 
 class RequestIDMiddleware:
-    """Assigns `request.state.request_id`, binds it into structlog's
-    contextvars for the duration of the request, and echoes it on every
-    response via `X-Request-ID`."""
+    """Assigns `request.state.request_id` and binds it into structlog's
+    contextvars *before any log line can run* -- both survive even for a
+    request that ends in an unhandled exception, since `contextvars` is
+    scoped to this request's own asyncio task and needs no explicit
+    unbind. (An earlier version unbound in a `finally`, which ran *before*
+    `unhandled_exception_handler` -- that handler is invoked by Starlette's
+    `ServerErrorMiddleware`, outside this middleware entirely, so the
+    `finally` had already stripped `request_id` from the context by the
+    time the 500 was logged.)
+
+    `X-Request-ID` on the response is still added here for the normal
+    (non-exception) path; `stockticker.api.problems._respond` adds it again
+    for every problem+json response, since a 500's response is built
+    outside this middleware and never passes back through `send_wrapper`.
+    """
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
@@ -38,10 +50,7 @@ class RequestIDMiddleware:
                 headers.append((REQUEST_ID_HEADER.lower().encode(), request_id.encode()))
             await send(message)
 
-        try:
-            await self.app(scope, receive, send_wrapper)
-        finally:
-            structlog.contextvars.unbind_contextvars("request_id")
+        await self.app(scope, receive, send_wrapper)
 
 
 async def enforce_json_content_type(
@@ -50,19 +59,11 @@ async def enforce_json_content_type(
     if request.method in WRITE_METHODS:
         content_type = request.headers.get("content-type", "")
         if content_type.split(";")[0].strip() != "application/json":
-            from stockticker.api.problems import PROBLEM_MEDIA_TYPE, problem_type_uri
-            from stockticker.models.problem import ProblemDetail
+            from stockticker.api.problems import _respond
 
-            problem = ProblemDetail(
-                type=problem_type_uri(415),
-                title="Unsupported Media Type",
-                status=415,
-                detail="Writes must send 'Content-Type: application/json'.",
-                instance=str(request.url.path),
-            )
-            return JSONResponse(
-                problem.model_dump(exclude_none=True),
+            return _respond(
+                request,
                 status_code=415,
-                media_type=PROBLEM_MEDIA_TYPE,
+                detail="Writes must send 'Content-Type: application/json'.",
             )
     return await call_next(request)

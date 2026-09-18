@@ -71,6 +71,8 @@ _ARRAY_JSON = {
 # Boolean connectives and a few predicates are `Func` nodes in sqlglot's tree.
 _SYNTAX = {"and", "or", "xor", "not", "exists", "any", "all", "in", "struct", "paren"}
 
+_AI_FUNCTION_LIST = ", ".join(sorted(f"ai.{name}" for name in AI_FUNCTIONS))
+
 ALLOWED_FUNCTIONS = frozenset(
     _AGGREGATE | _WINDOW | _MATH | _DATE_TIME | _STRING | _CONDITIONAL | _CASTS | _ARRAY_JSON | _SYNTAX
 )
@@ -294,7 +296,7 @@ def _check_function(func: exp.Func) -> None:
         return
     raise GuardError(
         f"Function {name}() is not on the allow-list. Use aggregates, window functions, math, "
-        "date/time, string, coalesce/nullif/greatest/least, casts, ai.returns_between, or ai.today_ny."
+        f"date/time, string, coalesce/nullif/greatest/least, casts, or {_AI_FUNCTION_LIST}."
     )
 
 

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import json
 from decimal import Decimal
 
 import pytest
+from ai_fakes import MODEL, parse_sse, part_types
 
 from stockticker.ai.pricing import PRICES, TokenUsage, cost_usd, price_for, worst_case_cost_usd
+from stockticker.ai.spend import TOKEN_COLUMNS
 from stockticker.ai.stream import (
     DONE,
     UI_MESSAGE_STREAM_HEADERS,
@@ -19,7 +20,7 @@ from stockticker.ai.stream import (
 
 
 def test_sonnet_5_prices_each_token_kind_separately() -> None:
-    price = PRICES["claude-sonnet-5"]
+    price = PRICES[MODEL]
     usage = TokenUsage(
         input_tokens=1_000_000,
         cache_creation_input_tokens=1_000_000,
@@ -31,11 +32,11 @@ def test_sonnet_5_prices_each_token_kind_separately() -> None:
 
 
 def test_cost_rounds_up_to_the_micro_dollar() -> None:
-    assert cost_usd(PRICES["claude-sonnet-5"], TokenUsage(input_tokens=1)) == Decimal("0.000002")
+    assert cost_usd(PRICES[MODEL], TokenUsage(input_tokens=1)) == Decimal("0.000002")
 
 
 def test_worst_case_prices_all_input_as_cache_writes_plus_full_output() -> None:
-    price = PRICES["claude-sonnet-5"]
+    price = PRICES[MODEL]
     assert worst_case_cost_usd(price, max_input_tokens=100_000, max_output_tokens=8_192) == Decimal(
         "0.331920"
     )
@@ -74,7 +75,7 @@ def test_fail_closes_open_text_and_tools_before_error_and_finish() -> None:
     encoder.tool_input_available("c1", "run_sql", {"sql": "SELECT 1"})
     encoder.tool_input_available("c2", "run_sql", {"sql": "SELECT 2"})
     events = encoder.fail("Boom.")
-    parts = [json.loads(e.removeprefix("data: ")) for e in events[:-1]]
+    parts = parse_sse("".join(events))[:-1]
     assert parts == [
         {"type": "text-end", "id": "t1"},
         {"type": "tool-output-error", "toolCallId": "c1", "errorText": UNFINISHED_TOOL_ERROR},
@@ -88,7 +89,7 @@ def test_fail_closes_open_text_and_tools_before_error_and_finish() -> None:
 
 def test_fail_before_start_still_sends_start() -> None:
     events = UIMessageStreamEncoder("m").fail("Off.")
-    assert [json.loads(e.removeprefix("data: "))["type"] for e in events[:-1]] == ["start", "error", "finish"]
+    assert part_types("".join(events)) == ["start", "error", "finish", "[DONE]"]
 
 
 @pytest.mark.parametrize(
@@ -108,3 +109,10 @@ def test_fail_before_start_still_sends_start() -> None:
 def test_out_of_order_parts_are_bugs(misuse) -> None:  # type: ignore[no-untyped-def]
     with pytest.raises(StreamStateError):
         misuse(UIMessageStreamEncoder("m"))
+
+
+def test_the_ledger_token_columns_are_exactly_the_token_usage_fields() -> None:
+    usage = TokenUsage(
+        input_tokens=1, cache_creation_input_tokens=20, cache_read_input_tokens=300, output_tokens=4_000
+    )
+    assert sum(getattr(usage, column) for column in TOKEN_COLUMNS) == usage.total_tokens == 4_321

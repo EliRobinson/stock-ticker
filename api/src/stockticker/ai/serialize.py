@@ -70,8 +70,9 @@ def model_payload(
     row_count: int,
     row_count_is_capped: bool,
 ) -> dict[str, Any]:
-    """The run_sql result the model reads: at most 200 rows and 16 KB, numbers
-    rounded to 6 significant digits, long text cut."""
+    """The run_sql result the model reads: at most `MODEL_ROW_LIMIT` rows and
+    `MODEL_BYTE_LIMIT` bytes, numbers rounded to `SIGNIFICANT_DIGITS`, long
+    text cut."""
     clipped_any = False
     model_rows: list[list[Any]] = []
     for row in rows[:MODEL_ROW_LIMIT]:
@@ -98,15 +99,45 @@ def model_payload(
     return payload(count)
 
 
+def compact_json(value: Any) -> str:
+    """JSON the way `JSON.stringify` writes it: no spaces, UTF-8 kept as is."""
+    return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+
+
 def json_size(value: Any) -> int:
-    return len(json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode())
+    return len(compact_json(value).encode())
+
+
+def wrap_untrusted_text(raw: str) -> str:
+    """`raw` inside `<untrusted_data>` tags. Every `<` becomes `\\u003c` (the
+    same character in JSON), so data can never close the tag early."""
+    return f"<untrusted_data>{raw.replace('<', UNTRUSTED_LT)}</untrusted_data>"
 
 
 def wrap_untrusted(value: Any) -> str:
-    """JSON inside `<untrusted_data>` tags. `<` is escaped (valid JSON, same
-    value), so data can never close the tag early."""
-    body = json.dumps(value, separators=(",", ":"), ensure_ascii=False, default=str).replace("<", "\\u003c")
-    return f"<untrusted_data>{body}</untrusted_data>"
+    """`value` as JSON inside `<untrusted_data>` tags."""
+    return wrap_untrusted_text(compact_json(value))
+
+
+def wrap_untrusted_cut(raw: str, *, max_bytes: int, marker: str) -> str:
+    """Like `wrap_untrusted_text`, but cut so the whole result, tags and
+    `marker` included, is at most `max_bytes` of UTF-8."""
+    escaped = raw.replace("<", UNTRUSTED_LT)
+    budget = max_bytes - len(wrap_untrusted_text(marker).encode())
+    cut = escaped.encode()[: max(0, budget)].decode(errors="ignore")
+    return wrap_untrusted_text(cut + marker)
+
+
+UNTRUSTED_LT = "\\u003c"
+
+
+def tool_result_block(tool_use_id: str, content: str, *, is_error: bool = False) -> dict[str, Any]:
+    """An Anthropic `tool_result` block. `content` is already wrapped as
+    untrusted data."""
+    block: dict[str, Any] = {"type": "tool_result", "tool_use_id": tool_use_id, "content": content}
+    if is_error:
+        block["is_error"] = True
+    return block
 
 
 def inline_schema_refs(schema: dict[str, Any]) -> dict[str, Any]:

@@ -13,10 +13,11 @@ After a client disconnect nothing is encoded at all; that is the caller's job
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, Literal
 
+from stockticker.ai import errors
+from stockticker.ai.serialize import compact_json
 from stockticker.logging import get_logger
 
 _logger = get_logger(__name__)
@@ -36,7 +37,7 @@ UNFINISHED_TOOL_ERROR = "Not run. The answer stopped before this tool call finis
 
 def sse(part: dict[str, Any]) -> str:
     # Compact separators match JSON.stringify, which AI SDK Core uses.
-    return f"data: {json.dumps(part, separators=(',', ':'), ensure_ascii=False)}\n\n"
+    return f"data: {compact_json(part)}\n\n"
 
 
 class StreamStateError(RuntimeError):
@@ -170,7 +171,7 @@ Producer = Callable[[Emit], Awaitable[None]]
 # own parts on every failure it can see; this is the last resort, so the
 # client still gets an error and a finished stream.
 _CRASH_EVENTS = [
-    sse({"type": "error", "errorText": "The answer stopped on an internal error. Try again."}),
+    sse({"type": "error", "errorText": errors.INTERNAL}),
     sse({"type": "finish", "finishReason": "error"}),
     DONE,
 ]

@@ -7,7 +7,7 @@ UIMessages. Conversion rules:
 - `text` parts map to text blocks.
 - Tool parts (`tool-<name>`, or `dynamic-tool`) map to a `tool_use` block in
   the assistant turn and a `tool_result` in the user turn after it. A finished
-  call's output is shrunk to a 2 KB summary. A call left unfinished (no
+  call's output is shrunk to a `SUMMARY_BYTES` summary. A call left unfinished (no
   `output-available` or `output-error`, which is what a disconnect leaves
   behind) becomes an `is_error` result, so the model never believes it ran.
 - `data-*`, `reasoning`, `file`, `source-*`, and system messages are dropped.
@@ -18,17 +18,16 @@ UIMessages. Conversion rules:
 
 from __future__ import annotations
 
-import json
 from typing import Any, Literal, cast
 
 from anthropic.types import MessageParam
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from stockticker.ai.serialize import wrap_untrusted
+from stockticker.ai.serialize import compact_json, tool_result_block, wrap_untrusted, wrap_untrusted_cut
 
 SUMMARY_BYTES = 2 * 1024
 UNFINISHED_TOOL_RESULT = "This tool call never finished (the answer was interrupted). Its result is unknown."
-_SUMMARY_SUFFIX = "...[cut to 2 KB; run the query again to see more]"
+_SUMMARY_SUFFIX = f"...[cut to {SUMMARY_BYTES // 1024} KB; run the query again to see more]"
 
 # A turn under construction: {"role": ..., "content": [block dicts]}.
 _Turn = dict[str, Any]
@@ -79,7 +78,7 @@ def _tool_name(part: dict[str, Any]) -> str | None:
 
 
 def summarize_output(output: Any) -> str:
-    """A past tool output, as the model sees it on later turns: at most 2 KB,
+    """A past tool output, as the model sees it on later turns: at most `SUMMARY_BYTES`,
     wrapped as untrusted data. Rows are dropped from the end first, so the
     columns and result metadata survive."""
     wrapped = wrap_untrusted(output)
@@ -94,10 +93,7 @@ def summarize_output(output: Any) -> str:
             )
             if len(candidate.encode()) <= SUMMARY_BYTES:
                 return candidate
-    text = json.dumps(output, separators=(",", ":"), ensure_ascii=False, default=str).replace("<", "\\u003c")
-    budget = SUMMARY_BYTES - len(wrap_untrusted("").encode()) - len(_SUMMARY_SUFFIX.encode())
-    cut = text.encode()[:budget].decode(errors="ignore")
-    return f"<untrusted_data>{cut}{_SUMMARY_SUFFIX}</untrusted_data>"
+    return wrap_untrusted_cut(compact_json(output), max_bytes=SUMMARY_BYTES, marker=_SUMMARY_SUFFIX)
 
 
 def _assistant_steps(parts: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
@@ -153,25 +149,13 @@ def _convert_assistant(parts: list[dict[str, Any]], tool_names: frozenset[str]) 
 def _tool_result(part: dict[str, Any], call_id: str) -> dict[str, Any]:
     state = part.get("state")
     if state == "output-available":
-        return {
-            "type": "tool_result",
-            "tool_use_id": call_id,
-            "content": summarize_output(part.get("output")),
-        }
+        return tool_result_block(call_id, summarize_output(part.get("output")))
     if state == "output-error":
         error_text = part.get("errorText") or "The tool call failed."
-        return {
-            "type": "tool_result",
-            "tool_use_id": call_id,
-            "is_error": True,
-            "content": wrap_untrusted({"error": str(error_text)[:SUMMARY_BYTES]}),
-        }
-    return {
-        "type": "tool_result",
-        "tool_use_id": call_id,
-        "is_error": True,
-        "content": wrap_untrusted({"error": UNFINISHED_TOOL_RESULT}),
-    }
+        return tool_result_block(
+            call_id, wrap_untrusted({"error": str(error_text)[:SUMMARY_BYTES]}), is_error=True
+        )
+    return tool_result_block(call_id, wrap_untrusted({"error": UNFINISHED_TOOL_RESULT}), is_error=True)
 
 
 def _convert_user(parts: list[dict[str, Any]]) -> list[_Turn]:

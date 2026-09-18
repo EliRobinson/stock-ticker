@@ -31,10 +31,11 @@ from anthropic.types import MessageParam, TextBlockParam, ToolParam, ToolUseBloc
 from stockticker.ai import errors
 from stockticker.ai.convert import UIMessage, to_anthropic_messages
 from stockticker.ai.executor import SqlExecutor
-from stockticker.ai.model_call import CallSettings, Emit, ModelCall, Spend, input_token_bound
+from stockticker.ai.model_call import CallSettings, ModelCall, Spend, input_token_bound
 from stockticker.ai.pricing import price_for
+from stockticker.ai.serialize import tool_result_block
 from stockticker.ai.spend import SpendLedger
-from stockticker.ai.stream import FinishReason, UIMessageStreamEncoder, until_disconnected
+from stockticker.ai.stream import Emit, FinishReason, UIMessageStreamEncoder, until_disconnected
 from stockticker.ai.tools import TOOL_NAMES, AnswerTools, ToolFailure, ToolOutcome, anthropic_tools
 from stockticker.logging import get_logger
 
@@ -247,14 +248,7 @@ class _Answer:
             await self.emit(self.encoder.tool_output_available(block.id, outcome.output))
             if outcome.view is not None:
                 await self.emit(self.encoder.data_view(outcome.view.id, outcome.view.model_dump(mode="json")))
-        result: dict[str, Any] = {
-            "type": "tool_result",
-            "tool_use_id": block.id,
-            "content": outcome.model_content,
-        }
-        if isinstance(outcome, ToolFailure):
-            result["is_error"] = True
-        return result
+        return tool_result_block(block.id, outcome.model_content, is_error=isinstance(outcome, ToolFailure))
 
     def _remaining_seconds(self) -> float:
         return self.deadline - asyncio.get_running_loop().time()

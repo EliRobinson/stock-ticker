@@ -6,19 +6,16 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
-from typing import Any
 
 import httpx
 import pytest
 import pytest_asyncio
 from ai_fakes import (
-    ScriptedAnthropic,
+    FakeClient,
     make_deps,
-    message_end,
-    message_start,
     parse_sse,
     part_types,
-    text_block,
+    stalling_text_answer,
 )
 from fastapi import FastAPI
 from starlette.middleware.gzip import GZipMiddleware
@@ -84,12 +81,6 @@ async def test_the_stream_is_never_compressed(app: FastAPI) -> None:
         {"messages": [{"role": "assistant", "parts": [{"type": "text", "text": "hi"}]}]},
         {"messages": [{"role": "robot", "parts": []}]},
         {"id": "x"},
-        {
-            "messages": [
-                {"role": "user", "parts": [{"type": "text", "text": "q"}]},
-                {"role": "assistant", "parts": [{"type": "tool-run_sql", "state": "output-available"}]},
-            ]
-        },
     ],
 )
 async def test_a_body_that_is_not_a_conversation_is_a_422_problem(app: FastAPI, body: object) -> None:
@@ -106,6 +97,20 @@ async def test_a_part_type_this_server_does_not_know_still_streams_an_answer(app
         "parts": [{"type": "hologram", "x": 1}, {"type": "text", "text": "q"}],
     }
     response = await post(app, {**BODY, "messages": [message]})
+    assert response.status_code == 200
+    assert part_types(response.text)[-1] == "[DONE]"
+
+
+async def test_a_malformed_tool_part_in_history_still_streams_an_answer(app: FastAPI) -> None:
+    body = {
+        **BODY,
+        "messages": [
+            {"role": "user", "parts": [{"type": "text", "text": "q"}]},
+            {"role": "assistant", "parts": [{"type": "tool-run_sql", "state": "output-available"}]},
+            {"role": "user", "parts": [{"type": "text", "text": "again?"}]},
+        ],
+    }
+    response = await post(app, body)
     assert response.status_code == 200
     assert part_types(response.text)[-1] == "[DONE]"
 
@@ -133,47 +138,21 @@ async def test_a_body_over_1_mb_is_a_413_problem(app: FastAPI) -> None:
     assert response.json()["detail"] == "The request is larger than 1 MB. Start a new chat."
 
 
-async def test_an_overlong_text_part_is_a_422_problem(app: FastAPI) -> None:
-    body = {"messages": [{"role": "user", "parts": [{"type": "text", "text": "x" * 32_001}]}]}
+async def test_an_overlong_text_part_is_dropped_and_the_rest_still_streams(app: FastAPI) -> None:
+    body = {
+        "messages": [
+            {
+                "role": "user",
+                "parts": [
+                    {"type": "text", "text": "x" * 32_001},
+                    {"type": "text", "text": "short"},
+                ],
+            }
+        ]
+    }
     response = await post(app, body)
-    assert response.status_code == 422
-    assert response.headers["content-type"] == "application/problem+json"
-
-
-class AsgiClient:
-    """Drives the app at the ASGI level: sends the body, then holds every
-    later `receive` until `leave()`, counting how many wait at once."""
-
-    def __init__(self, body: bytes) -> None:
-        self.body = body
-        self.sent_body = False
-        self.gone = asyncio.Event()
-        self.waiting = 0
-        self.most_waiting = 0
-        self.sent: list[dict[str, Any]] = []
-        self.chunk_arrived = asyncio.Event()
-
-    def leave(self) -> None:
-        self.gone.set()
-
-    async def receive(self) -> dict[str, Any]:
-        if not self.sent_body:
-            self.sent_body = True
-            return {"type": "http.request", "body": self.body, "more_body": False}
-        self.waiting += 1
-        self.most_waiting = max(self.most_waiting, self.waiting)
-        try:
-            await self.gone.wait()
-        finally:
-            self.waiting -= 1
-        return {"type": "http.disconnect"}
-
-    async def send(self, message: dict[str, Any]) -> None:
-        self.sent.append(message)
-        self.chunk_arrived.set()
-
-    def body_text(self) -> str:
-        return "".join(m.get("body", b"").decode() for m in self.sent if m["type"] == "http.response.body")
+    assert response.status_code == 200
+    assert part_types(response.text)[-1] == "[DONE]"
 
 
 @pytest.mark.parametrize("spec_version", ["2.3", "2.4"])
@@ -182,12 +161,10 @@ async def test_one_reader_waits_for_the_disconnect_and_it_cancels_the_answer(
 ) -> None:
     # uvicorn's HTTP scopes say 2.3, where Starlette's StreamingResponse would
     # add its own receive loop; under 2.4 it would add none.
-    anthropic = ScriptedAnthropic(
-        message_start() + text_block(0, "a", "b") + message_end("end_turn"), stall_after_first_chunk=True
-    )
+    anthropic = stalling_text_answer("a", "b")
     monkeypatch.setattr(chat_router, "build_chat_deps", lambda settings: make_deps(anthropic))
     body = json.dumps(BODY).encode()
-    client = AsgiClient(body)
+    client = FakeClient(body)
     scope = {
         "type": "http",
         "asgi": {"version": "3.0", "spec_version": spec_version},
@@ -212,9 +189,11 @@ async def test_one_reader_waits_for_the_disconnect_and_it_cancels_the_answer(
         await asyncio.wait_for(client.chunk_arrived.wait(), timeout=2)
     await asyncio.sleep(0.05)
     assert client.most_waiting == 1
+    assert client.reads == 1
 
     client.leave()
     await asyncio.wait_for(served, timeout=2)
     await asyncio.wait_for(anthropic.stream_closed.wait(), timeout=2)
     assert part_types(client.body_text()) == ["start", "start-step", "text-start"]
     assert client.most_waiting == 1
+    assert client.reads == 1

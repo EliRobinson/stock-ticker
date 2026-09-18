@@ -74,6 +74,33 @@ describe('noteMatchesList', () => {
     ).toBe(false)
   })
 
+  it('include_market matches a market-wide note alongside a cik filter', () => {
+    expect(
+      noteMatchesList(
+        { cik: '0000320193', include_market: true },
+        makeNote({ cik: null })
+      )
+    ).toBe(true)
+    expect(
+      noteMatchesList(
+        { cik: '0000320193', include_market: true },
+        makeNote({ cik: '0000320193' })
+      )
+    ).toBe(true)
+    expect(
+      noteMatchesList(
+        { cik: '0000320193', include_market: true },
+        makeNote({ cik: '0000789019' })
+      )
+    ).toBe(false)
+  })
+
+  it('without include_market, a cik filter still excludes market-wide notes', () => {
+    expect(
+      noteMatchesList({ cik: '0000320193' }, makeNote({ cik: null }))
+    ).toBe(false)
+  })
+
   it('matches a note whose range overlaps the from/to window', () => {
     const note = makeNote({ start_date: '2024-06-01', end_date: '2024-06-10' })
     expect(

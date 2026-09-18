@@ -10,10 +10,29 @@ export type CompanyDetail = components['schemas']['CompanyDetail']
 export type Bar = components['schemas']['Bar']
 export type MarketEvent = components['schemas']['Event']
 export type Note = components['schemas']['Note']
-export type NoteUpsert = components['schemas']['NoteUpsert']
 export type StatusResponse = components['schemas']['StatusResponse']
-export type EventsResponse = components['schemas']['EventsResponse']
-export type NotesResponse = components['schemas']['NotesResponse']
+export type AiStatus = components['schemas']['AiStatus']
+// The generated names (EventsPage/NotesPage) are api-read's internal
+// class names, not a public contract - aliased so a rename on that side
+// doesn't ripple through every hook that already says "Response".
+export type EventsResponse = components['schemas']['EventsPage']
+export type NotesResponse = components['schemas']['NotesPage']
+
+/**
+ * The generated `NotePut.end_date` is required - api-read's own docs say
+ * it's filled in from `start_date` by a `mode="before"` validator on the
+ * raw request body before Pydantic's required-field check runs, so the
+ * route is expected to still accept an omitted `end_date` at runtime. This
+ * type keeps that optional for callers; putNote() fills it in itself
+ * before it ever reaches the generated (required-end_date) request type,
+ * so it's correct either way.
+ */
+export interface PutNoteBody {
+  cik?: string | null
+  start_date: string
+  end_date?: string
+  body: string
+}
 
 const client = createClient<paths>({
   baseUrl: env.NEXT_PUBLIC_API_URL,
@@ -170,6 +189,10 @@ export interface GetNotesParams {
   from?: string
   to?: string
   market_only?: boolean
+  /** With `cik`, also return whole-market Notes (cik === null). The route
+   * 422s if `market_only` and `cik` are both given - `include_market` is
+   * the one meant to combine with `cik`. */
+  include_market?: boolean
   limit?: number
   cursor?: string
 }
@@ -185,6 +208,7 @@ export async function getNotes(
           from: params.from,
           to: params.to,
           market_only: params.market_only,
+          include_market: params.include_market,
           limit: params.limit,
           cursor: params.cursor
         }
@@ -193,11 +217,16 @@ export async function getNotes(
   )
 }
 
-export async function putNote(id: string, body: NoteUpsert): Promise<Note> {
+export async function putNote(id: string, body: PutNoteBody): Promise<Note> {
   return unwrap(
     await client.PUT('/api/v1/notes/{note_id}', {
       params: { path: { note_id: id } },
-      body
+      body: {
+        cik: body.cik ?? null,
+        start_date: body.start_date,
+        end_date: body.end_date ?? body.start_date,
+        body: body.body
+      }
     })
   )
 }

@@ -148,8 +148,8 @@ export interface paths {
       cookie?: never
     }
     get?: never
-    /** Upsert Note */
-    put: operations['upsert_note_api_v1_notes__note_id__put']
+    /** Put Note */
+    put: operations['put_note_api_v1_notes__note_id__put']
     post?: never
     /** Remove Note */
     delete: operations['remove_note_api_v1_notes__note_id__delete']
@@ -179,6 +179,21 @@ export interface paths {
 export type webhooks = Record<string, never>
 export interface components {
   schemas: {
+    /**
+     * AiStatus
+     * @description Populated once the AI chat agent's `ai_usage` table (migration
+     *     0002+) and pricing module exist; see `_ai_status` in
+     *     `api/routers/status.py` for exactly what's real today versus a
+     *     placeholder.
+     */
+    AiStatus: {
+      /** Enabled */
+      enabled: boolean
+      /** Limit Usd */
+      limit_usd: number
+      /** Spend Usd */
+      spend_usd: number
+    }
     /** BackfillProgress */
     BackfillProgress: {
       /** Listings Done */
@@ -208,15 +223,12 @@ export interface components {
     }
     /**
      * BarsResponse
-     * @description `timeframe` echoes the request's `timeframe` query param (system
-     *     design §5, amended). Only `1d` is supported today; a request for any
-     *     other value is rejected before this response is built.
+     * @description `timeframe` only ever `"1d"` today; echoed back so the client's cache
+     *     key is unambiguous once intraday timeframes exist (system design §5).
      */
     BarsResponse: {
       /** Bars */
       bars: components['schemas']['Bar'][]
-      /** Symbol */
-      symbol: string
       /**
        * Timeframe
        * @constant
@@ -288,15 +300,16 @@ export interface components {
       title: string
     }
     /**
-     * EventsResponse
-     * @description Keyset-paginated (system design §5, amended). `next_cursor` is null
-     *     once there are no more matching Events.
+     * EventsPage
+     * @description Keyset page of Events (system design §5, amended). A distinct
+     *     subclass, not a bare `Page[Event]` alias, so the OpenAPI schema keeps
+     *     the name `EventsPage` instead of a generic-mangled one.
      */
-    EventsResponse: {
+    EventsPage: {
       /** Items */
       items: components['schemas']['Event'][]
       /** Next Cursor */
-      next_cursor: string | null
+      next_cursor?: string | null
     }
     /** HTTPValidationError */
     HTTPValidationError: {
@@ -457,18 +470,26 @@ export interface components {
       updated_at: string
     }
     /**
-     * NoteUpsert
+     * NotePut
      * @description Body of `PUT /api/v1/notes/{id}` (system design §5, amended: the
      *     client supplies the id in the path; PUT is an idempotent upsert that
-     *     replaces the old POST). `end_date` defaults to `start_date` when omitted.
+     *     replaces the old POST/PATCH).
+     *
+     *     `end_date` is filled in from `start_date` by a `mode="before"`
+     *     validator -- before pydantic's own type coercion runs -- so the field
+     *     is an honest `date` (not `date | None`) by the time anything reads it;
+     *     no `assert` needed downstream to convince the type checker it's set.
      */
-    NoteUpsert: {
+    NotePut: {
       /** Body */
       body: string
       /** Cik */
       cik?: string | null
-      /** End Date */
-      end_date?: string | null
+      /**
+       * End Date
+       * Format: date
+       */
+      end_date: string
       /**
        * Start Date
        * Format: date
@@ -476,15 +497,16 @@ export interface components {
       start_date: string
     }
     /**
-     * NotesResponse
-     * @description Keyset-paginated (system design §5, amended). `next_cursor` is null
-     *     once there are no more matching Notes.
+     * NotesPage
+     * @description Keyset page of Notes (system design §5, amended). A distinct
+     *     subclass, not a bare `Page[Note]` alias, so the OpenAPI schema keeps
+     *     the name `NotesPage` instead of a generic-mangled one.
      */
-    NotesResponse: {
+    NotesPage: {
       /** Items */
       items: components['schemas']['Note'][]
       /** Next Cursor */
-      next_cursor: string | null
+      next_cursor?: string | null
     }
     /** ProblemDetail */
     ProblemDetail: {
@@ -531,6 +553,7 @@ export interface components {
     }
     /** StatusResponse */
     StatusResponse: {
+      ai: components['schemas']['AiStatus']
       backfill: components['schemas']['BackfillProgress']
       /** Data As Of */
       data_as_of: string | null
@@ -627,13 +650,13 @@ export interface operations {
           'application/json': components['schemas']['ProblemDetail']
         }
       }
-      /** @description Validation Error */
+      /** @description Unprocessable Entity */
       422: {
         headers: {
           [name: string]: unknown
         }
         content: {
-          'application/json': components['schemas']['HTTPValidationError']
+          'application/json': components['schemas']['ProblemDetail']
         }
       }
     }
@@ -662,7 +685,7 @@ export interface operations {
           [name: string]: unknown
         }
         content: {
-          'application/json': components['schemas']['EventsResponse']
+          'application/json': components['schemas']['EventsPage']
         }
       }
       /** @description Not Found */
@@ -739,7 +762,7 @@ export interface operations {
       query?: {
         from?: string | null
         to?: string | null
-        timeframe?: string
+        timeframe?: '1d'
       }
       header?: never
       path: {
@@ -805,6 +828,8 @@ export interface operations {
         from?: string | null
         to?: string | null
         market_only?: boolean
+        /** @description With cik, also return whole-market Notes (cik is null). */
+        include_market?: boolean
         limit?: number
         cursor?: string | null
       }
@@ -820,7 +845,7 @@ export interface operations {
           [name: string]: unknown
         }
         content: {
-          'application/json': components['schemas']['NotesResponse']
+          'application/json': components['schemas']['NotesPage']
         }
       }
       /** @description Unprocessable Entity */
@@ -834,7 +859,7 @@ export interface operations {
       }
     }
   }
-  upsert_note_api_v1_notes__note_id__put: {
+  put_note_api_v1_notes__note_id__put: {
     parameters: {
       query?: never
       header?: never
@@ -845,7 +870,7 @@ export interface operations {
     }
     requestBody: {
       content: {
-        'application/json': components['schemas']['NoteUpsert']
+        'application/json': components['schemas']['NotePut']
       }
     }
     responses: {

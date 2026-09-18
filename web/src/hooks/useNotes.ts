@@ -10,25 +10,24 @@ import {
   deleteNote,
   getNotes,
   putNote,
-  type GetNotesParams,
+  toNotePut,
   type Note,
+  type NotesListParams,
   type NotesResponse,
   type PutNoteBody
 } from '@/lib/api'
-import { NOTES_STALE_TIME_MS } from '@/lib/query-config'
+import { NOTES_STALE_TIME_MS, cursorPaging } from '@/lib/query-config'
 
 export const notesKeys = {
   all: ['notes'] as const,
-  list: (params: Omit<GetNotesParams, 'cursor'>) =>
-    [...notesKeys.all, params] as const
+  list: (params: NotesListParams) => [...notesKeys.all, params] as const
 }
 
-export function useNotes(params: Omit<GetNotesParams, 'cursor'> = {}) {
+export function useNotes(params: NotesListParams = {}) {
   return useInfiniteQuery({
     queryKey: notesKeys.list(params),
     queryFn: ({ pageParam }) => getNotes({ ...params, cursor: pageParam }),
-    initialPageParam: undefined as string | undefined,
-    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+    ...cursorPaging,
     staleTime: NOTES_STALE_TIME_MS
   })
 }
@@ -41,7 +40,6 @@ export function createNoteId(): string {
 
 type NotesInfiniteData = InfiniteData<NotesResponse>
 type NotesCacheEntry = [QueryKey, NotesInfiniteData | undefined]
-type NotesListParams = Omit<GetNotesParams, 'cursor'>
 
 /**
  * The same predicate the API applies (system-design.md §5, amended by the
@@ -124,47 +122,65 @@ function paramsOf(queryKey: QueryKey): NotesListParams | undefined {
     : undefined
 }
 
+/** Captures every currently-cached notes query's data, for onError to
+ * restore. Shared by usePutNote and useDeleteNote's onMutate. */
+function snapshotNotes(queryClient: QueryClient): NotesCacheEntry[] {
+  return findNotesQueries(queryClient).map((query) => [
+    query.queryKey,
+    query.state.data as NotesInfiniteData | undefined
+  ])
+}
+
+/** The onError half of snapshotNotes - writes each captured entry back
+ * exactly as it was before the optimistic write. */
+function restoreNotes(
+  queryClient: QueryClient,
+  previous: NotesCacheEntry[] | undefined
+): void {
+  previous?.forEach(([queryKey, data]) => {
+    queryClient.setQueryData(queryKey, data)
+  })
+}
+
+/** Two edits in flight both settle, but only the last one should trigger
+ * a refetch - invalidating after the first would refetch stale
+ * (pre-second-edit) server state into the cache. */
+function invalidateNotesWhenIdle(queryClient: QueryClient): void {
+  if (queryClient.isMutating({ mutationKey: NOTES_MUTATION_KEY }) === 1) {
+    queryClient.invalidateQueries({ queryKey: notesKeys.all })
+  }
+}
+
 export interface PutNoteVariables extends PutNoteBody {
   id: string
 }
 
-const NOTES_MUTATION_KEY = ['notes']
+const NOTES_MUTATION_KEY = notesKeys.all
+// Serializes concurrent Note edits/deletes against each other instead of
+// letting two in-flight mutations race their optimistic writes and
+// rollbacks against the same cache entries.
+const NOTES_SCOPE = { id: 'notes' }
 
 export function usePutNote() {
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationKey: NOTES_MUTATION_KEY,
-    // Serializes concurrent Note edits against each other (and against
-    // useDeleteNote) instead of letting two in-flight mutations race their
-    // optimistic writes and rollbacks against the same cache entries.
-    scope: { id: 'notes' },
-    mutationFn: (vars: PutNoteVariables) =>
-      putNote(vars.id, {
-        cik: vars.cik ?? null,
-        start_date: vars.start_date,
-        end_date: vars.end_date,
-        body: vars.body
-      }),
+    scope: NOTES_SCOPE,
+    mutationFn: (vars: PutNoteVariables) => putNote(vars.id, vars),
     onMutate: async (vars) => {
       await queryClient.cancelQueries({ queryKey: notesKeys.all })
 
       const now = new Date().toISOString()
       const optimisticNote: Note = {
         id: vars.id,
-        cik: vars.cik ?? null,
-        start_date: vars.start_date,
-        end_date: vars.end_date ?? vars.start_date,
-        body: vars.body,
+        ...toNotePut(vars),
         created_at: now,
         updated_at: now
       }
 
       const queries = findNotesQueries(queryClient)
-      const previous: NotesCacheEntry[] = queries.map((query) => [
-        query.queryKey,
-        query.state.data as NotesInfiniteData | undefined
-      ])
+      const previous = snapshotNotes(queryClient)
 
       // Only a list whose own filter (cik/market_only/range) actually
       // matches this Note gets the optimistic write - a Note for AAPL must
@@ -185,19 +201,9 @@ export function usePutNote() {
 
       return { previous }
     },
-    onError: (_error, _vars, context) => {
-      context?.previous.forEach(([queryKey, data]) => {
-        queryClient.setQueryData(queryKey, data)
-      })
-    },
-    onSettled: () => {
-      // Two edits in flight both settle, but only the last one should
-      // trigger a refetch - invalidating after the first would refetch
-      // stale (pre-second-edit) server state into the cache.
-      if (queryClient.isMutating({ mutationKey: NOTES_MUTATION_KEY }) === 1) {
-        queryClient.invalidateQueries({ queryKey: notesKeys.all })
-      }
-    }
+    onError: (_error, _vars, context) =>
+      restoreNotes(queryClient, context?.previous),
+    onSettled: () => invalidateNotesWhenIdle(queryClient)
   })
 }
 
@@ -206,15 +212,11 @@ export function useDeleteNote() {
 
   return useMutation({
     mutationKey: NOTES_MUTATION_KEY,
-    scope: { id: 'notes' },
+    scope: NOTES_SCOPE,
     mutationFn: (id: string) => deleteNote(id),
     onMutate: async (id) => {
       await queryClient.cancelQueries({ queryKey: notesKeys.all })
-      const queries = findNotesQueries(queryClient)
-      const previous: NotesCacheEntry[] = queries.map((query) => [
-        query.queryKey,
-        query.state.data as NotesInfiniteData | undefined
-      ])
+      const previous = snapshotNotes(queryClient)
 
       // Removing an absent id from a page is a no-op filter, so every
       // cached list can be touched safely - there's no "wrong list" case
@@ -226,15 +228,8 @@ export function useDeleteNote() {
 
       return { previous }
     },
-    onError: (_error, _id, context) => {
-      context?.previous.forEach(([queryKey, data]) => {
-        queryClient.setQueryData(queryKey, data)
-      })
-    },
-    onSettled: () => {
-      if (queryClient.isMutating({ mutationKey: NOTES_MUTATION_KEY }) === 1) {
-        queryClient.invalidateQueries({ queryKey: notesKeys.all })
-      }
-    }
+    onError: (_error, _id, context) =>
+      restoreNotes(queryClient, context?.previous),
+    onSettled: () => invalidateNotesWhenIdle(queryClient)
   })
 }

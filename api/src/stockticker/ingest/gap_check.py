@@ -41,6 +41,7 @@ from stockticker.ingest.refetch import (
     RefetchReason,
     accepted_gap_days,
     open_gap_days,
+    queue_refetch,
 )
 from stockticker.ingest.watermarks import write_watermark
 from stockticker.logging import get_logger
@@ -117,25 +118,11 @@ async def _gap_requests(conn: AsyncConnection) -> dict[str, _Request]:
 
 
 async def _queue(conn: AsyncConnection, symbol: str, from_date: date) -> None:
-    await conn.execute(
-        text(
-            "INSERT INTO refetch_requests (symbol, reason, from_date, requested_at) "
-            "VALUES (:symbol, :reason, :from_date, now()) "
-            "ON CONFLICT (symbol, reason) DO UPDATE SET from_date = excluded.from_date, "
-            "attempts = 0, last_error = NULL, accepted_at = NULL, requested_at = now()"
-        ),
-        {"symbol": symbol, "reason": REASON, "from_date": from_date},
-    )
+    await queue_refetch(conn, symbol, REASON, from_date, reopen=True)
 
 
 async def _widen(conn: AsyncConnection, symbol: str, from_date: date) -> None:
-    await conn.execute(
-        text(
-            "UPDATE refetch_requests SET from_date = LEAST(from_date, :from_date) "
-            "WHERE symbol = :symbol AND reason = :reason AND accepted_at IS NULL"
-        ),
-        {"symbol": symbol, "reason": REASON, "from_date": from_date},
-    )
+    await queue_refetch(conn, symbol, REASON, from_date)
 
 
 async def _accept(conn: AsyncConnection, symbol: str, days: list[date], already_accepted: set[date]) -> None:

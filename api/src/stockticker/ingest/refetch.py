@@ -73,6 +73,40 @@ async def open_gap_days(conn: AsyncConnection, symbols: Sequence[str] | None = N
     return gaps
 
 
+async def queue_refetch(
+    conn: AsyncConnection, symbol: str, reason: RefetchReason, from_date: date, *, reopen: bool = False
+) -> None:
+    """Upsert one `(symbol, reason)` request (`bars_daily` for `adj_drift`,
+    `gap_check` for `gap`). An existing row's `from_date` only ever widens
+    (`LEAST`); `requested_at` always moves to `now()`, so a widen mid-flight
+    still protects `finish_refetch`'s renewed-since-selection check.
+
+    `reopen=True` is for a request that was accepted (gap_check giving up)
+    or never existed: the whole row -- attempts, `last_error`, `accepted_at`
+    -- resets, since this is a fresh cycle, not a widen of one still being
+    served."""
+    if reopen:
+        await conn.execute(
+            text(
+                "INSERT INTO refetch_requests (symbol, reason, from_date, requested_at) "
+                "VALUES (:symbol, :reason, :from_date, now()) "
+                "ON CONFLICT (symbol, reason) DO UPDATE SET from_date = excluded.from_date, "
+                "attempts = 0, last_error = NULL, accepted_at = NULL, requested_at = now()"
+            ),
+            {"symbol": symbol, "reason": reason, "from_date": from_date},
+        )
+        return
+    await conn.execute(
+        text(
+            "INSERT INTO refetch_requests (symbol, reason, from_date, requested_at) "
+            "VALUES (:symbol, :reason, :from_date, now()) "
+            "ON CONFLICT (symbol, reason) DO UPDATE SET "
+            "from_date = LEAST(refetch_requests.from_date, excluded.from_date), requested_at = now()"
+        ),
+        {"symbol": symbol, "reason": reason, "from_date": from_date},
+    )
+
+
 async def mark_refetch_failed(conn: AsyncConnection, symbol: str, reason: RefetchReason, error: str) -> None:
     await conn.execute(
         text(

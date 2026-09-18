@@ -47,11 +47,6 @@
       "groupName": "Testing Library"
     },
     {
-      "description": "Group TypeScript ESLint packages",
-      "matchPackagePrefixes": ["@typescript-eslint/"],
-      "groupName": "TypeScript ESLint"
-    },
-    {
       "description": "Require manual review for major version bumps",
       "matchUpdateTypes": ["major"],
       "automerge": false,

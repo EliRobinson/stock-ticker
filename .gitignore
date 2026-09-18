@@ -75,6 +75,7 @@ Icon?
 # Shared agent config (.claude/skills, .claude/launch.json, .cursor/rules) is
 # committed on purpose; only machine-local permissions are ignored.
 .claude/settings.local.json
+.claude/worktrees/
 
 # ---- Misc ----
 *.pem

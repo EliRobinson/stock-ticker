@@ -17,6 +17,7 @@ import {
   formatSignedPercent
 } from './format'
 import type { NumericInput } from './format'
+import { marketCopy } from '../market/copy'
 
 const DIR_TEXT = {
   up: 'text-up',
@@ -80,10 +81,10 @@ export function QuoteCell({
     return (
       <span
         className={cn('tabular text-stale', className)}
-        aria-description={`Quote is ${age} old`}
+        aria-description={marketCopy.quoteAge(age)}
       >
         {formatPrice(price)}
-        <span className='text-2xs'>{` · ${age} old`}</span>
+        <span className='text-2xs'>{` · ${marketCopy.ageOld(age)}`}</span>
       </span>
     )
   }

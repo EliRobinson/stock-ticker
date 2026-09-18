@@ -38,5 +38,6 @@ export const marketCopy = {
   clearFilters: 'Clear filters',
   historyStarts: (date: string) => `History starts ${date}`,
   capUnavailable: 'Market Cap unavailable, no filing on record.',
-  quoteAge: (age: string) => `Quote is ${age} old`
+  quoteAge: (age: string) => `Quote is ${age} old`,
+  ageOld: (age: string) => `${age} old`
 } as const

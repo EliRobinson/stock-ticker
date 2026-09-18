@@ -31,7 +31,9 @@ export function toRowViews(
       ...r,
       ageMs: q.ageMs,
       ageLabel:
-        q.ageMs == null ? '—' : `${formatAge(q.ageMs)}${stale ? ' old' : ''}`,
+        q.ageMs == null
+          ? '—'
+          : `${stale ? copy.ageOld(formatAge(q.ageMs)) : formatAge(q.ageMs)}`,
       stale,
       closed: !isOpen,
       backfillPending,

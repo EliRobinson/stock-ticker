@@ -14,7 +14,11 @@ const STALE_TIME_MS = 60 * 60 * 1000
 export function useEvents(params: Omit<GetEventsParams, 'cursor'>) {
   return useInfiniteQuery({
     queryKey: eventsKeys.list(params),
-    queryFn: ({ pageParam }) => getEvents({ ...params, cursor: pageParam }),
+    // TS can't carry the cik-xor-symbol discriminant through an object
+    // spread; `params` already satisfies it, and adding `cursor` doesn't
+    // change that.
+    queryFn: ({ pageParam }) =>
+      getEvents({ ...params, cursor: pageParam } as GetEventsParams),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
     staleTime: STALE_TIME_MS,

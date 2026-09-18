@@ -6,12 +6,12 @@ Mermaid renderings of the design in [system-design.md](system-design.md), using 
 
 The four requirements from the design brief, the diagrams that show each one, the main components involved, and the tracking issues.
 
-| Requirement                                                           | Diagrams                                                                                                                                                                                                                                                                                       | Main components                                                                                                                                                                                                                                                             | GitHub issues                                                                                                                                                                      |
-| --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **R1**: S&P 500 price data kept as fresh as possible                  | [2](#2-containers-c4-level-2), [3 (worker)](#component-worker), [4 (R1)](#code-r1-fresh-sp-500-price-data), [5](#5-ingest-sources-and-the-startup-chain-not-a-c4-diagram), [6](#6-ingest-jobs-tables-and-triggers-not-a-c4-diagram), [8](#8-live-quote-path-sequence-diagram-not-a-c4-diagram) | `worker`, `QuoteSource`/`BarSource`, the Alpaca adapter (planned), `JobSpec`/`JobContext`/`run_job`, `upsert_quotes`/`upsert_bars`, `quotes_poll`, `bars_backfill`, `bars_daily`, `constituents_sync`, `calendar_sync`, `corporate_actions_sync`, `edgar_sync`, `gap_check` | [#4](https://github.com/EliRobinson/stock-ticker/issues/4), [#5](https://github.com/EliRobinson/stock-ticker/issues/5)                                                             |
-| **R2**: tables and charts with data manipulation (zoom, filter, sort) | [3 (api, web)](#3-components-c4-level-3), [4 (R2)](#code-r2-tables-and-charts-with-data-manipulation), [7](#7-data-model-er-diagram-not-a-c4-diagram)                                                                                                                                          | `market`/`bars`/`companies` routers, `MarketRow`/`Bar` models, `useMarket`/`useBars`, the market-table lib, the chart-data lib, `market_caps_rebuild`                                                                                                                       | [#6](https://github.com/EliRobinson/stock-ticker/issues/6), [#8](https://github.com/EliRobinson/stock-ticker/issues/8), [#9](https://github.com/EliRobinson/stock-ticker/issues/9) |
-| **R3**: notes tagged to dates or companies                            | [3 (api, web)](#3-components-c4-level-3), [4 (R3)](#code-r3-notes-tagged-to-dates-or-companies)                                                                                                                                                                                                | `notes` router, `Note`/`NoteCreate`/`NoteUpdate` models, `usePutNote`, chart marker snapping                                                                                                                                                                                | [#6](https://github.com/EliRobinson/stock-ticker/issues/6), [#9](https://github.com/EliRobinson/stock-ticker/issues/9)                                                             |
-| **R4**: AI that builds and interacts with tables and charts           | [3 (api, web)](#3-components-c4-level-3), [4 (R4)](#code-r4-ai-that-builds-and-interacts-with-tables-and-charts), [9](#9-ask-ai-request-sequence-diagram-not-a-c4-diagram)                                                                                                                     | `chat` router, `ai.tools`/`ai.guard`/`ai.executor`/`ai.stream`/`ai.spend`, `ViewSpec`, the `useChat` transport                                                                                                                                                              | [#7](https://github.com/EliRobinson/stock-ticker/issues/7), [#8](https://github.com/EliRobinson/stock-ticker/issues/8), [#9](https://github.com/EliRobinson/stock-ticker/issues/9) |
+| Requirement                                                           | Diagrams                                                                                                                                                                                                                                                                                       | Main components                                                                                                                                                                                                                                                                      | GitHub issues                                                                                                                                                                      |
+| --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **R1**: S&P 500 price data kept as fresh as possible                  | [2](#2-containers-c4-level-2), [3 (worker)](#component-worker), [4 (R1)](#code-r1-fresh-sp-500-price-data), [5](#5-ingest-sources-and-the-startup-chain-not-a-c4-diagram), [6](#6-ingest-jobs-tables-and-triggers-not-a-c4-diagram), [8](#8-live-quote-path-sequence-diagram-not-a-c4-diagram) | `worker`, `QuoteSource`/`BarSource`, `AlpacaQuoteSource`/`AlpacaBarSource`, `JobSpec`/`JobContext`/`run_job`, `upsert_quotes`/`upsert_bars`, `quotes_poll`, `bars_backfill`, `bars_daily`, `constituents_sync`, `calendar_sync`, `corporate_actions_sync`, `edgar_sync`, `gap_check` | [#4](https://github.com/EliRobinson/stock-ticker/issues/4), [#5](https://github.com/EliRobinson/stock-ticker/issues/5)                                                             |
+| **R2**: tables and charts with data manipulation (zoom, filter, sort) | [3 (api, web)](#3-components-c4-level-3), [4 (R2)](#code-r2-tables-and-charts-with-data-manipulation), [7](#7-data-model-er-diagram-not-a-c4-diagram)                                                                                                                                          | `market`/`bars`/`companies` routers, `MarketRow`/`Bar` models, `useMarket`/`useBars`, the market-table lib, the chart-data lib, `market_caps_rebuild`                                                                                                                                | [#6](https://github.com/EliRobinson/stock-ticker/issues/6), [#8](https://github.com/EliRobinson/stock-ticker/issues/8), [#9](https://github.com/EliRobinson/stock-ticker/issues/9) |
+| **R3**: notes tagged to dates or companies                            | [3 (api, web)](#3-components-c4-level-3), [4 (R3)](#code-r3-notes-tagged-to-dates-or-companies)                                                                                                                                                                                                | `notes` router, `Note`/`NoteCreate`/`NoteUpdate` models, `usePutNote`, chart marker snapping                                                                                                                                                                                         | [#6](https://github.com/EliRobinson/stock-ticker/issues/6), [#9](https://github.com/EliRobinson/stock-ticker/issues/9)                                                             |
+| **R4**: AI that builds and interacts with tables and charts           | [3 (api, web)](#3-components-c4-level-3), [4 (R4)](#code-r4-ai-that-builds-and-interacts-with-tables-and-charts), [9](#9-ask-ai-request-sequence-diagram-not-a-c4-diagram)                                                                                                                     | `chat` router, `ai.tools`/`ai.guard`/`ai.executor`/`ai.stream`/`ai.spend`, `ViewSpec`, the `useChat` transport                                                                                                                                                                       | [#7](https://github.com/EliRobinson/stock-ticker/issues/7), [#8](https://github.com/EliRobinson/stock-ticker/issues/8), [#9](https://github.com/EliRobinson/stock-ticker/issues/9) |
 
 ## 1. System context (C4 Level 1)
 
@@ -80,7 +80,7 @@ flowchart LR
 
 One diagram per container, one level in from diagram 2. Each component is tagged with the requirement(s) it serves. Mermaid's native `C4Component` diagram type renders poorly on GitHub, so these use `flowchart` with subgraphs instead, checked to render cleanly with mermaid-cli.
 
-Reflects [`feat/api-foundation`](https://github.com/EliRobinson/stock-ticker/tree/feat/api-foundation) @ `9436289fdc` for the `api` diagram, the same commit plus [`feat/ingest-reference`](https://github.com/EliRobinson/stock-ticker/tree/feat/ingest-reference) @ `9b5c63fe57` for the `worker` diagram, and the same commit plus [`feat/web-data`](https://github.com/EliRobinson/stock-ticker/tree/feat/web-data) @ `913e9decc0` for the hooks and lib layers of the `web` diagram. Its screens, containers, and shell have no branch yet (`feat/web-screens` doesn't exist), so those are drawn from the plan the #9 builder shared directly.
+Reflects [`feat/api-foundation`](https://github.com/EliRobinson/stock-ticker/tree/feat/api-foundation) @ `9436289fdc` for the `api` diagram; the same commit plus [`feat/ingest-reference`](https://github.com/EliRobinson/stock-ticker/tree/feat/ingest-reference) @ `9b5c63fe57` and [`feat/ingest-alpaca`](https://github.com/EliRobinson/stock-ticker/tree/feat/ingest-alpaca) @ `83d7e6f2dd` for the `worker` diagram; and the same commit plus [`feat/web-data`](https://github.com/EliRobinson/stock-ticker/tree/feat/web-data) @ `913e9decc0` for the hooks and lib layers of the `web` diagram. The `web` diagram's screens, containers, and shell have no branch yet (`feat/web-screens` doesn't exist), so those are drawn from the plan the #9 builder shared directly.
 
 ### Component: api
 
@@ -149,7 +149,7 @@ flowchart TD
 
 ### Component: worker
 
-The `worker` container: the job registry and lifecycle, the source adapters, the sinks that write to Postgres, and the jobs that tie them together. The Alpaca adapters are drawn from spec: no `feat/ingest-alpaca` branch exists yet, only the `QuoteSource`/`BarSource` protocols they will implement.
+The `worker` container: the job registry and lifecycle, the source adapters, the sinks that write to Postgres, and the jobs that tie them together. Every node here is real: `constituents_sync`, `edgar_sync`, `market_caps_rebuild`, and `gap_check` are on `feat/ingest-reference`; `AlpacaQuoteSource`, `AlpacaBarSource`, `calendar_sync`, `bars_backfill`, `bars_daily`, `quotes_poll`, and `corporate_actions_sync` are on `feat/ingest-alpaca`; the registry, job wrapper, startup chain, scheduler, and sinks are on `feat/api-foundation`.
 
 ```mermaid
 flowchart TD
@@ -161,8 +161,8 @@ flowchart TD
     end
 
     subgraph adapters["Adapters"]
-        alpacaq["Alpaca QuoteSource [R1]"]
-        alpacab["Alpaca BarSource [R1]"]
+        alpacaq["AlpacaQuoteSource [R1]"]
+        alpacab["AlpacaBarSource [R1]"]
         edgar["EDGAR adapter [R1]"]
         wiki["Wikipedia adapter [R1]"]
     end
@@ -198,8 +198,8 @@ flowchart TD
 
     wiki -->|"HTTP GET"| wikiSrc
     edgar -->|"HTTP GET, 5 req per s"| edgarSrc
-    alpacaq -->|"HTTP GET"| alpacaSrc
-    alpacab -->|"HTTP GET"| alpacaSrc
+    alpacaq -->|"HTTP GET via AlpacaClient"| alpacaSrc
+    alpacab -->|"HTTP GET via AlpacaClient"| alpacaSrc
 
     qp -->|"ProviderQuote list"| upq
     bb -->|"ProviderBar list"| upb
@@ -221,7 +221,7 @@ flowchart TD
     scheduler -->|"cron or interval trigger"| jobsg
 ```
 
-`constituents_sync`, `edgar_sync`, `market_caps_rebuild`, and `gap_check` are real, on `feat/ingest-reference`. That branch was built against an earlier revision of the job framework (plain `AsyncConnection` handlers registered with a `register()` call) and will need a small rebase onto `feat/api-foundation`'s current `JobContext`/`registry.JOBS` shape when it merges. `calendar_sync`, `bars_backfill`, `bars_daily`, `quotes_poll`, and `corporate_actions_sync` have no branch yet and are drawn from spec (system-design.md §4).
+`constituents_sync`, `edgar_sync`, `market_caps_rebuild`, and `gap_check` are real, on `feat/ingest-reference`. That branch was built against an earlier revision of the job framework (plain `AsyncConnection` handlers registered with a `register()` call) and will need a small rebase onto `feat/api-foundation`'s current `JobContext`/`registry.JOBS` shape when it merges. `feat/ingest-alpaca` is already rebased onto that current shape: its five jobs take `ctx: JobContext`, and its own `registry.JOBS` tuple registers all five plus `ingest_runs_prune`, with a comment noting the three `feat/ingest-reference` jobs land when that branch merges.
 
 ### Component: web
 
@@ -302,7 +302,7 @@ One `classDiagram` per requirement, showing the key types and functions that imp
 
 ### Code: R1, fresh S&P 500 price data
 
-Real code from [`feat/api-foundation`](https://github.com/EliRobinson/stock-ticker/tree/feat/api-foundation) @ `9436289fdc`: the `QuoteSource`/`BarSource` protocols, `JobSpec`/`JobContext`/`run_job`, and `upsert_quotes`/`upsert_bars`. `AlpacaQuoteSource`/`AlpacaBarSource` have no branch yet (`feat/ingest-alpaca` doesn't exist) and are drawn from spec (system-design.md §4) as the two classes that will implement the existing protocols.
+Entirely real code: the `QuoteSource`/`BarSource` protocols, `JobSpec`/`JobContext`/`run_job`, and `upsert_quotes`/`upsert_bars` are from [`feat/api-foundation`](https://github.com/EliRobinson/stock-ticker/tree/feat/api-foundation) @ `9436289fdc`, and `AlpacaClient`, `AlpacaQuoteSource`, `AlpacaBarSource`, and `join_raw_bars` are from [`feat/ingest-alpaca`](https://github.com/EliRobinson/stock-ticker/tree/feat/ingest-alpaca) @ `83d7e6f2dd`.
 
 ```mermaid
 classDiagram
@@ -332,14 +332,23 @@ classDiagram
         <<Protocol>>
         +daily_bars(symbols, start, end) List~ProviderBar~
     }
+    class AlpacaClient {
+        <<real, ingest-alpaca, alpaca/client.py>>
+        +get_snapshots(symbols, feed, retry) dict
+        +get_bars(symbols, start, end, adjustment, feed) dict
+    }
     class AlpacaQuoteSource {
-        <<from spec>>
+        <<real, ingest-alpaca, alpaca/quotes.py>>
         +snapshot(symbols) List~ProviderQuote~
-        +stream(symbols) AsyncIterator~ProviderQuote~
+        +stream(symbols) raises NotImplementedError
     }
     class AlpacaBarSource {
-        <<from spec>>
+        <<real, ingest-alpaca, alpaca/bars.py>>
         +daily_bars(symbols, start, end) List~ProviderBar~
+    }
+    class join_raw_bars {
+        <<function, real, ingest-alpaca>>
+        +join_raw_bars(raw, adjusted) List~ProviderBar~
     }
     class JobSpec {
         +str name
@@ -380,6 +389,9 @@ classDiagram
 
     QuoteSource <|.. AlpacaQuoteSource
     BarSource <|.. AlpacaBarSource
+    AlpacaQuoteSource --> AlpacaClient : wraps, SnapshotsSource
+    AlpacaBarSource --> AlpacaClient : wraps, RawBarsSource
+    AlpacaBarSource --> join_raw_bars : joins raw and all passes
     QuoteSource ..> ProviderQuote : returns
     BarSource ..> ProviderBar : returns
     JobSpec --> JobContext : handler receives

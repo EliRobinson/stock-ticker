@@ -1,50 +1,65 @@
 'use client'
 
-import { useMemo } from 'react'
+import { useCallback, useMemo } from 'react'
 import { toast } from 'sonner'
 
 import { useMarket } from '@/hooks/useMarket'
-import {
-  createNoteId,
-  useDeleteNote,
-  useNotes,
-  usePutNote
-} from '@/hooks/useNotes'
+import { useDeleteNote, useNotes, useSaveNote } from '@/hooks/useNotes'
 import type { Note } from '@/lib/api'
+import { companyOptionsFromMarket } from '@/lib/company'
+import { todayInNewYork } from '@/lib/dates'
 
-import { noteDialogCopy } from '../company/copy'
 import { notesCopy } from '../notes/copy'
 import { NotesScreen } from '../notes/notes-screen'
-import { todayInNewYork } from './today'
+import type { NotesFilters } from '../notes/notes-screen'
+import { useUrlParams } from './url-state'
 
+const FILTER_KEYS = {
+  company: 'company',
+  from: 'from',
+  to: 'to',
+  q: 'q'
+} as const
+
+// The Notes filters live in the URL (?company=&from=&to=&q=).
 export function NotesContainer() {
   const notes = useNotes()
   const market = useMarket()
-  const putNote = usePutNote()
+  const { save } = useSaveNote()
   const deleteNote = useDeleteNote()
+  const { params, set } = useUrlParams()
 
-  const { companies, symbolByCik } = useMemo(() => {
-    const bySymbol = new Map<
-      string,
-      { cik: string; label: string; symbol: string }
-    >()
-    for (const r of market.data?.listings ?? []) {
-      if (!bySymbol.has(r.cik)) {
-        bySymbol.set(r.cik, {
-          cik: r.cik,
-          label: `${r.symbol} · ${r.name}`,
-          symbol: r.symbol
-        })
-      }
-    }
-    const list = [...bySymbol.values()].sort((a, b) =>
-      a.symbol.localeCompare(b.symbol)
-    )
-    return {
-      companies: list.map(({ cik, label }) => ({ cik, label })),
-      symbolByCik: Object.fromEntries(list.map((c) => [c.cik, c.symbol]))
-    }
-  }, [market.data])
+  const filters: NotesFilters = useMemo(
+    () => ({
+      company: params.get(FILTER_KEYS.company),
+      from: params.get(FILTER_KEYS.from),
+      to: params.get(FILTER_KEYS.to),
+      q: params.get(FILTER_KEYS.q) ?? ''
+    }),
+    [params]
+  )
+  const onFiltersChange = useCallback(
+    (next: Partial<NotesFilters>) =>
+      set(
+        Object.fromEntries(
+          Object.entries(next).map(([k, v]) => [k, v === '' ? null : v])
+        ),
+        { debounceMs: 'q' in next ? 250 : 0 }
+      ),
+    [set]
+  )
+
+  const companies = useMemo(
+    () => companyOptionsFromMarket(market.data?.listings ?? []),
+    [market.data]
+  )
+  const symbolByCik = useMemo(
+    () =>
+      Object.fromEntries(
+        companies.map((c) => [c.cik, c.label.split(' · ')[0]!])
+      ),
+    [companies]
+  )
 
   // Delete is immediate; Undo re-PUTs the same id inside the 5 s window
   // (system design §5), so undoing is a plain retry, not a new Note.
@@ -56,17 +71,9 @@ export function NotesContainer() {
           duration: 5000,
           action: {
             label: notesCopy.undo,
-            onClick: () =>
-              putNote.mutate(
-                {
-                  id: note.id,
-                  cik: note.cik,
-                  start_date: note.start_date,
-                  end_date: note.end_date,
-                  body: note.body
-                },
-                { onError: () => toast.error(notesCopy.undoFailed) }
-              )
+            onClick: () => {
+              save(note).catch(() => toast.error(notesCopy.undoFailed))
+            }
           }
         })
     })
@@ -74,22 +81,15 @@ export function NotesContainer() {
 
   return (
     <NotesScreen
-      notes={notes.data?.pages.flatMap((p) => p.items) ?? []}
+      notes={notes.data ?? []}
       loading={notes.isPending}
       error={notes.isError}
       companies={companies}
       symbolByCik={symbolByCik}
       today={todayInNewYork()}
-      saveError={putNote.isError ? noteDialogCopy.saveFailed : null}
-      onSave={(draft) =>
-        putNote.mutate({
-          id: draft.id ?? createNoteId(),
-          cik: draft.cik,
-          start_date: draft.start_date,
-          end_date: draft.end_date,
-          body: draft.body
-        })
-      }
+      filters={filters}
+      onFiltersChange={onFiltersChange}
+      onSave={save}
       onDelete={onDelete}
     />
   )

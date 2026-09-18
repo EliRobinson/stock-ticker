@@ -33,34 +33,33 @@ import {
   CollapsibleContent,
   CollapsibleTrigger
 } from '@/components/ui/collapsible'
-import type { TimeseriesViewSpec } from '@/lib/chat'
 import { cn } from '@/lib/utils'
 
 import { TimeseriesChart } from '../chart/timeseries-chart'
+import { RegionBoundary } from '../shared/error-boundary'
 import { StatusAlert } from '../shared/feedback'
 import { safeMarkdownProps } from '../shared/markdown'
-import { toNumber } from '../shared/format'
 import { askCopy as copy } from './copy'
-import type {
-  AskMessage,
-  AskStatus,
-  AskUnavailable,
-  RunSqlInput,
-  RunSqlOutput
-} from './types'
+import type { AskTurnModel, StepState, ToolStep, ViewModel } from './prepare'
+import type { AskStatus, AskUnavailable } from './types'
 import { ViewTable } from './view-table'
 
 const noopSubscribe = () => () => {}
 
-type Part = AskMessage['parts'][number]
-type ToolPart = Extract<Part, { toolCallId: string }>
-type ViewPart = Extract<Part, { type: 'data-view' }>
-
-const isTool = (p: Part): p is ToolPart => p.type.startsWith('tool-')
-const toolName = (p: ToolPart) => p.type.slice('tool-'.length)
+// AI Elements' Tool takes the AI SDK's part states; the panel's own
+// StepState maps onto them for the status icon.
+const TOOL_STATE: Record<
+  StepState,
+  'input-available' | 'output-available' | 'output-error' | 'output-denied'
+> = {
+  running: 'input-available',
+  done: 'output-available',
+  failed: 'output-error',
+  stopped: 'output-denied'
+}
 
 export interface AskPanelProps {
-  messages: AskMessage[]
+  turns: AskTurnModel[]
   status: AskStatus
   error?: string | null
   unavailable?: AskUnavailable
@@ -75,7 +74,7 @@ export interface AskPanelProps {
 }
 
 export function AskPanel({
-  messages,
+  turns,
   status,
   error = null,
   unavailable = null,
@@ -90,7 +89,7 @@ export function AskPanel({
 }: AskPanelProps) {
   const [draft, setDraft] = useState('')
   const busy = status === 'submitted' || status === 'streaming'
-  const empty = messages.length === 0
+  const empty = turns.length === 0
 
   return (
     <section
@@ -135,15 +134,22 @@ export function AskPanel({
       ) : (
         <Conversation className='min-h-0'>
           <ConversationContent className='gap-3 p-3.5'>
-            {messages.map((m, i) => (
-              <AskTurn
-                key={m.id}
-                message={m}
-                streaming={busy && i === messages.length - 1}
-                compact={compact}
-                defaultSqlOpen={defaultSqlOpen}
-              />
-            ))}
+            {turns.map((turn) =>
+              turn.role === 'user' ? (
+                <Message key={turn.id} from='user' className='max-w-[88%]'>
+                  <MessageContent className='group-[.is-user]:border-border group-[.is-user]:bg-secondary text-sm group-[.is-user]:rounded-none group-[.is-user]:border group-[.is-user]:px-2.5 group-[.is-user]:py-2'>
+                    {turn.text}
+                  </MessageContent>
+                </Message>
+              ) : (
+                <AssistantTurn
+                  key={turn.id}
+                  turn={turn}
+                  compact={compact}
+                  defaultSqlOpen={defaultSqlOpen}
+                />
+              )
+            )}
             {error && (
               <div
                 role='alert'
@@ -180,7 +186,7 @@ export function AskPanel({
             disabled
             aria-label={copy.inputLabel}
             placeholder={copy.placeholderDisabled}
-            className='border-input bg-secondary min-h-13 text-md w-full border px-2.5 py-1.5 opacity-45'
+            className='border-input bg-secondary text-md min-h-13 w-full border px-2.5 py-1.5 opacity-45'
           />
         </div>
       ) : (
@@ -251,48 +257,25 @@ function UnavailableNotice({
   )
 }
 
-function AskTurn({
-  message,
-  streaming,
+function AssistantTurn({
+  turn,
   compact,
   defaultSqlOpen
 }: {
-  message: AskMessage
-  streaming: boolean
+  turn: Extract<AskTurnModel, { role: 'assistant' }>
   compact: boolean
   defaultSqlOpen: boolean
 }) {
-  if (message.role === 'user') {
-    const text = message.parts
-      .map((p) => (p.type === 'text' ? p.text : ''))
-      .join('')
-    return (
-      <Message from='user' className='max-w-[88%]'>
-        <MessageContent className='group-[.is-user]:border-border group-[.is-user]:bg-secondary text-sm group-[.is-user]:rounded-none group-[.is-user]:border group-[.is-user]:px-2.5 group-[.is-user]:py-2'>
-          {text}
-        </MessageContent>
-      </Message>
-    )
-  }
-
-  const tools = message.parts.filter(isTool)
-  const sqlTools = tools.filter((t) => toolName(t) === 'run_sql')
-  const views = message.parts.filter(
-    (p): p is ViewPart => p.type === 'data-view'
-  )
-  const texts = message.parts.filter((p) => p.type === 'text')
-  const failed = sqlTools.some((t) => t.state === 'output-error')
-
+  const sql = turn.steps.filter((s) => s.sql).map((s) => s.sql!)
+  const failed = turn.steps.some((s) => s.state === 'failed')
   return (
     <Message from='assistant' className='max-w-full gap-2.5'>
-      {tools.length > 0 && <ToolSteps tools={tools} />}
-      {texts.map((p, i) => (
+      {turn.steps.length > 0 && <ToolSteps steps={turn.steps} />}
+      {turn.texts.map((text, i) => (
         <MessageContent key={i} className='text-sm leading-[1.55]'>
-          <div aria-busy={streaming || undefined}>
-            <MessageResponse {...safeMarkdownProps}>
-              {p.type === 'text' ? p.text : ''}
-            </MessageResponse>
-            {streaming && i === texts.length - 1 && (
+          <div aria-busy={turn.streaming || undefined}>
+            <MessageResponse {...safeMarkdownProps}>{text}</MessageResponse>
+            {turn.streaming && i === turn.texts.length - 1 && (
               <span
                 aria-hidden='true'
                 className='bg-brand animate-caret ml-0.5 inline-block h-3.5 w-[7px] align-[-2px]'
@@ -301,40 +284,15 @@ function AskTurn({
           </div>
         </MessageContent>
       ))}
-      {views.map((v, i) =>
-        v.data.kind === 'table' ? (
-          <ViewTable key={v.id ?? i} spec={v.data} />
-        ) : (
-          <TimeseriesChart
-            key={v.id ?? i}
-            ariaLabel={v.data.title}
-            height={compact ? 120 : 150}
-            series={v.data.series.map((s) => {
-              const spec = v.data as TimeseriesViewSpec
-              return {
-                label: s.label,
-                points: spec.rows
-                  .map((r) => ({
-                    time: String(r[spec.x]),
-                    value: toNumber(r[s.key] as string | number | null)
-                  }))
-                  .filter(
-                    (p): p is { time: string; value: number } => p.value != null
-                  )
-              }
-            })}
-          />
-        )
+      {turn.views.map((view) => (
+        <RegionBoundary key={view.id} fallback={<ViewFailed />}>
+          <View view={view} compact={compact} />
+        </RegionBoundary>
+      ))}
+      {sql.length > 0 && !turn.streaming && (
+        <SqlDisclosure sql={sql} defaultOpen={failed || defaultSqlOpen} />
       )}
-      {sqlTools.length > 0 && !streaming && (
-        <SqlDisclosure
-          sql={sqlTools.map(
-            (t) => (t.input as RunSqlInput | undefined)?.sql ?? ''
-          )}
-          defaultOpen={failed || defaultSqlOpen}
-        />
-      )}
-      {views.some((v) => v.data.kind === 'table') && (
+      {turn.views.some((v) => v.kind === 'table') && (
         <div className='flex items-center gap-2'>
           <Button
             variant='outline'
@@ -354,7 +312,38 @@ function AskTurn({
   )
 }
 
-function ToolSteps({ tools }: { tools: ToolPart[] }) {
+function ViewFailed() {
+  return (
+    <p
+      role='note'
+      className='border-border text-muted-foreground border px-2.5 py-2 text-xs'
+    >
+      {copy.viewFailed}
+    </p>
+  )
+}
+
+function View({ view, compact }: { view: ViewModel; compact: boolean }) {
+  if (view.kind === 'invalid') return <ViewFailed />
+  if (view.kind === 'table') return <ViewTable spec={view.spec} />
+  return (
+    <TimeseriesChart
+      ariaLabel={view.title}
+      height={compact ? 120 : 150}
+      series={view.series}
+    />
+  )
+}
+
+function stepLabel(step: ToolStep) {
+  if (step.name !== 'run_sql') return copy.quietStep[step.name] ?? step.name
+  const rows =
+    step.rowCount !== null ? ` · ${copy.rows(step.rowCount, step.capped)}` : ''
+  const stopped = step.state === 'stopped' ? ` · ${copy.stopped}` : ''
+  return `${step.purpose ?? step.name}${rows}${stopped}`
+}
+
+function ToolSteps({ steps }: { steps: ToolStep[] }) {
   return (
     <div
       role='log'
@@ -362,49 +351,33 @@ function ToolSteps({ tools }: { tools: ToolPart[] }) {
       aria-label={copy.toolLog}
       className='border-border flex flex-col gap-1 border px-2.5 py-2 text-xs'
     >
-      {tools.map((t) => {
-        const name = toolName(t)
-        const input = t.input as RunSqlInput | undefined
-        const done = t.state === 'output-available'
-        const failed = t.state === 'output-error'
-        const output = done ? (t.output as RunSqlOutput | undefined) : undefined
-        const label =
-          name === 'run_sql'
-            ? `${input?.purpose ?? name}${output?.row_count != null ? ` \u00b7 ${copy.rows(output.row_count, output.row_count_is_capped)}` : ''}`
-            : (copy.quietStep[name] ?? name)
-        return (
-          <Tool key={t.toolCallId} className='mb-0 border-0'>
-            <ToolHeader
-              type='dynamic-tool'
-              toolName={name}
-              state={t.state}
-              title={label}
-              className={cn(
-                // AI Elements' header, restyled to the design's step log: the
-                // status icon leads, the wrench, badge label and chevron go.
-                'justify-start gap-2 p-0 text-left text-xs [&>div>span]:text-xs [&>div>span]:font-normal [&>div>svg:first-child]:hidden [&>svg:last-child]:hidden [&_[data-slot=badge]]:order-first [&_[data-slot=badge]]:border-0 [&_[data-slot=badge]]:bg-transparent [&_[data-slot=badge]]:p-0 [&_[data-slot=badge]]:text-[0px] [&_[data-slot=badge]_svg]:size-3.5',
-                (done || name !== 'run_sql') && 'text-muted-foreground',
-                failed && 'text-down'
-              )}
-            />
-            {failed && t.errorText && (
-              <p className='text-down mt-1 text-xs'>{t.errorText}</p>
+      {steps.map((step) => (
+        <Tool key={step.id} className='mb-0 border-0'>
+          <ToolHeader
+            type='dynamic-tool'
+            toolName={step.name}
+            state={TOOL_STATE[step.state]}
+            title={stepLabel(step)}
+            className={cn(
+              // AI Elements' header, restyled to the design's step log: the
+              // status icon leads, the wrench, badge label and chevron go.
+              'justify-start gap-2 p-0 text-left text-xs [&>div>span]:text-xs [&>div>span]:font-normal [&>div>svg:first-child]:hidden [&>svg:last-child]:hidden [&_[data-slot=badge]]:order-first [&_[data-slot=badge]]:border-0 [&_[data-slot=badge]]:bg-transparent [&_[data-slot=badge]]:p-0 [&_[data-slot=badge]]:text-[0px] [&_[data-slot=badge]_svg]:size-3.5',
+              step.state !== 'running' && 'text-muted-foreground',
+              step.state === 'failed' && 'text-down'
             )}
-            <ToolContent className='p-0 pt-1.5'>
-              {name === 'run_sql' && (
-                <ToolInput input={t.input} className='p-0' />
-              )}
-            </ToolContent>
-            <span className='sr-only'>
-              {done
-                ? copy.stepDone
-                : failed
-                  ? copy.stepFailed
-                  : copy.stepRunning}
-            </span>
-          </Tool>
-        )
-      })}
+          />
+          {step.error && <p className='text-down mt-1 text-xs'>{step.error}</p>}
+          <ToolContent className='p-0 pt-1.5'>
+            {step.sql && (
+              <ToolInput
+                input={{ sql: step.sql, purpose: step.purpose }}
+                className='p-0'
+              />
+            )}
+          </ToolContent>
+          <span className='sr-only'>{copy.stepState[step.state]}</span>
+        </Tool>
+      ))}
     </div>
   )
 }
@@ -417,15 +390,14 @@ function SqlDisclosure({
   defaultOpen: boolean
 }) {
   const [open, setOpen] = useState(defaultOpen)
-  // Shiki highlights on the client only; rendering the plain SQL until mount
-  // keeps an open-by-default disclosure from mismatching on hydration.
+  // Shiki highlights on the client only; plain SQL until mount keeps an
+  // open-by-default disclosure from mismatching on hydration.
   const mounted = useSyncExternalStore(
     noopSubscribe,
     () => true,
     () => false
   )
-  const code = useMemo(() => sql.filter(Boolean).join('\n\n'), [sql])
-  if (!code) return null
+  const code = useMemo(() => sql.join('\n\n'), [sql])
   return (
     <Collapsible
       open={open}

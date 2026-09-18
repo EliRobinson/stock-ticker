@@ -1,7 +1,6 @@
 'use client'
 
 import {
-  Command,
   CommandDialog,
   CommandEmpty,
   CommandGroup,
@@ -10,9 +9,8 @@ import {
   CommandList
 } from '@/components/ui/command'
 
-import { Blueprint } from '../shared/blueprint'
 import { changeText } from '../shared/cells'
-import { direction, formatPrice } from '../shared/format'
+import { directionOf as direction, formatPrice } from '@/lib/format'
 import { shellCopy } from './copy'
 
 const copy = shellCopy.palette
@@ -27,7 +25,7 @@ export interface PaletteEntry {
 
 const DIR = { up: 'text-up', down: 'text-down', flat: 'text-flat' } as const
 
-function PaletteBody({
+export function PaletteBody({
   entries,
   onSelect
 }: {
@@ -54,7 +52,7 @@ function PaletteBody({
                 <span className='w-15 font-bold'>{e.symbol}</span>
                 <span className='min-w-0 flex-1 truncate'>{e.name}</span>
                 <span className='text-muted-foreground text-xs'>
-                  {formatPrice(e.price)}
+                  {formatPrice(e.price, { currency: false })}
                 </span>
                 <span className={`${DIR[dir]} text-xs`}>
                   {changeText(e.change_pct)}
@@ -96,25 +94,5 @@ export function CommandPalette({
     >
       <PaletteBody entries={entries} onSelect={onSelect} />
     </CommandDialog>
-  )
-}
-
-// The same palette drawn in place, for the dev states board.
-export function CommandPalettePreview({
-  entries
-}: {
-  entries: PaletteEntry[]
-}) {
-  const first = entries[0]
-  return (
-    <Blueprint className='bg-background w-[440px] max-w-full shadow-lg'>
-      <Command
-        label={copy.title}
-        defaultValue={first ? `${first.symbol} ${first.name}` : undefined}
-        className='bg-background'
-      >
-        <PaletteBody entries={entries} onSelect={() => {}} />
-      </Command>
-    </Blueprint>
   )
 }

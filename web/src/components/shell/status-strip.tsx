@@ -4,7 +4,7 @@ import type { StatusResponse } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 import { ProgressTrack } from '../shared/feedback'
-import { formatDate, formatTimeET } from '../shared/format'
+import { formatDateShort, formatTimeET } from '@/lib/format'
 import {
   AiSpendPill,
   IngestHealthPill,
@@ -84,8 +84,8 @@ export function StatusStrip({
             <span className='text-muted-foreground tabular text-xs'>
               {status.data_as_of
                 ? copy.status.dataAsOf(
-                    formatTimeET(status.data_as_of, true),
-                    formatDate(status.data_as_of)
+                    formatTimeET(status.data_as_of, { seconds: true }),
+                    formatDateShort(status.data_as_of)
                   )
                 : copy.status.noData}
             </span>

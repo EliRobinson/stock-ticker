@@ -1,9 +1,11 @@
 import { TriangleAlert } from 'lucide-react'
 import type { ReactNode } from 'react'
 
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 
-// Destructive Alert (M4, M5, C5, N4, A5): role="alert", fact then consequence then action.
+// Destructive Alert (M4, M5, C5, N4, A5): fact, then consequence, then action.
 export function StatusAlert({
   title,
   children,
@@ -20,43 +22,31 @@ export function StatusAlert({
   action?: ReactNode
 }) {
   return (
-    <div
-      role='alert'
+    <Alert
+      variant='destructive'
       className={cn(
-        'border-pill-bad-foreground bg-pill-bad text-pill-bad-foreground flex gap-2.5 text-pretty border px-3 py-2.5 text-sm',
-        centered && 'min-h-45 items-center justify-center p-3 text-center',
+        centered &&
+          'min-h-45 place-content-center justify-items-center text-center',
         className
       )}
     >
       {icon && !centered && (
-        <TriangleAlert
-          aria-hidden='true'
-          className='mt-0.5 size-4 flex-none'
-          strokeWidth={1.5}
-        />
+        <TriangleAlert aria-hidden='true' strokeWidth={1.5} />
       )}
-      <div
+      {title && (
+        <AlertTitle className={cn(centered && 'col-span-2 text-lg')}>
+          {title}
+        </AlertTitle>
+      )}
+      <AlertDescription
         className={cn(
-          'flex flex-col gap-2',
-          centered ? 'max-w-[44ch] items-center' : 'items-start'
+          centered && 'col-span-2 max-w-[44ch] justify-items-center'
         )}
       >
-        <div>
-          {title && (
-            <strong
-              className={cn(
-                'font-heading block font-semibold',
-                centered ? 'text-lg' : 'text-base'
-              )}
-            >
-              {title}
-            </strong>
-          )}
-          {children}
-        </div>
+        {children && <div>{children}</div>}
         {action}
-      </div>
-    </div>
+      </AlertDescription>
+    </Alert>
   )
 }
 
@@ -83,7 +73,7 @@ export function EmptyState({
         className
       )}
     >
-      <div className={cn(size === 'md' ? 'max-w-[40ch]' : 'max-w-[30ch]')}>
+      <div className={size === 'md' ? 'max-w-[40ch]' : 'max-w-[30ch]'}>
         {mark && (
           <div
             aria-hidden='true'
@@ -103,7 +93,7 @@ export function EmptyState({
             className={cn(
               'text-muted-foreground text-pretty',
               size === 'md' ? 'text-sm' : 'text-xs',
-              action ? 'mb-3' : ''
+              action && 'mb-3'
             )}
           >
             {body}
@@ -116,12 +106,7 @@ export function EmptyState({
 }
 
 export function SkeletonBar({ className }: { className?: string }) {
-  return (
-    <div
-      aria-hidden='true'
-      className={cn('bg-skeleton animate-pulse-soft h-[11px]', className)}
-    />
-  )
+  return <Skeleton aria-hidden='true' className={cn('h-[11px]', className)} />
 }
 
 export function ProgressTrack({

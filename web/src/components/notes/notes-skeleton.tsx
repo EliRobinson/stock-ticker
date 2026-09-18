@@ -1,8 +1,9 @@
 'use client'
 
-import { NotesScreen } from './notes-screen'
+import { NotesScreen, noFilters } from './notes-screen'
 
 const noop = () => {}
+const noSave = async () => {}
 
 export function NotesSkeleton() {
   return (
@@ -12,7 +13,9 @@ export function NotesSkeleton() {
       companies={[]}
       symbolByCik={{}}
       today=''
-      onSave={noop}
+      filters={noFilters}
+      onFiltersChange={noop}
+      onSave={noSave}
       onDelete={noop}
     />
   )

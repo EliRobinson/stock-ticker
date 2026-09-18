@@ -3,14 +3,12 @@
 
 @source '../../node_modules/streamdown/dist/*.js';
 
-/*
- * Dark mode is the `.dark` class (next-themes, attribute="class").
- * A `.light` island inside a `.dark` page (the dev states board renders both
- * themes side by side) opts back out of the dark variant.
- */
-@custom-variant dark (&:where(.dark, .dark *):not(:where(.light, .light *)));
+/* Dark mode is the `.dark` class (next-themes, attribute="class"). */
+@custom-variant dark (&:where(.dark, .dark *));
 
-/* Width sets the layout, pointer type sets the target size (design frame R1). */
+/* Width sets the layout, pointer type sets the target size (design frame R1).
+ * Keep in step with TOUCH_PHONE in components/shared/use-media.ts, which JS
+ * uses to pick the list layout. */
 @custom-variant touch (@media (max-width: 639px) and (pointer: coarse));
 
 /*
@@ -18,42 +16,32 @@
  * (Stock Ticker States.dc.html). Hex values are the design's; the X1 contrast
  * table there measures every pair used here against WCAG AA.
  */
-:root,
-.light {
+:root {
   --radius: 0px;
 
   --background: #f2f2f3;
   --foreground: #1d1f20;
-  --card: #f2f2f3;
-  --card-foreground: #1d1f20;
   --popover: #f5f5f8;
-  --popover-foreground: #1d1f20;
   --primary: #416180;
   --primary-foreground: #ffffff;
   --secondary: #e9e9ea;
-  --secondary-foreground: #1d1f20;
-  --muted: #e9e9ea;
   --muted-foreground: #5d5d60;
   --accent: #e2ecf5;
   --accent-foreground: #2c455d;
   --destructive: #8c231d;
   --border: rgba(29, 31, 32, 0.16);
-  --input: rgba(29, 31, 32, 0.16);
-  --ring: #5980a6;
+  /* 3:1 against the input fill (WCAG 1.4.11); the hairline --border is decorative. */
+  --input: #7a7a7d;
 
   --brand: #5980a6;
-  --brand-strong: #416180;
   --selected: #eef6ff;
   --rowline: rgba(29, 31, 32, 0.09);
   --skeleton: #d4d4d7;
-  --board: #dcdcde;
   --scrim: rgba(29, 31, 32, 0.45);
   --hover: rgba(29, 31, 32, 0.04);
   --tag-neutral: #e7e7ea;
   --tag-neutral-foreground: #424244;
-  --tag-accent: #eef6ff;
   --tag-accent-foreground: #2c455d;
-  --track: #d4d4d7;
 
   --up: #1f6b45;
   --down: #a12d26;
@@ -68,29 +56,18 @@
   --pill-amber: #f5e8d4;
   --pill-amber-foreground: #5f3d06;
   --pill-bad: #f7e0dd;
-  --pill-bad-foreground: #8c231d;
 
   --chart-line: #416180;
   --chart-area: rgba(65, 97, 128, 0.1);
   --chart-grid: rgba(29, 31, 32, 0.12);
   --chart-volume: #c2ced9;
-  --chart-note: #1f6b45;
-  --chart-event: #7a5210;
   --chart-range: rgba(89, 128, 166, 0.12);
-  --chart-1: #416180;
   --chart-2: #1f6b45;
   --chart-3: #7a5210;
   --chart-4: #a12d26;
   --chart-5: #5d5d60;
 
-  --sidebar: #f2f2f3;
-  --sidebar-foreground: #1d1f20;
-  --sidebar-primary: #5980a6;
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #e2ecf5;
-  --sidebar-accent-foreground: #2c455d;
-  --sidebar-border: rgba(29, 31, 32, 0.16);
-  --sidebar-ring: #5980a6;
 
   --shadow-color: 43 43 45;
   color-scheme: light;
@@ -99,36 +76,26 @@
 .dark {
   --background: #15181a;
   --foreground: #eceeef;
-  --card: #15181a;
-  --card-foreground: #eceeef;
   --popover: #26292c;
-  --popover-foreground: #eceeef;
   --primary: #b5d9fd;
   --primary-foreground: #15181a;
   --secondary: #1d2124;
-  --secondary-foreground: #eceeef;
-  --muted: #1d2124;
   --muted-foreground: #b9bfc4;
   --accent: #1f3245;
   --accent-foreground: #d6ebff;
   --destructive: #f3a49c;
   --border: rgba(236, 238, 239, 0.2);
-  --input: rgba(236, 238, 239, 0.2);
-  --ring: #94bce3;
+  --input: #7c8288;
 
   --brand: #94bce3;
-  --brand-strong: #b5d9fd;
   --selected: #182430;
   --rowline: rgba(236, 238, 239, 0.1);
   --skeleton: #3b4044;
-  --board: #0c0e10;
   --scrim: rgba(12, 14, 16, 0.6);
   --hover: rgba(236, 238, 239, 0.05);
   --tag-neutral: #26292c;
   --tag-neutral-foreground: #d6dadd;
-  --tag-accent: #182430;
   --tag-accent-foreground: #d6ebff;
-  --track: #3b4044;
 
   --up: #61c98d;
   --down: #f08d84;
@@ -143,38 +110,60 @@
   --pill-amber: #2d2214;
   --pill-amber-foreground: #e8bb73;
   --pill-bad: #331916;
-  --pill-bad-foreground: #f3a49c;
 
   --chart-line: #94bce3;
   --chart-area: rgba(148, 188, 227, 0.1);
   --chart-grid: rgba(236, 238, 239, 0.1);
   --chart-volume: #2b4560;
-  --chart-note: #61c98d;
-  --chart-event: #e0a85a;
   --chart-range: rgba(148, 188, 227, 0.14);
-  --chart-1: #94bce3;
   --chart-2: #61c98d;
   --chart-3: #e0a85a;
   --chart-4: #f08d84;
   --chart-5: #b7b7ba;
 
-  --sidebar: #15181a;
-  --sidebar-foreground: #eceeef;
-  --sidebar-primary: #94bce3;
   --sidebar-primary-foreground: #15181a;
-  --sidebar-accent: #1f3245;
-  --sidebar-accent-foreground: #d6ebff;
-  --sidebar-border: rgba(236, 238, 239, 0.2);
-  --sidebar-ring: #94bce3;
 
   --shadow-color: 0 0 0;
   color-scheme: dark;
+}
+
+:root,
+.dark {
+  /* Tokens that are another token by definition. Declared on both theme
+   * scopes so they resolve against the theme they sit in. */
+  --card: var(--background);
+  --card-foreground: var(--foreground);
+  --popover-foreground: var(--foreground);
+  --secondary-foreground: var(--foreground);
+  --muted: var(--secondary);
+  --sidebar: var(--background);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: var(--brand);
+  --sidebar-accent: var(--accent);
+  --sidebar-accent-foreground: var(--accent-foreground);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
+  --brand-strong: var(--primary);
+  --ring: var(--brand);
+  --chart-1: var(--chart-line);
+  --chart-note: var(--up);
+  --chart-event: var(--amber);
+  --tag-accent: var(--selected);
+  --pill-bad-foreground: var(--destructive);
+  --track: var(--skeleton);
 }
 
 @theme inline {
   --font-sans: var(--font-barlow), system-ui, sans-serif;
   --font-heading: var(--font-barlow-condensed), system-ui, sans-serif;
   --font-mono: ui-monospace, 'SFMono-Regular', Menlo, monospace;
+
+  /* Container-query breakpoints for screen regions (not the viewport). The
+   * Market table's column thresholds in market-screen.tsx use the same idea
+   * in JS; keep them in step. */
+  --container-compact: 520px;
+  --container-toolbar: 560px;
+  --container-stack: 900px;
 
   --text-3xs: 10px;
   --text-3xs--line-height: 1.4;
@@ -232,7 +221,6 @@
   --color-selected: var(--selected);
   --color-rowline: var(--rowline);
   --color-skeleton: var(--skeleton);
-  --color-board: var(--board);
   --color-scrim: var(--scrim);
   --color-hover: var(--hover);
   --color-tag-neutral: var(--tag-neutral);
@@ -320,55 +308,6 @@
   }
   ::selection {
     background: color-mix(in srgb, var(--brand) 30%, transparent);
-  }
-}
-
-@layer components {
-  /* Industry "blueprint" frame: square, hairline-bordered, registration-mark corners. */
-  .blueprint {
-    position: relative;
-    border: 1px solid var(--border);
-  }
-  .blueprint-corner {
-    position: absolute;
-    width: 11px;
-    height: 11px;
-    color: var(--muted-foreground);
-    pointer-events: none;
-  }
-  .blueprint-corner::before,
-  .blueprint-corner::after {
-    content: '';
-    position: absolute;
-    background: currentColor;
-  }
-  .blueprint-corner::before {
-    left: 5px;
-    top: 0;
-    width: 1px;
-    height: 100%;
-  }
-  .blueprint-corner::after {
-    top: 5px;
-    left: 0;
-    width: 100%;
-    height: 1px;
-  }
-  .blueprint-corner[data-corner='tl'] {
-    top: -6px;
-    left: -6px;
-  }
-  .blueprint-corner[data-corner='tr'] {
-    top: -6px;
-    right: -6px;
-  }
-  .blueprint-corner[data-corner='bl'] {
-    bottom: -6px;
-    left: -6px;
-  }
-  .blueprint-corner[data-corner='br'] {
-    bottom: -6px;
-    right: -6px;
   }
 }
 

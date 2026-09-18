@@ -1,58 +1,71 @@
 'use client'
 
+import type { Chat } from '@ai-sdk/react'
+import { useMemo } from 'react'
+
 import { useStatus } from '@/hooks/useStatus'
 import type { StatusResponse } from '@/lib/api'
 import { useStockTickerChat } from '@/lib/chat'
+import type { ChatUIMessage } from '@/lib/chat'
+import { formatUsd } from '@/lib/format'
 
 import { AskPanel } from '../ask/ask-panel'
 import { askCopy } from '../ask/copy'
+import { prepareTurns } from '../ask/prepare'
 import type { AskUnavailable } from '../ask/types'
-import { formatUsd } from '../shared/format'
-import type { AiStatus } from '../shell/status-strip'
 
-export function readAiStatus(
+export function askUnavailable(
   status: StatusResponse | undefined
-): AiStatus | null {
-  return status?.ai ?? null
+): AskUnavailable {
+  if (!status) return null
+  if (status.missing_keys.includes('ANTHROPIC_API_KEY')) return 'missing-key'
+  const ai = status.ai
+  if (ai && !ai.enabled && ai.spend_usd >= ai.limit_usd) return 'spend-limit'
+  return null
 }
 
-export function AskContainer({ onClose }: { onClose: () => void }) {
-  const chat = useStockTickerChat()
-  const { data: status } = useStatus()
-  const ai = readAiStatus(status)
+// The stream's own errorText is shown as sent (#7). A request that never
+// reached the stream (the API is down) gets the brief's "unreachable" copy.
+export function askErrorText(error: Error | undefined): string | null {
+  if (!error) return null
+  const message = error.message
+  if (!message || /fetch|network|load failed/i.test(message)) {
+    return askCopy.errors['backend-down']
+  }
+  return message
+}
 
-  const unavailable: AskUnavailable = status?.missing_keys.includes(
-    'ANTHROPIC_API_KEY'
+export function AskContainer({
+  chat,
+  onClose
+}: {
+  chat: Chat<ChatUIMessage>
+  onClose: () => void
+}) {
+  const { messages, status, error, sendMessage, regenerate, stop } =
+    useStockTickerChat(chat)
+  const { data: statusData } = useStatus()
+  const turns = useMemo(
+    () => prepareTurns(messages, status),
+    [messages, status]
   )
-    ? 'missing-key'
-    : ai && !ai.enabled && ai.spend_usd >= ai.limit_usd
-      ? 'spend-limit'
-      : null
-
-  // The stream's own errorText is shown as sent (#7). A failed fetch never
-  // reaches the stream, so it gets the brief's "backend down" copy instead.
-  const message = chat.error?.message
-  const error = chat.error
-    ? !message || /fetch|network|load failed/i.test(message)
-      ? askCopy.errors['backend-down']
-      : message
-    : null
+  const ai = statusData?.ai
 
   return (
     <AskPanel
-      messages={chat.messages}
-      status={chat.status}
-      error={error}
-      unavailable={unavailable}
+      turns={turns}
+      status={status}
+      error={askErrorText(error)}
+      unavailable={askUnavailable(statusData)}
       spendLimit={ai ? formatUsd(ai.limit_usd) : undefined}
       onSend={(text) => {
-        chat.sendMessage({ text }).catch(() => {})
+        sendMessage({ text }).catch(() => {})
       }}
       onRetry={() => {
-        chat.regenerate().catch(() => {})
+        regenerate().catch(() => {})
       }}
       onStop={() => {
-        chat.stop().catch(() => {})
+        stop().catch(() => {})
       }}
       onClose={onClose}
     />

@@ -9,16 +9,28 @@ import {
 } from '@tanstack/react-table'
 import type {
   ColumnDef,
-  FilterFn,
   SortingState,
   VisibilityState
 } from '@tanstack/react-table'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { ArrowDown, ArrowUp } from 'lucide-react'
-import { useMemo, useRef } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 
-import { marketTableColumns, searchFilterFn } from '@/lib/market-table'
+import {
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow
+} from '@/components/ui/table'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger
+} from '@/components/ui/tooltip'
+import { formatMarketCap, formatVolume } from '@/lib/format'
+import { marketColumns, searchFilterFn } from '@/lib/market-table'
 import { cn } from '@/lib/utils'
 
 import {
@@ -27,8 +39,8 @@ import {
   QuoteCell,
   TruncatedText
 } from '../shared/cells'
+import { sharedCopy } from '../shared/copy'
 import { SkeletonBar } from '../shared/feedback'
-import { formatMarketCap, formatVolume } from '../shared/format'
 import { marketCopy as copy } from './copy'
 import type { MarketRowView } from './market-rows'
 
@@ -44,11 +56,18 @@ export type MarketColumnId =
   | 'volume'
   | 'observed_at'
 
-export type Labels = {
+export interface Labels {
   price: string
   age: string
   widePrice?: boolean
   compact?: boolean
+}
+
+interface ColumnMeta {
+  width?: number
+  align?: 'right'
+  className?: string
+  skeleton: string
 }
 
 type Cell = NonNullable<ColumnDef<MarketRowView>['cell']>
@@ -57,25 +76,51 @@ interface ColumnDisplay {
   header: string
   meta: ColumnMeta
   cell: Cell
+  invertSorting?: boolean
+}
+
+function MarketCapValue({ row }: { row: MarketRowView }) {
+  if (row.backfillPending) return <SkeletonBar className='w-13.5 ml-auto' />
+  if (row.capNote)
+    return <ExplainedDash reason={row.capNote} focusable={false} />
+  if (!row.market_cap_is_approx) return <>{formatMarketCap(row.market_cap)}</>
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className='cursor-help'>
+          <span aria-hidden='true'>{'≈'}</span>
+          {formatMarketCap(row.market_cap)}
+          <span className='sr-only'>{sharedCopy.capApprox}</span>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent className='max-w-[28ch]'>
+        {sharedCopy.capApprox}
+      </TooltipContent>
+    </Tooltip>
+  )
 }
 
 function display(labels: Labels): Record<MarketColumnId, ColumnDisplay> {
   return {
     symbol: {
       header: copy.columnLabels.symbol,
-      meta: { width: labels.compact ? 66 : 84 },
+      meta: { width: labels.compact ? 66 : 84, skeleton: 'w-11' },
       cell: ({ row }) => (
         <span className='font-bold'>{row.original.symbol}</span>
       )
     },
     name: {
       header: copy.columnLabels.name,
-      meta: { className: 'max-w-70' },
+      meta: { className: 'max-w-70', skeleton: 'w-47.5' },
       cell: ({ row }) => <TruncatedText text={row.original.name} />
     },
     sector: {
       header: copy.columnLabels.sector,
-      meta: { width: 180, className: 'text-sm text-muted-foreground' },
+      meta: {
+        width: 180,
+        className: 'text-sm text-muted-foreground',
+        skeleton: 'w-32'
+      },
       cell: ({ row }) => (
         <span className='block truncate'>{row.original.sector}</span>
       )
@@ -84,7 +129,8 @@ function display(labels: Labels): Record<MarketColumnId, ColumnDisplay> {
       header: labels.price,
       meta: {
         width: labels.compact ? 84 : labels.widePrice ? 150 : 104,
-        align: 'right'
+        align: 'right',
+        skeleton: 'w-13.5'
       },
       cell: ({ row }) => (
         <QuoteCell
@@ -105,28 +151,30 @@ function display(labels: Labels): Record<MarketColumnId, ColumnDisplay> {
       meta: {
         width: labels.compact ? undefined : 176,
         align: 'right',
-        className: labels.compact ? 'text-xs' : undefined
+        className: labels.compact ? 'text-xs' : undefined,
+        skeleton: 'w-24'
       },
       cell: ({ row }) => {
         const r = row.original
         if (r.backfillPending) return <SkeletonBar className='w-23 ml-auto' />
-        if (r.historyNote) return <ExplainedDash reason={r.historyNote} />
+        if (r.historyNote)
+          return <ExplainedDash reason={r.historyNote} focusable={false} />
         return <ChangeCell pct={r.change_pct} abs={r.change} stale={r.stale} />
       }
     },
     market_cap: {
       header: copy.columnLabels.marketCap,
-      meta: { width: 104, align: 'right' },
-      cell: ({ row }) => {
-        const r = row.original
-        if (r.backfillPending) return <SkeletonBar className='w-13.5 ml-auto' />
-        if (r.capNote) return <ExplainedDash reason={r.capNote} />
-        return formatMarketCap(r.market_cap)
-      }
+      meta: { width: 104, align: 'right', skeleton: 'w-14' },
+      cell: ({ row }) => <MarketCapValue row={row.original} />
     },
     volume: {
       header: copy.columnLabels.volume,
-      meta: { width: 92, align: 'right', className: 'text-muted-foreground' },
+      meta: {
+        width: 92,
+        align: 'right',
+        className: 'text-muted-foreground',
+        skeleton: 'w-12'
+      },
       cell: ({ row }) => formatVolume(row.original.volume)
     },
     observed_at: {
@@ -134,30 +182,37 @@ function display(labels: Labels): Record<MarketColumnId, ColumnDisplay> {
       meta: {
         width: 84,
         align: 'right',
-        className: 'text-xs text-muted-foreground'
+        className: 'text-xs text-muted-foreground',
+        skeleton: 'w-8'
       },
-      cell: ({ row }) => row.original.ageLabel
+      cell: ({ row }) => row.original.ageLabel,
+      // The column sorts by observed_at; youngest-first reads as "age ascending".
+      invertSorting: true
     }
   }
 }
 
-// #8 owns the column defs (ids, accessors, sort and filter fns); this layer
-// only adds headers and cells, and drops the separate `change` column because
-// the design shows percent and dollar change in one cell.
+// lib/market-table owns ids, accessors, sort and filter; this adds headers and
+// cells. The separate `change` column is dropped: the design shows percent
+// and dollar change in one cell.
 function columns(labels: Labels): ColumnDef<MarketRowView>[] {
   const byId = display(labels)
-  const defs = marketTableColumns as unknown as ColumnDef<MarketRowView>[]
+  const defs = marketColumns<MarketRowView>()
   return (Object.keys(byId) as MarketColumnId[]).flatMap((id) => {
     const def = defs.find((c) => c.id === id)
     const d = byId[id]
-    return def ? [{ ...def, header: d.header, cell: d.cell, meta: d.meta }] : []
+    return def
+      ? [
+          {
+            ...def,
+            header: d.header,
+            cell: d.cell,
+            meta: d.meta,
+            invertSorting: d.invertSorting
+          }
+        ]
+      : []
   })
-}
-
-interface ColumnMeta {
-  width?: number
-  align?: 'right'
-  className?: string
 }
 
 export interface MarketTableInput {
@@ -194,7 +249,7 @@ export function useMarketTable({
       onSortingChange(
         typeof updater === 'function' ? updater(sorting) : updater
       ),
-    globalFilterFn: searchFilterFn as unknown as FilterFn<MarketRowView>,
+    globalFilterFn: searchFilterFn<MarketRowView>,
     getCoreRowModel: getCoreRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
     getSortedRowModel: getSortedRowModel(),
@@ -217,6 +272,9 @@ export function MarketTable({
 }) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const modelRows = table.getRowModel().rows
+  // Roving tabindex: the table is one tab stop; arrows move between rows.
+  const [active, setActive] = useState(0)
+  const activeIndex = Math.min(active, Math.max(0, modelRows.length - 1))
   const virtualizer = useVirtualizer({
     count: loading ? 20 : modelRows.length,
     getScrollElement: () => scrollRef.current,
@@ -232,6 +290,7 @@ export function MarketTable({
 
   const focusRow = (index: number) => {
     const clamped = Math.max(0, Math.min(modelRows.length - 1, index))
+    setActive(clamped)
     virtualizer.scrollToIndex(clamped, { align: 'auto' })
     requestAnimationFrame(() => {
       scrollRef.current
@@ -243,15 +302,20 @@ export function MarketTable({
   const onRowKey = (e: KeyboardEvent<HTMLTableRowElement>, index: number) => {
     const row = modelRows[index]
     if (!row) return
+    const moves: Record<string, number> = {
+      ArrowDown: index + 1,
+      ArrowUp: index - 1,
+      Home: 0,
+      End: modelRows.length - 1,
+      PageDown: index + 10,
+      PageUp: index - 10
+    }
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault()
       onOpen(row.original)
-    } else if (e.key === 'ArrowDown') {
+    } else if (e.key in moves) {
       e.preventDefault()
-      focusRow(index + 1)
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault()
-      focusRow(index - 1)
+      focusRow(moves[e.key]!)
     }
   }
 
@@ -260,7 +324,6 @@ export function MarketTable({
       ref={scrollRef}
       role='region'
       aria-label={copy.tableLabel}
-      tabIndex={-1}
       className={cn(
         'border-border min-h-0 flex-1 overflow-auto border-t',
         className
@@ -270,18 +333,14 @@ export function MarketTable({
         className='text-md tabular w-full table-fixed border-collapse'
         aria-rowcount={loading ? -1 : modelRows.length + 1}
       >
-        <thead className='bg-background sticky top-0 z-10'>
+        <TableHeader className='bg-background sticky top-0 z-10'>
           {table.getHeaderGroups().map((group) => (
-            <tr
-              key={group.id}
-              aria-rowindex={1}
-              className='border-border border-b'
-            >
+            <TableRow key={group.id} aria-rowindex={1}>
               {group.headers.map((header) => {
-                const meta = (header.column.columnDef.meta ?? {}) as ColumnMeta
+                const meta = header.column.columnDef.meta as ColumnMeta
                 const sorted = header.column.getIsSorted()
                 return (
-                  <th
+                  <TableHead
                     key={header.id}
                     scope='col'
                     aria-sort={
@@ -293,7 +352,7 @@ export function MarketTable({
                     }
                     style={meta.width ? { width: meta.width } : undefined}
                     className={cn(
-                      'text-muted-foreground text-2xs p-0 font-normal uppercase tracking-[0.08em]',
+                      'p-0',
                       meta.align === 'right' ? 'text-right' : 'text-left'
                     )}
                   >
@@ -324,13 +383,13 @@ export function MarketTable({
                         />
                       )}
                     </button>
-                  </th>
+                  </TableHead>
                 )
               })}
-            </tr>
+            </TableRow>
           ))}
-        </thead>
-        <tbody>
+        </TableHeader>
+        <TableBody>
           {padTop > 0 && (
             <tr aria-hidden='true'>
               <td style={{ height: padTop }} colSpan={visibleColumns.length} />
@@ -338,61 +397,53 @@ export function MarketTable({
           )}
           {loading
             ? items.map((item) => (
-                <tr
+                <TableRow
                   key={item.key}
-                  className='border-rowline border-b'
+                  className='hover:bg-transparent'
                   style={{ height: ROW_HEIGHT }}
                 >
                   {visibleColumns.map((col) => {
-                    const meta = (col.columnDef.meta ?? {}) as ColumnMeta
-                    const widths: Record<string, string> = {
-                      symbol: 'w-11',
-                      name: 'w-47.5',
-                      sector: 'w-32',
-                      price: 'w-13.5',
-                      change_pct: 'w-24',
-                      market_cap: 'w-14',
-                      volume: 'w-12',
-                      observed_at: 'w-8'
-                    }
+                    const meta = col.columnDef.meta as ColumnMeta
                     return (
-                      <td key={col.id} className='p-[6.8px]'>
+                      <TableCell key={col.id}>
                         <SkeletonBar
                           className={cn(
                             'max-w-full',
-                            widths[col.id],
+                            meta.skeleton,
                             meta.align === 'right' && 'ml-auto'
                           )}
                         />
-                      </td>
+                      </TableCell>
                     )
                   })}
-                </tr>
+                </TableRow>
               ))
             : items.map((item) => {
                 const row = modelRows[item.index]
                 if (!row) return null
                 return (
-                  <tr
+                  <TableRow
                     key={row.id}
                     data-index={item.index}
                     aria-rowindex={item.index + 2}
-                    tabIndex={0}
+                    tabIndex={item.index === activeIndex ? 0 : -1}
                     onClick={() => onOpen(row.original)}
                     onMouseEnter={() => onHover?.(row.original)}
-                    onFocus={() => onHover?.(row.original)}
+                    onFocus={() => {
+                      setActive(item.index)
+                      onHover?.(row.original)
+                    }}
                     onKeyDown={(e) => onRowKey(e, item.index)}
-                    className='border-rowline hover:bg-hover focus-visible:outline-ring cursor-pointer border-b focus-visible:outline-2 focus-visible:-outline-offset-2'
+                    className='focus-visible:outline-ring cursor-pointer focus-visible:outline-2 focus-visible:-outline-offset-2'
                     style={{ height: ROW_HEIGHT }}
                   >
                     {row.getVisibleCells().map((cell) => {
-                      const meta = (cell.column.columnDef.meta ??
-                        {}) as ColumnMeta
+                      const meta = cell.column.columnDef.meta as ColumnMeta
                       return (
-                        <td
+                        <TableCell
                           key={cell.id}
                           className={cn(
-                            'overflow-hidden whitespace-nowrap p-[6.8px]',
+                            'overflow-hidden',
                             meta.align === 'right' && 'text-right',
                             meta.className
                           )}
@@ -401,10 +452,10 @@ export function MarketTable({
                             cell.column.columnDef.cell,
                             cell.getContext()
                           )}
-                        </td>
+                        </TableCell>
                       )
                     })}
-                  </tr>
+                  </TableRow>
                 )
               })}
           {padBottom > 0 && (
@@ -415,7 +466,7 @@ export function MarketTable({
               />
             </tr>
           )}
-        </tbody>
+        </TableBody>
       </table>
     </div>
   )

@@ -2,7 +2,7 @@
 
 import { useForm } from '@tanstack/react-form'
 import { CalendarDays } from 'lucide-react'
-import { useId, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -11,7 +11,6 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogHeader,
   DialogTitle
 } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
@@ -28,67 +27,45 @@ import {
   SelectValue
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
-import { cn } from '@/lib/utils'
+import type { CompanyOption } from '@/lib/company'
+import { shiftDate } from '@/lib/dates'
+import { formatDateShort } from '@/lib/format'
+import type { NoteDraft } from '@/hooks/useNotes'
 
-import { noteDialogCopy as copy } from '../company/copy'
-import { formatDate, formatDateRange } from '../shared/format'
+import { noteDialogCopy as copy } from './copy'
 
-export interface NoteDraft {
-  id?: string
-  cik: string | null
-  start_date: string
-  end_date: string
-  body: string
-}
-
-function Slotless({
-  asChild,
-  ...props
-}: React.ComponentProps<'div'> & { asChild?: boolean }) {
-  if (asChild && props.children) return <>{props.children}</>
-  return <div {...props} />
-}
-
-export interface CompanyOption {
-  cik: string
-  label: string
-}
+export type { NoteDraft }
 
 const WHOLE_MARKET = '__market__'
 const MIN_DATE = '1990-01-01'
 
-function maxDate(today: string) {
-  const d = new Date(`${today}T12:00:00Z`)
-  d.setUTCFullYear(d.getUTCFullYear() + 1)
-  return d.toISOString().slice(0, 10)
+/** A blank Note for a Company (or the whole market) on one date. */
+export function emptyDraft(cik: string | null, date: string): NoteDraft {
+  return { cik, start_date: date, end_date: date, body: '' }
 }
 
 const toIso = (d: Date) =>
-  new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()))
-    .toISOString()
-    .slice(0, 10)
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 const fromIso = (s: string) => {
   const [y, m, d] = s.split('-').map(Number)
   return new Date(y!, (m ?? 1) - 1, d ?? 1)
 }
 
-// Validation mirrors the API's PUT /notes/{id} rules (system design §5), so a
-// Note that passes here is not rejected by the server for its shape.
+// The API's PUT /notes/{id} rules (system design §5), so a Note that passes
+// here is not rejected by the server for its shape.
 export function validateNote(draft: NoteDraft, today: string) {
   const errors: Partial<Record<'body' | 'start_date' | 'end_date', string>> = {}
+  const max = shiftDate(today, { years: 1 })
   const body = draft.body.trim()
   if (body.length === 0) errors.body = copy.errors.bodyEmpty
   else if (body.length > 10_000) errors.body = copy.errors.bodyLong
   if (!draft.start_date) errors.start_date = copy.errors.startMissing
-  else if (draft.start_date < MIN_DATE || draft.start_date > maxDate(today)) {
+  else if (draft.start_date < MIN_DATE || draft.start_date > max)
     errors.start_date = copy.errors.outOfRange
-  }
   if (draft.end_date) {
-    if (draft.start_date && draft.end_date < draft.start_date) {
+    if (draft.start_date && draft.end_date < draft.start_date)
       errors.end_date = copy.errors.endBefore
-    } else if (draft.end_date > maxDate(today)) {
-      errors.end_date = copy.errors.outOfRange
-    }
+    else if (draft.end_date > max) errors.end_date = copy.errors.outOfRange
   }
   return errors
 }
@@ -98,15 +75,13 @@ function DateField({
   label,
   value,
   onChange,
-  error,
-  optional = false
+  error
 }: {
   id: string
   label: string
   value: string
   onChange: (value: string) => void
   error?: string
-  optional?: boolean
 }) {
   const [open, setOpen] = useState(false)
   return (
@@ -122,9 +97,9 @@ function DateField({
             variant='outline'
             aria-invalid={error ? true : undefined}
             aria-describedby={error ? `${id}-error` : undefined}
-            className='bg-secondary text-md tabular aria-invalid:border-destructive justify-between font-sans font-normal'
+            className='bg-secondary border-input text-md tabular aria-invalid:border-destructive justify-between font-sans font-normal'
           >
-            {value ? formatDate(value) : optional ? '—' : copy.pickDate}
+            {value ? formatDateShort(value) : copy.pickDate}
             <CalendarDays
               aria-hidden='true'
               className='text-muted-foreground'
@@ -157,37 +132,19 @@ function DateField({
 export function NoteDialog({
   open,
   onOpenChange,
-  initial,
-  companies,
-  lockCompany = false,
-  origin,
-  today,
-  onSave,
-  saveError = null
+  ...form
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
-  initial: NoteDraft
-  companies?: CompanyOption[]
-  lockCompany?: boolean
-  origin?: 'range' | 'date'
-  today: string
-  onSave: (draft: NoteDraft) => void
-  saveError?: string | null
-}) {
+} & Omit<NoteFormProps, 'onCancel' | 'onSaved'>) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className='touch:bottom-0 touch:top-auto touch:translate-y-0 bg-background gap-2.5 p-3.5 shadow-lg sm:max-w-[440px]'>
         {open && (
           <NoteForm
-            initial={initial}
-            companies={companies}
-            lockCompany={lockCompany}
-            origin={origin}
-            today={today}
-            onSave={onSave}
+            {...form}
             onCancel={() => onOpenChange(false)}
-            saveError={saveError}
+            onSaved={() => onOpenChange(false)}
           />
         )}
       </DialogContent>
@@ -195,28 +152,35 @@ export function NoteDialog({
   )
 }
 
+export interface NoteFormProps {
+  initial: NoteDraft
+  companies?: CompanyOption[]
+  /** The Company is set by where the Note was started (a Company chart);
+   * the dates stay editable. */
+  lockCompany?: boolean
+  origin?: 'range' | 'date'
+  today: string
+  onSave: (draft: NoteDraft) => Promise<unknown>
+  onCancel: () => void
+  onSaved?: () => void
+  inDialog?: boolean
+}
+
+// The form stays open, with its text, until the save succeeds. A failed
+// save shows why and keeps everything typed.
 export function NoteForm({
   initial,
   companies = [],
-  lockCompany,
+  lockCompany = false,
   origin,
   today,
   onSave,
   onCancel,
-  saveError,
+  onSaved,
   inDialog = true
-}: {
-  inDialog?: boolean
-  initial: NoteDraft
-  companies?: CompanyOption[]
-  lockCompany?: boolean
-  origin?: 'range' | 'date'
-  today: string
-  onSave: (draft: NoteDraft) => void
-  onCancel: () => void
-  saveError?: string | null
-}) {
+}: NoteFormProps) {
   const id = useId()
+  const [saveError, setSaveError] = useState<string | null>(null)
   const form = useForm({
     defaultValues: initial,
     validators: {
@@ -225,17 +189,33 @@ export function NoteForm({
         return Object.keys(errors).length ? { fields: errors } : undefined
       }
     },
-    onSubmit: ({ value }) =>
-      onSave({
-        ...value,
-        body: value.body.trim(),
-        end_date: value.end_date || value.start_date
-      })
+    onSubmit: async ({ value }) => {
+      setSaveError(null)
+      try {
+        await onSave({
+          ...value,
+          body: value.body.trim(),
+          end_date: value.end_date || value.start_date
+        })
+        onSaved?.()
+      } catch {
+        setSaveError(copy.saveFailed)
+      }
+    }
   })
+  // A new starting point (another chart date, another Note to edit) starts
+  // a fresh form.
+  const initialKey = `${initial.id}|${initial.cik}|${initial.start_date}|${initial.end_date}`
+  const [seenKey, setSeenKey] = useState(initialKey)
+  if (seenKey !== initialKey) {
+    setSeenKey(initialKey)
+    setSaveError(null)
+  }
+  useEffect(() => {
+    form.reset(initial)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialKey])
   const companyLabel = companies.find((c) => c.cik === initial.cik)?.label
-  const Header = inDialog ? DialogHeader : 'div'
-  const Title = inDialog ? DialogTitle : 'h2'
-  const Description = inDialog ? DialogDescription : Slotless
 
   return (
     <form
@@ -246,31 +226,32 @@ export function NoteForm({
       }}
       className='flex flex-col gap-2.5'
     >
-      <Header className='flex flex-col gap-1 text-left'>
-        <Title className='font-heading m-0 text-[20px] font-semibold leading-tight'>
-          {initial.id ? copy.editTitle : copy.newTitle}
-        </Title>
-        {lockCompany ? (
-          <Description asChild>
-            <div className='flex flex-wrap items-center gap-2 text-xs'>
-              <Badge variant='accent'>{companyLabel ?? copy.wholeMarket}</Badge>
-              <Badge variant='default' className='tabular'>
-                {formatDateRange(
-                  initial.start_date,
-                  initial.end_date || initial.start_date
-                )}
-              </Badge>
-              {origin && (
-                <span className='text-muted-foreground'>
-                  {origin === 'range' ? copy.fromRange : copy.fromDate}
-                </span>
-              )}
-            </div>
-          </Description>
+      <div className='flex flex-col gap-1 text-left'>
+        {inDialog ? (
+          <DialogTitle className='text-[20px] leading-tight'>
+            {initial.id ? copy.editTitle : copy.newTitle}
+          </DialogTitle>
         ) : (
-          <Description className='sr-only'>{copy.newTitle}</Description>
+          <h2 className='font-heading m-0 text-[20px] font-semibold leading-tight'>
+            {initial.id ? copy.editTitle : copy.newTitle}
+          </h2>
         )}
-      </Header>
+        {lockCompany ? (
+          <div className='flex flex-wrap items-center gap-2 text-xs'>
+            <Badge variant='accent'>{companyLabel ?? copy.wholeMarket}</Badge>
+            {origin && (
+              <span className='text-muted-foreground'>
+                {origin === 'range' ? copy.fromRange : copy.fromDate}
+              </span>
+            )}
+          </div>
+        ) : null}
+        {inDialog && (
+          <DialogDescription className='sr-only'>
+            {copy.newTitle}
+          </DialogDescription>
+        )}
+      </div>
 
       {!lockCompany && (
         <form.Field name='cik'>
@@ -307,33 +288,30 @@ export function NoteForm({
         </form.Field>
       )}
 
-      {!lockCompany && (
-        <div className='flex gap-2.5 max-sm:flex-col'>
-          <form.Field name='start_date'>
-            {(field) => (
-              <DateField
-                id={`${id}-start`}
-                label={copy.start}
-                value={field.state.value}
-                onChange={field.handleChange}
-                error={field.state.meta.errors[0] as string | undefined}
-              />
-            )}
-          </form.Field>
-          <form.Field name='end_date'>
-            {(field) => (
-              <DateField
-                id={`${id}-end`}
-                label={copy.end}
-                value={field.state.value}
-                onChange={field.handleChange}
-                error={field.state.meta.errors[0] as string | undefined}
-                optional
-              />
-            )}
-          </form.Field>
-        </div>
-      )}
+      <div className='flex gap-2.5 max-sm:flex-col'>
+        <form.Field name='start_date'>
+          {(field) => (
+            <DateField
+              id={`${id}-start`}
+              label={copy.start}
+              value={field.state.value}
+              onChange={field.handleChange}
+              error={field.state.meta.errors[0] as string | undefined}
+            />
+          )}
+        </form.Field>
+        <form.Field name='end_date'>
+          {(field) => (
+            <DateField
+              id={`${id}-end`}
+              label={copy.end}
+              value={field.state.value ?? ''}
+              onChange={field.handleChange}
+              error={field.state.meta.errors[0] as string | undefined}
+            />
+          )}
+        </form.Field>
+      </div>
 
       <form.Field name='body'>
         {(field) => {
@@ -381,7 +359,7 @@ export function NoteForm({
             <Button
               type='submit'
               disabled={submitting}
-              className={cn('touch:min-h-12')}
+              className='touch:min-h-12'
             >
               {submitting ? copy.saving : copy.save}
             </Button>

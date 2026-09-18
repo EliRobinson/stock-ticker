@@ -8,12 +8,13 @@ import {
   PopoverContent,
   PopoverTrigger
 } from '@/components/ui/popover'
+
+import type { MarketClock } from '@/lib/api'
+import { formatClock, formatTimeET, formatUsd } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 import { shellCopy } from '../shell/copy'
-import { formatClock, formatTimeET, formatUsd } from './format'
 import { sessionLabel, sessionOf } from './market-session'
-import type { MarketClock } from '@/lib/api'
 
 export function MarketStatusPill({
   clock,
@@ -106,7 +107,7 @@ export function IngestHealthPill({
         <strong className='font-heading text-md block font-semibold'>
           {detail.lastRunAt
             ? shellCopy.status.ingestLastRunAt(
-                formatTimeET(detail.lastRunAt, true)
+                formatTimeET(detail.lastRunAt, { seconds: true })
               )
             : shellCopy.status.ingestNoRun}
         </strong>

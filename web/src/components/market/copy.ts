@@ -1,17 +1,20 @@
+import { sharedCopy } from '../shared/copy'
+
 // Every user-facing string on the Market screen, in one place for review.
-// Chrome copy: the fact, then the consequence, then the action (AGENTS.md).
 
 export const marketCopy = {
   searchLabel: 'Search Listings',
-  searchPlaceholder: 'Symbol or Company name',
+  searchPlaceholder: sharedCopy.tickerOrName,
   sectorLabel: 'Sector filter',
+  sector: 'Sector',
   allSectors: 'All sectors',
   loading: 'Loading Listings…',
   count: (total: number, shown: number) => `${total} Listings · ${shown} shown`,
   columns: 'Columns',
+  filters: 'Filters and columns',
   optionalColumns: 'Optional columns',
   columnLabels: {
-    symbol: 'Symbol',
+    symbol: sharedCopy.ticker,
     name: 'Company',
     sector: 'Sector',
     price: 'Last',
@@ -35,9 +38,5 @@ export const marketCopy = {
   noMatchTitle: (query: string) =>
     query ? `No Listings match “${query}”` : 'No Listings match these filters',
   noMatchBody: 'Clear the search or adjust the sector filter.',
-  clearFilters: 'Clear filters',
-  historyStarts: (date: string) => `History starts ${date}`,
-  capUnavailable: 'Market Cap unavailable, no filing on record.',
-  quoteAge: (age: string) => `Quote is ${age} old`,
-  ageOld: (age: string) => `${age} old`
+  searchChip: (query: string) => `“${query}”`
 } as const

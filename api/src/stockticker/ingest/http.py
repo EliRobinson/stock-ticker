@@ -1,0 +1,153 @@
+"""Shared httpx client factory: timeouts, retry policy, and per-source rate
+budgets (system design §4, "HTTP rules").
+
+Every provider client (Alpaca, SEC EDGAR, the Wikipedia fetch) should call
+`build_http_client()` for its `httpx.AsyncClient` and `request()` for every
+call it makes, naming the rate budget it draws from.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import email.utils
+import time
+from dataclasses import dataclass
+from functools import lru_cache
+
+import httpx
+from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt
+
+DEFAULT_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=30.0, pool=30.0)
+
+RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+MAX_ATTEMPTS = 4
+BACKOFF_BASE_SECONDS = 1.0
+BACKOFF_CAP_SECONDS = 30.0
+
+
+@dataclass(frozen=True, slots=True)
+class RateBudget:
+    name: str
+    capacity: int
+    per_seconds: float
+
+
+# Names are part of the contract other ingest modules depend on — do not
+# rename without updating every caller.
+RATE_BUDGETS: dict[str, RateBudget] = {
+    "alpaca_quotes": RateBudget("alpaca_quotes", capacity=40, per_seconds=60.0),
+    "alpaca": RateBudget("alpaca", capacity=100, per_seconds=60.0),
+    "sec": RateBudget("sec", capacity=5, per_seconds=1.0),
+}
+
+
+class TokenBucket:
+    """A simple async token bucket. One instance per rate budget, shared by
+    every caller drawing from that budget within the process."""
+
+    def __init__(self, capacity: int, per_seconds: float) -> None:
+        self._capacity = float(capacity)
+        self._refill_rate = capacity / per_seconds
+        self._tokens = float(capacity)
+        self._updated_at = time.monotonic()
+        self._lock = asyncio.Lock()
+
+    async def acquire(self) -> None:
+        async with self._lock:
+            while True:
+                now = time.monotonic()
+                elapsed = now - self._updated_at
+                self._updated_at = now
+                self._tokens = min(self._capacity, self._tokens + elapsed * self._refill_rate)
+                if self._tokens >= 1:
+                    self._tokens -= 1
+                    return
+                await asyncio.sleep((1 - self._tokens) / self._refill_rate)
+
+
+@lru_cache
+def get_rate_budget(name: str) -> TokenBucket:
+    budget = RATE_BUDGETS[name]
+    return TokenBucket(budget.capacity, budget.per_seconds)
+
+
+def reset_rate_budgets() -> None:
+    """Test-only: clear cached token buckets between test cases."""
+    get_rate_budget.cache_clear()
+
+
+class RetryableStatusError(Exception):
+    def __init__(self, response: httpx.Response) -> None:
+        self.response = response
+        self.retry_after = _parse_retry_after(response.headers.get("retry-after"))
+        super().__init__(f"retryable status {response.status_code} from {response.request.url}")
+
+
+def _parse_retry_after(value: str | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        dt = email.utils.parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, (dt - dt.now(dt.tzinfo)).total_seconds())
+
+
+def _wait(retry_state) -> float:  # type: ignore[no-untyped-def]
+    attempt = retry_state.attempt_number
+    exp = min(BACKOFF_CAP_SECONDS, BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)))
+    jittered = exp * (0.5 + 0.5 * _jitter())
+    exc = retry_state.outcome.exception() if retry_state.outcome else None
+    if isinstance(exc, RetryableStatusError) and exc.retry_after is not None:
+        return float(max(jittered, exc.retry_after))
+    return float(jittered)
+
+
+def _jitter() -> float:
+    import random
+
+    return random.random()
+
+
+def build_http_client(
+    *,
+    base_url: str = "",
+    headers: dict[str, str] | None = None,
+    timeout: httpx.Timeout = DEFAULT_TIMEOUT,
+) -> httpx.AsyncClient:
+    return httpx.AsyncClient(base_url=base_url, headers=headers, timeout=timeout)
+
+
+async def request(
+    client: httpx.AsyncClient,
+    method: str,
+    url: str,
+    *,
+    rate_budget: str | None = None,
+    **kwargs: object,
+) -> httpx.Response:
+    """Issue one HTTP request under the named rate budget, with the shared
+    retry policy: connection errors, 429, and 5xx retry with exponential
+    backoff and full jitter (1s base, 30s cap, 4 attempts total), honoring
+    `Retry-After`. Any other 4xx fails immediately."""
+    bucket = get_rate_budget(rate_budget) if rate_budget else None
+
+    async for attempt in AsyncRetrying(
+        retry=retry_if_exception_type((httpx.TransportError, RetryableStatusError)),
+        stop=stop_after_attempt(MAX_ATTEMPTS),
+        wait=_wait,
+        reraise=True,
+    ):
+        with attempt:
+            if bucket is not None:
+                await bucket.acquire()
+            response = await client.request(method, url, **kwargs)  # type: ignore[arg-type]
+            if response.status_code in RETRYABLE_STATUS_CODES:
+                raise RetryableStatusError(response)
+            response.raise_for_status()
+            return response
+    raise AssertionError("unreachable: AsyncRetrying always raises or returns")

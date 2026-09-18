@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -19,20 +19,12 @@ from stockticker.ai.context import build_chat_deps
 from stockticker.ai.convert import ChatRequest
 from stockticker.ai.loop import new_message_id, stream_answer
 from stockticker.ai.stream import SSE_MEDIA_TYPE, UI_MESSAGE_STREAM_HEADERS, until_disconnected
+from stockticker.api.problems import Problem
 from stockticker.config import Settings, get_settings
 from stockticker.models.problem import ProblemDetail
 from stockticker.models.views import ViewSpec
 
 router = APIRouter(tags=["chat"])
-
-
-class Problem(HTTPException):
-    """Local shim for the foundation's `Problem(slug, status, detail)` domain
-    exception; the problem handlers render it as problem+json."""
-
-    def __init__(self, slug: str, status: int, detail: str) -> None:
-        super().__init__(status_code=status, detail=detail)
-        self.slug = slug
 
 
 class DataViewPart(BaseModel):

@@ -6,6 +6,7 @@ tests/integration/conftest.py for how to run these."""
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import AsyncIterator
 
 import pytest
@@ -16,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from stockticker.ai.executor import AiReaderExecutor, ToolError
 from stockticker.ai.guard import GuardError, guard_sql
+from stockticker.ai.prompt import _INSTRUCTIONS
 from stockticker.ai.schema_prompt import read_schema_catalog
 from stockticker.config import get_settings
 
@@ -259,3 +261,20 @@ async def test_ai_reader_cannot_read_base_tables_even_through_views_it_cannot_se
     async with ai_reader_engine.connect() as conn:
         with pytest.raises(DBAPIError):
             await conn.execute(text("SELECT * FROM public.notes"))
+
+
+PROMPT_EXAMPLES = re.findall(r"```sql\n(.*?)```", _INSTRUCTIONS, flags=re.DOTALL)
+
+
+@pytest.mark.parametrize("sql", PROMPT_EXAMPLES)
+async def test_every_prompt_example_passes_the_guard_and_runs(executor: AiReaderExecutor, sql: str) -> None:
+    await executor.execute(guard_sql(sql).wrapped_sql)
+
+
+async def test_today_ny_is_listed_and_callable(
+    ai_reader_engine: AsyncEngine, executor: AiReaderExecutor
+) -> None:
+    catalog = await read_schema_catalog(ai_reader_engine)
+    assert "today_ny" in {f.name for f in catalog.functions}
+    result = await executor.execute(guard_sql("SELECT ai.today_ny() AS today").wrapped_sql)
+    assert result.columns[0].type == "date"

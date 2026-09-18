@@ -12,7 +12,7 @@ from collections.abc import AsyncIterator
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import text
+from sqlalchemy import URL, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
@@ -23,7 +23,7 @@ from stockticker.ai.schema_prompt import read_schema_catalog
 from stockticker.config import get_settings
 
 
-def _engine(dsn: str, *, pool_size: int = 3) -> AsyncEngine:
+def _engine(dsn: URL, *, pool_size: int = 3) -> AsyncEngine:
     return create_async_engine(
         dsn,
         pool_size=pool_size,

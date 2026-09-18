@@ -18,7 +18,7 @@ from stockticker.ai.loop import Limits
 from stockticker.ai.pricing import ModelPrice, price_for, worst_case_cost_usd
 from stockticker.ai.spend import PostgresSpendLedger
 from stockticker.config import Settings
-from stockticker.db import get_app_writer_engine
+from stockticker.db import get_api_app_writer_engine
 from stockticker.logging import get_logger
 from stockticker.models.status import AiStatus
 
@@ -38,7 +38,7 @@ def typical_worst_case_usd(price: ModelPrice) -> Decimal:
 async def ai_status(settings: Settings) -> AiStatus:
     limit = settings.ai_spend_limit_usd
     try:
-        spent = await PostgresSpendLedger(get_app_writer_engine()).spent_usd()
+        spent = await PostgresSpendLedger(get_api_app_writer_engine()).spent_usd()
     except DBAPIError as error:
         logger.warning("ai_status_ledger_unreadable", error=str(error).splitlines()[0])
         return AiStatus(spend_usd=0.0, limit_usd=float(limit), enabled=False)

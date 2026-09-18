@@ -159,6 +159,11 @@ describe('directionOf', () => {
   ] as const)('classifies %s as %s', (value, expected) => {
     expect(directionOf(value)).toBe(expected)
   })
+
+  it('rounds to the given precision before classifying', () => {
+    expect(directionOf(-0.001)).toBe('flat')
+    expect(directionOf(-0.001, 4)).toBe('down')
+  })
 })
 
 describe('formatSigned', () => {

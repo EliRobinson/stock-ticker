@@ -5,12 +5,25 @@ const EMPTY = '—'
  * Design both use it for negative price/percent chrome. */
 const MINUS = '−'
 
+/** The market clock and every Trading Day are dated in New York time
+ * (CONTEXT.md) - used everywhere a real timestamp (not a bare calendar
+ * date - see calendarDateParts) needs to show in market time. */
+const MARKET_TIME_ZONE = 'America/New_York'
+
 /** The one parser for "a decimal-string-or-number-or-null from the API" -
  * shared with market-table.ts instead of a second copy there. */
 export function toNumber(value: NumericInput): number | null {
   if (value === null || value === undefined || value === '') return null
   const n = typeof value === 'number' ? value : Number(value)
   return Number.isFinite(n) ? n : null
+}
+
+/** The empty-or-invalid guard every timestamp formatter needs, in one
+ * place, instead of a `!value` + `new Date` + `isNaN` copy in each one. */
+function parseInstant(value: string | null | undefined): Date | null {
+  if (!value) return null
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? null : date
 }
 
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/
@@ -51,10 +64,16 @@ function calendarDateParts(
 
 export type Direction = 'up' | 'down' | 'flat'
 
-export function directionOf(value: NumericInput): Direction {
+/** Rounds to `precision` decimals before deciding the sign - a value that
+ * rounds to 0 there (e.g. -0.001 at the default 2 decimals) is flat, not
+ * down. Every signed formatter below (and chart-data's volume direction)
+ * calls this, so a delta's text and its arrow/color can never disagree. */
+export function directionOf(value: NumericInput, precision = 2): Direction {
   const n = toNumber(value)
-  if (n === null || n === 0) return 'flat'
-  return n > 0 ? 'up' : 'down'
+  if (n === null) return 'flat'
+  const rounded = Number(n.toFixed(precision))
+  if (rounded === 0) return 'flat'
+  return rounded > 0 ? 'up' : 'down'
 }
 
 export interface FormatPriceOptions {
@@ -79,23 +98,33 @@ export function formatPrice(
   return currency ? `$${grouped}` : grouped
 }
 
-/** Rounds first, then signs from the ROUNDED value - a value that rounds
- * to 0 (e.g. -0.001 at 2 decimals) must render as "$0.00", never
- * "−$0.00". */
-export function formatChange(value: NumericInput): string {
+export interface FormatSignedFixedOptions {
+  prefix?: string
+  suffix?: string
+}
+
+/** formatChange and formatPercent are both "sign it from the rounded
+ * value, fix to 2 decimals, wrap in a prefix/suffix" - this is the one
+ * implementation, so the two can't quietly diverge on how they round or
+ * sign. */
+function formatSignedFixed(
+  value: NumericInput,
+  { prefix = '', suffix = '' }: FormatSignedFixedOptions = {}
+): string {
   const n = toNumber(value)
   if (n === null) return EMPTY
+  const direction = directionOf(n)
   const rounded = Number(Math.abs(n).toFixed(2))
-  const sign = rounded === 0 ? '' : n > 0 ? '+' : MINUS
-  return `${sign}$${rounded.toFixed(2)}`
+  const sign = direction === 'flat' ? '' : direction === 'up' ? '+' : MINUS
+  return `${sign}${prefix}${rounded.toFixed(2)}${suffix}`
+}
+
+export function formatChange(value: NumericInput): string {
+  return formatSignedFixed(value, { prefix: '$' })
 }
 
 export function formatPercent(value: NumericInput): string {
-  const n = toNumber(value)
-  if (n === null) return EMPTY
-  const rounded = Number(Math.abs(n).toFixed(2))
-  const sign = rounded === 0 ? '' : n > 0 ? '+' : MINUS
-  return `${sign}${rounded.toFixed(2)}%`
+  return formatSignedFixed(value, { suffix: '%' })
 }
 
 interface ScaleTier {
@@ -108,7 +137,9 @@ interface ScaleTier {
  * Trillions get two decimals, everything else gets one - matching the
  * brief's own examples ("$2.91T / $487.2B / $3.4M"): a trillion-dollar
  * Company is rare enough that the extra digit of precision is worth it,
- * every other tier doesn't need it.
+ * every other tier doesn't need it. Kept separate from VOLUME_TIERS even
+ * though the shapes match - a share-volume tier table and a dollar-value
+ * one change for unrelated reasons.
  */
 const MARKET_CAP_TIERS: ScaleTier[] = [
   { threshold: 1e12, suffix: 'T', decimals: 2 },
@@ -161,33 +192,44 @@ function tieredIsZero(
   return Number(abs.toFixed(fallbackDecimals)) === 0
 }
 
-export function formatMarketCap(value: NumericInput): string {
+export interface FormatTieredOptions {
+  prefix?: string
+}
+
+/** formatMarketCap and formatVolume are both "sign it (never a signed
+ * zero), pick a tier, round within it" over their own tier table - this is
+ * the one implementation; the tables themselves stay separate (see
+ * MARKET_CAP_TIERS). */
+function formatTiered(
+  value: NumericInput,
+  tiers: ScaleTier[],
+  fallbackDecimals: number,
+  { prefix = '' }: FormatTieredOptions = {}
+): string {
   const n = toNumber(value)
   if (n === null) return EMPTY
   const abs = Math.abs(n)
-  const isZero = tieredIsZero(abs, MARKET_CAP_TIERS, 2)
+  const isZero = tieredIsZero(abs, tiers, fallbackDecimals)
   const sign = isZero ? '' : n < 0 ? MINUS : ''
-  return `${sign}$${tieredMagnitude(abs, MARKET_CAP_TIERS, 2)}`
+  return `${sign}${prefix}${tieredMagnitude(abs, tiers, fallbackDecimals)}`
+}
+
+export function formatMarketCap(value: NumericInput): string {
+  return formatTiered(value, MARKET_CAP_TIERS, 2, { prefix: '$' })
 }
 
 export function formatVolume(value: NumericInput): string {
-  const n = toNumber(value)
-  if (n === null) return EMPTY
-  const abs = Math.abs(n)
-  const isZero = tieredIsZero(abs, VOLUME_TIERS, 0)
-  const sign = isZero ? '' : n < 0 ? MINUS : ''
-  return `${sign}${tieredMagnitude(abs, VOLUME_TIERS, 0)}`
+  return formatTiered(value, VOLUME_TIERS, 0)
 }
 
 export function formatDate(value: string | null | undefined): string {
-  if (!value) return EMPTY
-  const calendarDate = calendarDateParts(value)
+  const calendarDate = value ? calendarDateParts(value) : null
   if (calendarDate) {
     const { year, month, day } = calendarDate
     return `${MONTH_ABBREVIATIONS[month - 1]} ${day}, ${year}`
   }
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return EMPTY
+  const date = parseInstant(value)
+  if (!date) return EMPTY
   return new Intl.DateTimeFormat('en-US', {
     year: 'numeric',
     month: 'short',
@@ -197,9 +239,8 @@ export function formatDate(value: string | null | undefined): string {
 }
 
 export function formatDateTime(value: string | null | undefined): string {
-  if (!value) return EMPTY
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return EMPTY
+  const date = parseInstant(value)
+  if (!date) return EMPTY
   return new Intl.DateTimeFormat('en-US', {
     year: 'numeric',
     month: 'short',
@@ -209,21 +250,19 @@ export function formatDateTime(value: string | null | undefined): string {
   }).format(date)
 }
 
-/** The market clock and every Trading Day are dated in New York time
- * (CONTEXT.md), so times shown next to them - "Data as of", a Quote's
- * observed_at - use America/New_York explicitly rather than the viewer's
+/** Times shown next to the market clock - "Data as of", a Quote's
+ * observed_at - use MARKET_TIME_ZONE explicitly rather than the viewer's
  * local zone, with the zone name (EDT/EST) printed so it's never ambiguous. */
 export function formatDateTimeET(value: string | null | undefined): string {
-  if (!value) return EMPTY
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return EMPTY
+  const date = parseInstant(value)
+  if (!date) return EMPTY
   return new Intl.DateTimeFormat('en-US', {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
     hour: 'numeric',
     minute: '2-digit',
-    timeZone: 'America/New_York',
+    timeZone: MARKET_TIME_ZONE,
     timeZoneName: 'short'
   }).format(date)
 }
@@ -239,14 +278,13 @@ export function formatTimeET(
   value: string | null | undefined,
   { seconds = false }: FormatTimeETOptions = {}
 ): string {
-  if (!value) return EMPTY
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return EMPTY
+  const date = parseInstant(value)
+  if (!date) return EMPTY
   const time = new Intl.DateTimeFormat('en-US', {
     hour: 'numeric',
     minute: '2-digit',
     second: seconds ? '2-digit' : undefined,
-    timeZone: 'America/New_York'
+    timeZone: MARKET_TIME_ZONE
   }).format(date)
   return `${time} ET`
 }
@@ -257,19 +295,18 @@ export function formatTimeET(
  * instead of trusting a locale's day-first ordering. A bare calendar date
  * never goes through Intl/timeZone at all - see calendarDateParts. */
 export function formatDateShort(value: string | null | undefined): string {
-  if (!value) return EMPTY
-  const calendarDate = calendarDateParts(value)
+  const calendarDate = value ? calendarDateParts(value) : null
   if (calendarDate) {
     const { year, month, day } = calendarDate
     return `${day} ${MONTH_ABBREVIATIONS[month - 1]} ${year}`
   }
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return EMPTY
+  const date = parseInstant(value)
+  if (!date) return EMPTY
   const parts = new Intl.DateTimeFormat('en-US', {
     day: 'numeric',
     month: 'short',
     year: 'numeric',
-    timeZone: 'America/New_York'
+    timeZone: MARKET_TIME_ZONE
   }).formatToParts(date)
   const part = (type: string) => parts.find((p) => p.type === type)?.value ?? ''
   return `${part('day')} ${part('month')} ${part('year')}`
@@ -303,10 +340,11 @@ const ARROWS: Record<Direction, string> = {
 
 /**
  * `precision` must match how many decimals `formatter` renders - direction
- * is decided from `n` rounded to that same precision, so a value that
- * rounds to zero (e.g. -0.001 at the default 2 decimals) reads as flat, not
- * "0.00 ↓". Pass a matching `precision` alongside a custom formatter
- * with different rounding (e.g. formatMarketCap's variable decimals).
+ * is decided (via directionOf) from `n` rounded to that same precision, so
+ * a value that rounds to zero (e.g. -0.001 at the default 2 decimals)
+ * reads as flat, not "0.00 ↓". Pass a matching `precision` alongside a
+ * custom formatter with different rounding (e.g. formatMarketCap's
+ * variable decimals).
  */
 export function formatSigned(
   value: NumericInput,
@@ -315,9 +353,7 @@ export function formatSigned(
 ): SignedFormat {
   const n = toNumber(value)
   if (n === null) return { text: EMPTY, direction: 'flat', arrow: '' }
-  const rounded = Number(n.toFixed(precision))
-  const direction: Direction =
-    rounded === 0 ? 'flat' : rounded > 0 ? 'up' : 'down'
+  const direction = directionOf(n, precision)
   const text = formatter(Math.abs(n))
   return { text, direction, arrow: ARROWS[direction] }
 }

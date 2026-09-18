@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
+from stockticker.models.pagination import Page
+
 EventKind = Literal[
     "split",
     "reverse_split",
@@ -30,6 +32,7 @@ class Event(BaseModel):
     source_ref: str
 
 
-class EventsPage(BaseModel):
-    items: list[Event]
-    next_cursor: str | None = None
+class EventsPage(Page[Event]):
+    """Keyset page of Events (system design §5, amended). A distinct
+    subclass, not a bare `Page[Event]` alias, so the OpenAPI schema keeps
+    the name `EventsPage` instead of a generic-mangled one."""

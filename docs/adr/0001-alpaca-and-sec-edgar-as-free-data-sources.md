@@ -4,7 +4,7 @@ We need live Quotes for ~500 Companies, Daily Bars back to 2018, and real histor
 
 ## Consequences
 
-- Free Alpaca Quotes are real-time but come from the IEX exchange alone, so they can differ slightly from the consolidated price. The upgrade path is Alpaca's paid tier (full SIP in real time). It uses the same endpoints with `feed=sip`, so no other code changes.
+- Free Alpaca Quotes are real-time but come from the IEX exchange alone, so they can differ slightly from the consolidated price. The upgrade path is Alpaca's paid tier (full SIP in real time). A paid SIP _poll_ needs no code change: it is the same `QuoteSource.snapshot` call with `feed=sip`, writing to the same `upsert_quotes` sink (system-design.md §4). A paid SIP _websocket_ is not free of code changes; it is a new adapter implementing `QuoteSource.stream`, feeding that same sink.
 - Market Cap moves in quarterly steps, because EDGAR shares outstanding are reported once per filing. We must adjust for stock splits between a filing and a trading day ourselves.
 - Running the app needs a free Alpaca API key. EDGAR needs no key, only a User-Agent header with a contact email.
 

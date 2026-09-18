@@ -349,29 +349,41 @@ async def test_no_key() -> None:
 # --- disconnect ----------------------------------------------------------------
 
 
+class Client:
+    """The request's ASGI `receive`: it answers `http.disconnect` once `leave()` is called."""
+
+    def __init__(self) -> None:
+        self.gone = asyncio.Event()
+        self.reads = 0
+
+    def leave(self) -> None:
+        self.gone.set()
+
+    async def receive(self) -> dict[str, Any]:
+        self.reads += 1
+        await self.gone.wait()
+        return {"type": "http.disconnect"}
+
+
 async def test_disconnect_during_the_model_stream_cancels_it_and_sends_nothing_more() -> None:
     anthropic = ScriptedAnthropic(
         message_start() + text_block(0, "a", "b", "c") + message_end("end_turn"), stall_after_first_chunk=True
     )
     ledger = MemoryLedger()
-    disconnected = False
-
-    async def is_disconnected() -> bool:
-        return disconnected
+    client = Client()
 
     received: list[str] = []
     relay = until_disconnected(
-        answer_producer(make_deps(anthropic, ledger=ledger), [user("q")], "m"),
-        is_disconnected,
-        poll_seconds=0.01,
+        answer_producer(make_deps(anthropic, ledger=ledger), [user("q")], "m"), client.receive
     )
     async for chunk in relay:
         received.append(chunk)
         if len(received) == 2:
-            disconnected = True
+            client.leave()
     await asyncio.wait_for(anthropic.stream_closed.wait(), timeout=2)
     await asyncio.sleep(0.05)
     assert part_types("".join(received)) == ["start", "start-step"]
+    assert client.reads == 1
     (row,) = ledger.rows
     assert row.state == "recorded"  # settled even though the call was cancelled
 
@@ -379,20 +391,39 @@ async def test_disconnect_during_the_model_stream_cancels_it_and_sends_nothing_m
 async def test_disconnect_during_a_query_cancels_it() -> None:
     anthropic = ScriptedAnthropic(tool_call("t1", "run_sql", {"sql": SQL, "purpose": "p"}))
     executor = FakeExecutor(one_row(), delay=30)
-    polls = 0
+    client = Client()
 
-    async def is_disconnected() -> bool:
-        nonlocal polls
-        polls += 1
-        return bool(executor.queries)
+    async def leave_once_the_query_runs() -> None:
+        while not executor.queries:
+            await asyncio.sleep(0.001)
+        client.leave()
 
+    leaving = asyncio.create_task(leave_once_the_query_runs())
     received = [
         c
         async for c in until_disconnected(
-            answer_producer(make_deps(anthropic, executor), [user("q")], "m"),
-            is_disconnected,
-            poll_seconds=0.01,
+            answer_producer(make_deps(anthropic, executor), [user("q")], "m"), client.receive
         )
     ]
+    await leaving
     await asyncio.wait_for(executor.cancelled.wait(), timeout=2)
     assert all('"error"' not in c and '"finish"' not in c for c in received)
+
+
+async def test_a_client_gone_before_the_first_part_gets_nothing_and_the_answer_is_cancelled() -> None:
+    cancelled = asyncio.Event()
+
+    async def producer(emit: Any) -> None:
+        await emit('data: {"type":"start","messageId":"m"}\n\n')
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    client = Client()
+    client.leave()
+    received = [c async for c in until_disconnected(producer, client.receive)]
+    assert received == []
+    await asyncio.wait_for(cancelled.wait(), timeout=2)
+    assert client.reads == 1

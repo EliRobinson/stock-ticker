@@ -167,6 +167,86 @@ async def test_upsert_bars_writes_joined_ohlcv_adj_close_and_source(app_writer_e
         await _cleanup(conn, cik, symbol)
 
 
+async def test_upsert_bars_one_bad_row_in_a_good_batch_is_a_failed_item_not_a_lost_batch(
+    app_writer_engine: AsyncEngine,
+) -> None:
+    """A row violating daily_bars' own CHECK constraint (high >=
+    greatest(open, close), here) must not fail the whole unnest-based
+    batch -- it becomes a FailedItem, and the good row in the same batch is
+    still written (round 2 FIX-LATER, issue #32)."""
+    cik_good = f"9{uuid.uuid4().int % 10**8:08d}"
+    cik_bad = f"8{uuid.uuid4().int % 10**8:08d}"
+    symbol_good = f"T{uuid.uuid4().hex[:6].upper()}"
+    symbol_bad = f"T{uuid.uuid4().hex[:6].upper()}"
+    trade_date = date(2024, 1, 2)
+
+    async with app_writer_engine.connect() as conn:
+        await _seed_company_and_listing(conn, cik_good, symbol_good)
+        await _seed_company_and_listing(conn, cik_bad, symbol_bad)
+        await conn.execute(
+            text(
+                "INSERT INTO trading_days (trade_date, open_at, close_at) "
+                "VALUES (:d, :open_at, :close_at) ON CONFLICT DO NOTHING"
+            ),
+            {
+                "d": trade_date,
+                "open_at": datetime(2024, 1, 2, 14, 30, tzinfo=UTC),
+                "close_at": datetime(2024, 1, 2, 21, 0, tzinfo=UTC),
+            },
+        )
+        await conn.commit()
+
+        good_bar = ProviderBar(
+            symbol=symbol_good,
+            trade_date=trade_date,
+            open=Decimal("10.00"),
+            high=Decimal("11.00"),
+            low=Decimal("9.50"),
+            close=Decimal("10.50"),
+            volume=1_000,
+            adj_close=Decimal("10.40"),
+            source="alpaca",
+        )
+        # high (10.50) is below close (11.00) -- violates
+        # `high >= greatest(open, close)`.
+        bad_bar = ProviderBar(
+            symbol=symbol_bad,
+            trade_date=trade_date,
+            open=Decimal("10.00"),
+            high=Decimal("10.50"),
+            low=Decimal("9.50"),
+            close=Decimal("11.00"),
+            volume=1_000,
+            adj_close=Decimal("10.90"),
+            source="alpaca",
+        )
+
+        result = await upsert_bars(conn, [good_bar, bad_bar])
+        await conn.commit()
+
+        assert result.rows_written == 1
+        assert len(result.failed_items) == 1
+        assert result.failed_items[0].key == f"{symbol_bad}:{trade_date}"
+        assert "high" in result.failed_items[0].error
+
+        row = (
+            await conn.execute(
+                text("SELECT close FROM daily_bars WHERE symbol = :symbol"), {"symbol": symbol_good}
+            )
+        ).one()
+        assert row.close == Decimal("10.50")
+
+        bad_count = (
+            await conn.execute(
+                text("SELECT count(*) AS n FROM daily_bars WHERE symbol = :symbol"), {"symbol": symbol_bad}
+            )
+        ).one()
+        assert bad_count.n == 0
+
+        await _cleanup(conn, cik_good, symbol_good)
+        await _cleanup(conn, cik_bad, symbol_bad)
+
+
 async def test_upsert_bars_empty_list_writes_nothing(app_writer_engine: AsyncEngine) -> None:
     async with app_writer_engine.connect() as conn:
         result = await upsert_bars(conn, [])

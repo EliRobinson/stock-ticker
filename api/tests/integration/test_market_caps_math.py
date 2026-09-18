@@ -324,16 +324,75 @@ async def test_tie_break_prefers_dei_over_us_gaap_for_the_same_date_and_filing(s
     assert (await s.caps(cik))[d("2022-05-02")].shares_used == 2_020
 
 
-async def test_the_latest_as_of_date_wins_over_a_later_filing(s: Scenario) -> None:
+async def test_the_latest_filing_wins_over_a_later_as_of_date(s: Scenario) -> None:
     cik = await s.company()
     symbol = await s.listing(cik)
     await s.shares(cik, "2022-04-15", "2022-04-27", 3_000, concept=DEI_SHARES)
     await s.shares(cik, "2022-03-31", "2022-04-29", 2_990, concept=US_GAAP_SHARES)
+    await s.bars(symbol, {"2022-04-28": "1", "2022-05-02": "1"})
+
+    await rebuild_company(s.conn, cik)
+
+    caps = await s.caps(cik)
+    assert caps[d("2022-04-28")].shares_used == 3_000
+    assert caps[d("2022-05-02")].shares_used == 2_990
+
+
+async def test_within_one_filing_the_latest_as_of_date_wins(s: Scenario) -> None:
+    cik = await s.company()
+    symbol = await s.listing(cik)
+    await s.shares(cik, "2021-12-31", "2022-04-27", 1_000, concept=US_GAAP_SHARES, accession="q1")
+    await s.shares(cik, "2022-03-31", "2022-04-27", 1_010, concept=US_GAAP_SHARES, accession="q1")
     await s.bars(symbol, {"2022-05-02": "1"})
 
     await rebuild_company(s.conn, cik)
 
-    assert (await s.caps(cik))[d("2022-05-02")].shares_used == 3_000
+    assert (await s.caps(cik))[d("2022-05-02")].shares_used == 1_010
+
+
+async def test_a_split_between_the_cover_date_and_the_filing_applies_to_a_dei_count(s: Scenario) -> None:
+    """A cover-page count is the number outstanding on its as_of_date, so a
+    split after that day is still owed even though the filing came later."""
+    cik = await s.company()
+    symbol = await s.listing(cik)
+    await s.shares(cik, "2024-05-17", "2024-05-29", 2_464_000_000)
+    await s.event(cik, symbol, "split", "2024-05-24", {"new_rate": 10, "old_rate": 1})
+    await s.bars(symbol, {"2024-05-30": "110.50"})
+
+    await rebuild_company(s.conn, cik)
+
+    assert (await s.caps(cik))[d("2024-05-30")].shares_used == 24_640_000_000
+
+
+async def test_berkshire_without_a_whole_company_count_gets_no_rows(s: Scenario) -> None:
+    await s.company(BERKSHIRE)
+    brk_b = await s.listing(BERKSHIRE, "BRK.B")
+    await s.bars(brk_b, {"2023-11-01": "345.67"})
+
+    rebuilt = await rebuild_company(s.conn, BERKSHIRE)
+
+    assert await s.caps(BERKSHIRE) == {}
+    assert rebuilt.no_whole_company_count is True
+    assert rebuilt.rejections == []
+
+
+async def test_brown_forman_is_seeded_as_multi_class_priced_on_bf_b(s: Scenario) -> None:
+    rule = (
+        await s.conn.execute(
+            text("SELECT price_symbol, shares_unit_ratio FROM share_class_rules WHERE cik = '0000014693'")
+        )
+    ).one()
+    assert (rule.price_symbol, rule.shares_unit_ratio) == ("BF.B", 1)
+
+    bf_b = await s.listing("0000014693", "BF.B")
+    await s.shares("0000014693", "2023-11-30", "2023-12-06", 473_000_000)
+    await s.bars(bf_b, {"2023-12-07": "58.00"})
+
+    await rebuild_company(s.conn, "0000014693")
+
+    row = (await s.caps("0000014693"))[d("2023-12-07")]
+    assert row.is_multi_class is True
+    assert row.market_cap == Decimal("58.00") * 473_000_000
 
 
 async def test_no_row_before_the_first_filing(s: Scenario) -> None:

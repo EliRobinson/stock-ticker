@@ -181,10 +181,10 @@ export interface components {
   schemas: {
     /**
      * AiStatus
-     * @description Populated once the AI chat agent's `ai_usage` table (migration
-     *     0002+) and pricing module exist; see `_ai_status` in
-     *     `api/routers/status.py` for exactly what's real today versus a
-     *     placeholder.
+     * @description Owned end to end by the AI chat agent's `stockticker.ai.status.
+     *     ai_status(settings)` (issue #7's agreed contract) -- this model just
+     *     gives it a shape to return. `StatusResponse.ai` is null until that
+     *     module exists and `api/routers/status.py` calls it.
      */
     AiStatus: {
       /** Enabled */
@@ -235,6 +235,13 @@ export interface components {
        */
       timeframe: '1d'
     }
+    /** ChartSeries */
+    ChartSeries: {
+      /** Key */
+      key: string
+      /** Label */
+      label: string
+    }
     /** CompanyDetail */
     CompanyDetail: {
       /** Cik */
@@ -260,6 +267,25 @@ export interface components {
       week_52_high: string | null
       /** Week 52 Low */
       week_52_low: string | null
+    }
+    /**
+     * DataViewPart
+     * @description The `data-view` stream part: a table or chart built from a result the
+     *     model has seen. Documented here so the web app can generate its type.
+     */
+    DataViewPart: {
+      /** Data */
+      data:
+        | components['schemas']['TableSpec']
+        | components['schemas']['TimeseriesChartSpec']
+      /** Id */
+      id: string
+      /**
+       * Type
+       * @default data-view
+       * @constant
+       */
+      type: 'data-view'
     }
     /** Event */
     Event: {
@@ -353,6 +379,8 @@ export interface components {
     }
     /** ListingSummary */
     ListingSummary: {
+      /** Backfill Completed At */
+      backfill_completed_at: string | null
       /** First Bar Date */
       first_bar_date: string | null
       /** Is Active */
@@ -410,6 +438,8 @@ export interface components {
     }
     /** MarketRow */
     MarketRow: {
+      /** Backfill Completed At */
+      backfill_completed_at: string | null
       /** Change */
       change: string | null
       /** Change Pct */
@@ -418,6 +448,8 @@ export interface components {
       cik: string
       /** First Bar Date */
       first_bar_date: string | null
+      /** Is Primary */
+      is_primary: boolean
       /** Market Cap */
       market_cap: string | null
       /** Market Cap Is Approx */
@@ -533,7 +565,10 @@ export interface components {
        */
       type: string
     }
-    /** ReadyResponse */
+    /**
+     * ReadyResponse
+     * @description `/api/v1/health/ready`: DB reachable and schema at the Alembic head.
+     */
     ReadyResponse: {
       /**
        * Database
@@ -553,7 +588,7 @@ export interface components {
     }
     /** StatusResponse */
     StatusResponse: {
-      ai: components['schemas']['AiStatus']
+      ai: components['schemas']['AiStatus'] | null
       backfill: components['schemas']['BackfillProgress']
       /** Data As Of */
       data_as_of: string | null
@@ -569,6 +604,55 @@ export interface components {
        * Format: date-time
        */
       server_time: string
+    }
+    /** TableColumn */
+    TableColumn: {
+      /** Format */
+      format?: string | null
+      /** Key */
+      key: string
+      /** Label */
+      label: string
+    }
+    /** TableSpec */
+    TableSpec: {
+      /** Columns */
+      columns: components['schemas']['TableColumn'][]
+      /** Id */
+      id: string
+      /**
+       * @description discriminator enum property added by openapi-typescript
+       * @enum {string}
+       */
+      kind: 'table'
+      /** Rows */
+      rows: {
+        [key: string]: unknown
+      }[]
+      /** Title */
+      title: string
+    }
+    /** TimeseriesChartSpec */
+    TimeseriesChartSpec: {
+      /** Id */
+      id: string
+      /**
+       * @description discriminator enum property added by openapi-typescript
+       * @enum {string}
+       */
+      kind: 'timeseries'
+      /** Rows */
+      rows: {
+        [key: string]: unknown
+      }[]
+      /** Series */
+      series: components['schemas']['ChartSeries'][]
+      /** Title */
+      title: string
+      /** X */
+      x: string
+      /** Y Format */
+      y_format?: string | null
     }
     /** ValidationError */
     ValidationError: {
@@ -599,19 +683,59 @@ export interface operations {
       path?: never
       cookie?: never
     }
-    requestBody?: never
+    requestBody: {
+      content: {
+        'application/json': {
+          id?: string | null
+          messageId?: string | null
+          messages: ({
+            /** @default  */
+            id?: string
+            parts?: {
+              [key: string]: unknown
+            }[]
+            /** @enum {string} */
+            role: 'system' | 'user' | 'assistant'
+          } & {
+            [key: string]: unknown
+          })[]
+          trigger?: string | null
+        } & {
+          [key: string]: unknown
+        }
+      }
+    }
     responses: {
-      /** @description Successful Response */
+      /** @description An AI SDK UI message stream (v1): `data: <json>` server-sent events, ending with `data: [DONE]`. The schema shown is the app-specific `data-view` part; the other parts are the AI SDK's own. */
       200: {
         headers: {
           [name: string]: unknown
         }
         content: {
-          'application/json': unknown
+          'application/json': components['schemas']['DataViewPart']
+          'text/event-stream': components['schemas']['DataViewPart']
         }
       }
-      /** @description Not Implemented */
-      501: {
+      /** @description Request Entity Too Large */
+      413: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ProblemDetail']
+        }
+      }
+      /** @description Unsupported Media Type */
+      415: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ProblemDetail']
+        }
+      }
+      /** @description Unprocessable Entity */
+      422: {
         headers: {
           [name: string]: unknown
         }

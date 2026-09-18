@@ -3,7 +3,10 @@ import type { StatusResponse } from '@/lib/api'
 import { CLOSED_NOW, FIXTURE_NOW, NEXT_CLOSE, NEXT_OPEN } from './market'
 
 type Job = StatusResponse['jobs'][number]
-type AiStatus = StatusResponse['ai']
+// `NonNullable`, not `StatusResponse['ai']` directly - these fixtures are
+// always a real reading, never the "AI status module isn't up yet" null,
+// so callers like states-board.tsx can read `.spend_usd` without a guard.
+type AiStatus = NonNullable<StatusResponse['ai']>
 
 export const aiOk: AiStatus = { spend_usd: 1.24, limit_usd: 5, enabled: true }
 export const aiSpent: AiStatus = { spend_usd: 5, limit_usd: 5, enabled: false }

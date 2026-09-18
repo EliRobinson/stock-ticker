@@ -33,6 +33,8 @@ function makeRow(overrides: Partial<MarketRow>): MarketRow {
     market_cap: '2900000000000',
     market_cap_is_approx: false,
     first_bar_date: '2018-01-02',
+    backfill_completed_at: '2018-01-02',
+    is_primary: true,
     ...overrides
   }
 }

@@ -696,22 +696,29 @@ const ageSecondsBySymbol = (i: number) => 12 + (i % 5)
 export function buildMarketRows(now = FIXTURE_NOW): MarketRow[] {
   const nowMs = Date.parse(now)
   return SEEDS.map(
-    ([symbol, cik, name, sector, price, pct, change, cap, volume], i) => ({
-      symbol,
-      cik,
-      name,
-      sector,
-      price: price.toFixed(2),
-      observed_at: new Date(nowMs - ageSecondsBySymbol(i) * 1000).toISOString(),
-      prev_close: (price - change).toFixed(2),
-      change: change.toFixed(2),
-      change_pct: pct.toFixed(2),
-      volume: Math.round(volume),
-      market_cap: cap == null ? null : cap.toFixed(0),
-      market_cap_is_approx:
-        symbol === 'GOOGL' || symbol === 'GOOG' || symbol === 'BRK.B',
-      first_bar_date: RECENT_LISTINGS[symbol] ?? '2018-01-02'
-    })
+    ([symbol, cik, name, sector, price, pct, change, cap, volume], i) => {
+      const firstBarDate = RECENT_LISTINGS[symbol] ?? '2018-01-02'
+      return {
+        symbol,
+        cik,
+        name,
+        sector,
+        price: price.toFixed(2),
+        observed_at: new Date(
+          nowMs - ageSecondsBySymbol(i) * 1000
+        ).toISOString(),
+        prev_close: (price - change).toFixed(2),
+        change: change.toFixed(2),
+        change_pct: pct.toFixed(2),
+        volume: Math.round(volume),
+        market_cap: cap == null ? null : cap.toFixed(0),
+        market_cap_is_approx:
+          symbol === 'GOOGL' || symbol === 'GOOG' || symbol === 'BRK.B',
+        first_bar_date: firstBarDate,
+        backfill_completed_at: firstBarDate,
+        is_primary: symbol !== 'GOOG'
+      }
+    }
   )
 }
 

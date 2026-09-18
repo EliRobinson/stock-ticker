@@ -24,6 +24,16 @@ def _reset_budgets() -> Iterator[None]:
     reset_rate_budgets()
 
 
+def test_build_http_client_defaults_to_not_following_redirects() -> None:
+    client = build_http_client(base_url="https://example.test")
+    assert client.follow_redirects is False
+
+
+def test_build_http_client_can_opt_into_following_redirects() -> None:
+    client = build_http_client(base_url="https://example.test", follow_redirects=True)
+    assert client.follow_redirects is True
+
+
 def test_rate_budgets_match_the_documented_limits() -> None:
     assert RATE_BUDGETS[RateBudgetName.ALPACA_QUOTES].capacity == 40
     assert RATE_BUDGETS[RateBudgetName.ALPACA_QUOTES].per_seconds == 60.0

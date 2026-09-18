@@ -17,13 +17,16 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, Literal
 
 import anyio
-from starlette.types import Receive
 
 from stockticker.ai import errors
 from stockticker.ai.serialize import compact_json
 from stockticker.logging import get_logger
 
 _logger = get_logger(__name__)
+
+# ASGI receive callable. Kept as a plain alias so this module stays free of
+# Starlette; the HTTP response wrapper lives in `stockticker.api.streaming`.
+Receive = Callable[[], Awaitable[dict[str, Any]]]
 
 UI_MESSAGE_STREAM_HEADERS = {
     "x-vercel-ai-ui-message-stream": "v1",
@@ -180,9 +183,7 @@ _CRASH_EVENTS = [
 ]
 
 
-async def until_disconnected(
-    producer: Producer, receive: Receive | None = None
-) -> AsyncIterator[str]:
+async def until_disconnected(producer: Producer, receive: Receive | None = None) -> AsyncIterator[str]:
     """Runs `producer` in its own task and relays what it emits until the
     client disconnects.
 

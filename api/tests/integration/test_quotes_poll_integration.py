@@ -112,7 +112,9 @@ async def test_quotes_poll_records_a_symbol_missing_a_trade_as_a_failed_item(
     try:
         result = await run_quotes_poll(app_writer_engine, _FakeClock(is_open=True), _FakeQuoteSource([]))
         assert result.rows_written == 0
-        assert [item.key for item in result.failed_items] == [symbol]
+        # Other integration tests may leave active Listings in the shared
+        # pytest DB; this run must still record *this* symbol as failed.
+        assert symbol in [item.key for item in result.failed_items]
     finally:
         await _cleanup(app_writer_engine, symbol, cik)
 

@@ -39,6 +39,11 @@ class JobSpec:
     trading_days_only: bool = False
     requires_keys: tuple[RequiredKey, ...] = ()
     misfire_grace_time: int | None = None  # None -> derived from trigger type
+    # Names of jobs that, after they finish (success or not -- run_job
+    # never raises), should immediately run this one too, via run_job,
+    # before the scheduler moves on. E.g. market_caps_rebuild's
+    # runs_after=("bars_daily", "edgar_sync") (system design §4).
+    runs_after: tuple[str, ...] = ()
 
     def resolved_misfire_grace_time(self) -> int:
         if self.misfire_grace_time is not None:

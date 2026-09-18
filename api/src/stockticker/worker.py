@@ -82,9 +82,18 @@ def _schedule(
     scheduler: AsyncIOScheduler, spec: JobSpec, engine: AsyncEngine, quotes_engine: AsyncEngine
 ) -> None:
     wrapped = resolve_handler(spec)
+    # Jobs that declare runs_after=(..., spec.name, ...) run immediately
+    # after this one's own scheduled trigger fires, every time -- not only
+    # at startup. E.g. market_caps_rebuild follows both bars_daily and
+    # edgar_sync (system design §4); each trigger runs it again.
+    followers = [other for other in JOBS if spec.name in other.runs_after]
 
     async def _runner() -> None:
         await run_job(spec.name, wrapped, engine=engine, quotes_engine=quotes_engine)
+        for follower in followers:
+            await run_job(
+                follower.name, resolve_handler(follower), engine=engine, quotes_engine=quotes_engine
+            )
 
     scheduler.add_job(
         _runner,

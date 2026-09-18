@@ -7,13 +7,25 @@ a kebab-case slug of the HTTP reason phrase for the generic handlers
 (`Problem("unknown-cik", 422, "...")` -> `.../problems/unknown-cik`), so a
 client can switch on `type` instead of the numeric status.
 
-A response built by `problem_response` carries `X-Request-ID` and the CORS
-allow-origin header itself, rather than relying on `RequestIDMiddleware`/
-`CORSMiddleware` to add them: an exception handler registered for the bare
-`Exception` type (i.e. `unhandled_exception_handler`, for a genuine 500) is
-invoked by Starlette's `ServerErrorMiddleware`, which sits *outside* every
-`add_middleware` layer -- a response built there never passes back through
-our own middleware, so it would otherwise ship with neither header."""
+A response built by `problem_response` always carries `X-Request-ID`
+itself. CORS headers are different: by default `problem_response` adds
+none, because the three handlers registered below for
+`StarletteHTTPException`/`RequestValidationError`/`Problem` run inside
+`ExceptionMiddleware`, which sits *inside* `CORSMiddleware` in the
+middleware stack -- their responses pass back through `CORSMiddleware`
+normally, which adds its own `Access-Control-Allow-Origin`/`Vary` headers.
+Adding them here too would duplicate that header, which some browsers
+reject outright.
+
+Two call sites sit *outside* `CORSMiddleware`'s reach and so must pass
+`extra_headers=cors_headers(request)` explicitly: `unhandled_exception_handler`
+(a bare `Exception` is caught by Starlette's `ServerErrorMiddleware`, which
+wraps every `add_middleware` layer including `CORSMiddleware`) and
+`enforce_json_content_type` in `middleware.py` (registered after
+`CORSMiddleware` via `app.middleware("http")`, so it sits *outside* it too
+-- see the middleware-order note in `app.py`). A response built at either
+site never passes back through `CORSMiddleware`, so it would otherwise
+ship with no CORS headers at all."""
 
 from __future__ import annotations
 
@@ -67,11 +79,21 @@ def problem_type_uri(slug: str) -> str:
     return f"{PROBLEM_TYPE_BASE}/{slug}"
 
 
-def _extra_headers(request: Request) -> dict[str, str]:
+def _request_id_headers(request: Request) -> dict[str, str]:
     headers: dict[str, str] = {}
     request_id = request.scope.get("state", {}).get("request_id")
     if request_id:
         headers["X-Request-ID"] = request_id
+    return headers
+
+
+def cors_headers(request: Request) -> dict[str, str]:
+    """CORS headers for a `problem_response` built at a call site that sits
+    outside `CORSMiddleware` in the stack (see the module docstring) --
+    pass as `extra_headers`. Never call this for a handler whose response
+    passes back through `CORSMiddleware` normally, or the header ends up
+    duplicated."""
+    headers: dict[str, str] = {}
     origin = request.headers.get("origin")
     web_origin = get_settings().web_origin
     if origin and origin == web_origin:
@@ -88,6 +110,7 @@ def problem_response(
     detail: str | None,
     slug: str | None = None,
     errors: list[dict[str, object]] | None = None,
+    extra_headers: dict[str, str] | None = None,
 ) -> JSONResponse:
     problem = ProblemDetail(
         type=problem_type_uri(slug or slug_for(status_code)),
@@ -97,11 +120,14 @@ def problem_response(
         instance=str(request.url.path),
         errors=errors,
     )
+    headers = _request_id_headers(request)
+    if extra_headers:
+        headers.update(extra_headers)
     return JSONResponse(
         problem.model_dump(exclude_none=True),
         status_code=status_code,
         media_type=PROBLEM_MEDIA_TYPE,
-        headers=_extra_headers(request),
+        headers=headers,
     )
 
 
@@ -134,7 +160,9 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     logger.error(
         "api.unhandled_exception", path=request.url.path, error=str(exc), request_id=request_id, exc_info=exc
     )
-    return problem_response(request, status_code=500, detail="An unexpected error occurred.")
+    return problem_response(
+        request, status_code=500, detail="An unexpected error occurred.", extra_headers=cors_headers(request)
+    )
 
 
 def register_problem_handlers(app: FastAPI) -> None:

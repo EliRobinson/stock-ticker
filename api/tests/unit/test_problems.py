@@ -151,3 +151,58 @@ def test_domain_problem_exception_uses_its_own_slug() -> None:
     body = response.json()
     assert body["type"] == "https://stockticker.local/problems/unknown-cik"
     assert body["detail"] == "no company with that CIK"
+
+
+def _assert_exactly_one_cors_header_pair(response: Any) -> None:
+    """A duplicated `Access-Control-Allow-Origin` breaks CORS in some
+    browsers (round 2 FIX-LATER, issue #32) -- `.headers.get(...)` would
+    hide a duplicate by only returning one value, so this reads the raw,
+    possibly-repeated header list instead."""
+    assert response.headers.get_list("access-control-allow-origin") == ["http://127.0.0.1:3000"]
+    assert response.headers.get_list("vary") == ["Origin"]
+
+
+def test_404_carries_exactly_one_cors_header_pair() -> None:
+    standalone_client = TestClient(
+        _standalone_app(), base_url="http://127.0.0.1", raise_server_exceptions=False
+    )
+    response = standalone_client.get("/nope", headers={"origin": "http://127.0.0.1:3000"})
+    assert response.status_code == 404
+    _assert_exactly_one_cors_header_pair(response)
+
+
+def test_422_carries_exactly_one_cors_header_pair(db_free: None) -> None:
+    response = client.put(_NOTE_URL, json={}, headers={"origin": "http://127.0.0.1:3000"})
+    assert response.status_code == 422
+    _assert_exactly_one_cors_header_pair(response)
+
+
+def test_domain_problem_carries_exactly_one_cors_header_pair() -> None:
+    standalone_client = TestClient(
+        _standalone_app(), base_url="http://127.0.0.1", raise_server_exceptions=False
+    )
+    response = standalone_client.get("/domain-error", headers={"origin": "http://127.0.0.1:3000"})
+    assert response.status_code == 422
+    _assert_exactly_one_cors_header_pair(response)
+
+
+def test_500_carries_exactly_one_cors_header_pair() -> None:
+    standalone_client = TestClient(
+        _standalone_app(), base_url="http://127.0.0.1", raise_server_exceptions=False
+    )
+    response = standalone_client.get("/boom", headers={"origin": "http://127.0.0.1:3000"})
+    assert response.status_code == 500
+    _assert_exactly_one_cors_header_pair(response)
+
+
+def test_415_carries_exactly_one_cors_header_pair() -> None:
+    # enforce_json_content_type sits outside CORSMiddleware too (see
+    # middleware.py) -- same failure mode as the bare-Exception handler if
+    # its CORS headers were ever dropped or duplicated.
+    response = client.put(
+        _NOTE_URL,
+        content=b"{}",
+        headers={"content-type": "text/plain", "origin": "http://127.0.0.1:3000"},
+    )
+    assert response.status_code == 415
+    _assert_exactly_one_cors_header_pair(response)

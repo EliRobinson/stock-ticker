@@ -68,6 +68,7 @@ services:
       AI_DAILY_TOKEN_BUDGET: ${AI_DAILY_TOKEN_BUDGET:-2000000}
       AI_SPEND_LIMIT_USD: ${AI_SPEND_LIMIT_USD:-5.00}
       WEB_ORIGIN: ${WEB_ORIGIN:-http://127.0.0.1:3000}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-["127.0.0.1","localhost"]}
     volumes:
       - ./api:/app
       - api_venv:/app/.venv
@@ -136,7 +137,8 @@ services:
     working_dir: /app/web
     command: sh -c "corepack enable && pnpm install --frozen-lockfile && pnpm --filter web dev -H 0.0.0.0 -p 3000"
     environment:
-      NEXT_PUBLIC_API_URL: http://127.0.0.1:8000
+      NEXT_PUBLIC_API_URL: ${PUBLIC_API_URL:-http://127.0.0.1:8000}
+      PUBLIC_WEB_HOST: ${PUBLIC_WEB_HOST:-}
     volumes:
       - .:/app
       # Two named volumes, not one (see AGENTS.md, "Compose"): a single

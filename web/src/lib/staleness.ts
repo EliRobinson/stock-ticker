@@ -11,6 +11,7 @@ import {
   OPEN_POLL_MS,
   STALE_THRESHOLD_MS
 } from './query-config'
+import type { MarketClock } from './api'
 
 export { STALE_THRESHOLD_MS }
 
@@ -65,12 +66,6 @@ export function getQuoteStaleness(
   }
 }
 
-export interface MarketClockLike {
-  is_open: boolean
-  next_open: string
-  next_close: string
-}
-
 export type MarketStatus = 'open' | 'closed' | 'unknown'
 
 /**
@@ -80,7 +75,7 @@ export type MarketStatus = 'open' | 'closed' | 'unknown'
  * 'unknown' only when there is no clock at all (schema has it nullable
  * "until the Alpaca agent wires up fetch_market_clock").
  */
-export function getMarketStatus(clock: MarketClockLike | null): MarketStatus {
+export function getMarketStatus(clock: MarketClock | null): MarketStatus {
   if (clock === null) return 'unknown'
   return clock.is_open ? 'open' : 'closed'
 }
@@ -94,7 +89,7 @@ export function getMarketStatus(clock: MarketClockLike | null): MarketStatus {
  * past, on clock skew) must never produce a near-zero or negative interval.
  */
 export function pollIntervalMs(
-  clock: MarketClockLike | null,
+  clock: MarketClock | null,
   serverTime: string
 ): number {
   if (clock === null) return OPEN_POLL_MS
@@ -105,4 +100,14 @@ export function pollIntervalMs(
   }
   const untilOpen = toEpochMs(clock.next_open) - now
   return Math.max(MIN_POLL_MS, Math.min(CLOSED_POLL_MS, untilOpen))
+}
+
+/** The useMarket/useStatus refetchInterval wrapper, in one place: poll at
+ * OPEN_POLL_MS before the first response (we don't know the clock yet),
+ * then follow pollIntervalMs's next-open/next-close-aware schedule. */
+export function refetchIntervalFor(
+  data: { market_clock: MarketClock | null; server_time: string } | undefined
+): number {
+  if (!data) return OPEN_POLL_MS
+  return pollIntervalMs(data.market_clock, data.server_time)
 }

@@ -8,11 +8,18 @@ so the round trip below is: our stream -> the real client -> our converter.
 from __future__ import annotations
 
 import json
-from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from ai_fakes import FakeExecutor, ScriptedAnthropic, make_deps, result, text_answer, tool_call, user
+from ai_fakes import (
+    QUESTION,
+    answer_text,
+    make_deps,
+    normal_answer_script,
+    text_answer,
+    unwrap_untrusted,
+    user,
+)
 
 from stockticker.ai.convert import (
     SUMMARY_BYTES,
@@ -21,15 +28,9 @@ from stockticker.ai.convert import (
     summarize_output,
     to_anthropic_messages,
 )
-from stockticker.ai.loop import stream_answer
 from stockticker.ai.tools import TOOL_NAMES
 
 GOLDEN = Path(__file__).parent / "golden"
-QUESTION = "Which 2 companies are largest?"
-TOP_SQL = (
-    "SELECT c.name, m.market_cap FROM ai.market_caps m JOIN ai.companies c ON c.cik = m.cik "
-    "ORDER BY m.market_cap DESC LIMIT 2"
-)
 
 
 def fixture(name: str) -> UIMessage:
@@ -46,30 +47,8 @@ def without_nulls(value: Any) -> Any:
 
 async def test_round_trip_matches_what_the_loop_sent_the_model() -> None:
     # Same script as the `normal_answer_with_table` golden stream.
-    anthropic = ScriptedAnthropic(
-        tool_call(
-            "toolu_01", "run_sql", {"sql": TOP_SQL, "purpose": "Rank by market cap"}, lead="Let me check."
-        ),
-        tool_call(
-            "toolu_02",
-            "show_table",
-            {
-                "result_id": "r1",
-                "title": "Largest companies",
-                "columns": [
-                    {"key": "name", "label": "Company"},
-                    {"key": "market_cap", "label": "Market cap", "format": "compact_currency"},
-                ],
-            },
-        ),
-        text_answer("Apple is the largest", " at $3.12T."),
-        text_answer("Microsoft is second."),
-    )
-    executor = FakeExecutor(
-        result([("name", "text"), ("market_cap", "numeric")], [("Apple Inc.", Decimal("3123456789012.00"))])
-    )
-    deps = make_deps(anthropic, executor)
-    [_ async for _ in stream_answer(deps, [user(QUESTION)], "msg-golden")]
+    anthropic, executor = normal_answer_script(text_answer("Microsoft is second."))
+    await answer_text(make_deps(anthropic, executor), [user(QUESTION)], "msg-golden")
     sent_on_last_call = anthropic.requests[2]["messages"]
 
     history = [user(QUESTION), fixture("normal_answer_with_table")]
@@ -138,7 +117,7 @@ def test_past_outputs_shrink_to_a_2kb_summary() -> None:
     }
     summary = summarize_output(output)
     assert len(summary.encode()) <= SUMMARY_BYTES
-    body = json.loads(summary.removeprefix("<untrusted_data>").removesuffix("</untrusted_data>"))
+    body = unwrap_untrusted(summary)
     assert body["columns"] == output["columns"]
     assert body["truncated"] is True
     assert 0 < body["rows_in_summary"] < 500

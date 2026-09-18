@@ -17,7 +17,7 @@ recorded since midnight New York time.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Protocol
@@ -67,6 +67,11 @@ class SpendLedger(Protocol):
 
 STALE_RESERVATION = timedelta(minutes=10)
 
+TOKEN_COLUMNS: tuple[str, ...] = tuple(field.name for field in fields(TokenUsage))
+"""`ai_usage` has one column per `TokenUsage` field, named the same, so the
+daily token sum is exactly `TokenUsage.total_tokens`."""
+_TOKEN_SUM = " + ".join(TOKEN_COLUMNS)
+
 
 @dataclass(frozen=True)
 class LedgerTotals:
@@ -74,11 +79,17 @@ class LedgerTotals:
     tokens_today: int
 
 
+def fits_under_limit(spent_usd: Decimal, worst_case_usd: Decimal, limit_usd: Decimal) -> bool:
+    """The spend rule: a call may run only if its worst case fits under the
+    limit. Landing exactly on the limit is allowed. `/status` uses the same
+    rule, so "enabled" and the gate never disagree."""
+    return spent_usd + worst_case_usd <= limit_usd
+
+
 def check_gate(totals: LedgerTotals, worst_case_usd: Decimal, gate: SpendGate) -> None:
-    """The gate rule, shared by every ledger: the call's worst case must fit
-    under the limit (landing exactly on it is allowed), and today's tokens
+    """The gate, shared by every ledger: the spend rule, then today's tokens
     must be under the daily budget."""
-    if totals.spent_usd + worst_case_usd > gate.limit_usd:
+    if not fits_under_limit(totals.spent_usd, worst_case_usd, gate.limit_usd):
         raise SpendLimitReached(gate.limit_usd)
     if totals.tokens_today >= gate.daily_token_budget:
         raise DailyTokenBudgetReached(gate.daily_token_budget)
@@ -102,9 +113,8 @@ class PostgresSpendLedger:
                 await conn.execute(
                     text(
                         "SELECT coalesce(sum(cost_usd), 0) AS spent, "
-                        "coalesce(sum(input_tokens + cache_creation_input_tokens + cache_read_input_tokens "
-                        "  + output_tokens) FILTER (WHERE created_at >= :day_start), 0) AS tokens_today "
-                        "FROM ai_usage"
+                        f"coalesce(sum({_TOKEN_SUM}) FILTER (WHERE created_at >= :day_start), 0) "
+                        "AS tokens_today FROM ai_usage"
                     ),
                     {"day_start": gate.day_start},
                 )

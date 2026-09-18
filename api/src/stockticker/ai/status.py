@@ -16,7 +16,7 @@ from sqlalchemy.exc import DBAPIError
 
 from stockticker.ai.loop import Limits
 from stockticker.ai.pricing import ModelPrice, price_for, worst_case_cost_usd
-from stockticker.ai.spend import PostgresSpendLedger
+from stockticker.ai.spend import PostgresSpendLedger, fits_under_limit
 from stockticker.config import Settings
 from stockticker.db import get_api_app_writer_engine
 from stockticker.logging import get_logger
@@ -46,6 +46,6 @@ async def ai_status(settings: Settings) -> AiStatus:
     enabled = (
         bool(settings.anthropic_api_key)
         and price is not None
-        and spent + typical_worst_case_usd(price) <= limit
+        and fits_under_limit(spent, typical_worst_case_usd(price), limit)
     )
     return AiStatus(spend_usd=float(spent), limit_usd=float(limit), enabled=enabled)

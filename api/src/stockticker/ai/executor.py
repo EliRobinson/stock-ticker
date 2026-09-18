@@ -12,7 +12,7 @@ so nothing depends on role-level settings:
     DISCARD ALL                             -- before the connection goes back
 
 The query runs through asyncpg directly (the SQLAlchemy pool still owns the
-connection, its 2 s acquire timeout, and pre-ping). If the calling task is
+connection, its acquire timeout, and pre-ping). If the calling task is
 cancelled (the browser went away), asyncpg sends a cancel request for the
 running statement, and the connection is invalidated instead of being
 returned to the pool. It uses no temp tables, so `ai_reader` needs no TEMP.
@@ -30,6 +30,7 @@ from asyncpg.transaction import Transaction
 from sqlalchemy import exc as sa_exc
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
+from stockticker.db import POOL_ACQUIRE_TIMEOUT_SECONDS
 from stockticker.logging import get_logger
 
 logger = get_logger(__name__)
@@ -105,7 +106,8 @@ class AiReaderExecutor:
             return await self._engine.connect()
         except sa_exc.TimeoutError:
             raise ToolError(
-                "The database is busy: no ai_reader connection was free within 2 s. Run the query again."
+                f"The database is busy: no ai_reader connection was free within "
+                f"{POOL_ACQUIRE_TIMEOUT_SECONDS} s. Run the query again."
             ) from None
         except (sa_exc.DBAPIError, OSError) as error:
             logger.warning("ai_reader_connect_failed", error=str(error))

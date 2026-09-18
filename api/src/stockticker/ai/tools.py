@@ -20,7 +20,14 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from stockticker.ai.executor import Column, SqlExecutor, ToolError
 from stockticker.ai.guard import AI_VIEWS, ROW_LIMIT, GuardError, guard_sql
-from stockticker.ai.serialize import display_value, inline_schema_refs, model_payload, wrap_untrusted
+from stockticker.ai.serialize import (
+    MODEL_ROW_LIMIT,
+    SIGNIFICANT_DIGITS,
+    display_value,
+    inline_schema_refs,
+    model_payload,
+    wrap_untrusted,
+)
 from stockticker.logging import get_logger
 from stockticker.models.views import (
     ChartSeries,
@@ -293,7 +300,8 @@ RUN_SQL = ToolDefinition(
     name="run_sql",
     description=(
         "Run one read-only SELECT against the ai views and functions. Returns result_id, columns, "
-        "up to 200 rows (numbers rounded to 6 significant digits), row_count, and truncated. "
+        f"up to {MODEL_ROW_LIMIT} rows (numbers rounded to {SIGNIFICANT_DIGITS} significant digits), "
+        "row_count, and truncated. "
         "Errors come back as text you can use to fix the query."
     ),
     input_model=RunSqlInput,

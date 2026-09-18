@@ -338,3 +338,56 @@ def parse_sse(body: str) -> list[dict[str, Any] | str]:
 
 def part_types(body: str) -> list[str]:
     return [p if isinstance(p, str) else str(p["type"]) for p in parse_sse(body)]
+
+
+def error_texts(body: str) -> list[str]:
+    return [str(p["errorText"]) for p in parse_sse(body) if isinstance(p, dict) and p["type"] == "error"]
+
+
+async def answer_text(deps: ChatDeps, messages: list[UIMessage] | None = None, message_id: str = "m") -> str:
+    """The whole SSE body of one answer."""
+    from stockticker.ai.loop import stream_answer
+
+    return "".join([c async for c in stream_answer(deps, messages or [user("q")], message_id)])
+
+
+def unwrap_untrusted(content: str) -> Any:
+    assert content.startswith("<untrusted_data>") and content.endswith("</untrusted_data>"), content
+    return json.loads(content.removeprefix("<untrusted_data>").removesuffix("</untrusted_data>"))
+
+
+# --- the scripted "normal answer": run_sql, show_table, then text --------------
+
+QUESTION = "Which 2 companies are largest?"
+TOP_SQL = (
+    "SELECT c.name, m.market_cap FROM ai.market_caps m JOIN ai.companies c ON c.cik = m.cik "
+    "ORDER BY m.market_cap DESC LIMIT 2"
+)
+
+
+def normal_answer_script(*extra: Scripted) -> tuple[ScriptedAnthropic, FakeExecutor]:
+    """The script behind the `normal_answer_with_table` golden stream, plus
+    any extra model responses for later turns."""
+    anthropic = ScriptedAnthropic(
+        tool_call(
+            "toolu_01", "run_sql", {"sql": TOP_SQL, "purpose": "Rank by market cap"}, lead="Let me check."
+        ),
+        tool_call(
+            "toolu_02",
+            "show_table",
+            {
+                "result_id": "r1",
+                "title": "Largest companies",
+                "columns": [
+                    {"key": "name", "label": "Company"},
+                    {"key": "market_cap", "label": "Market cap", "format": "compact_currency"},
+                ],
+            },
+        ),
+        text_answer("Apple is the largest", " at $3.12T."),
+        *extra,
+    )
+    executor = FakeExecutor(
+        result([("name", "text"), ("market_cap", "numeric")], [("Apple Inc.", Decimal("3123456789012.00"))])
+    )
+    return anthropic, executor

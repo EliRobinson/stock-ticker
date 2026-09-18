@@ -12,11 +12,15 @@ from decimal import Decimal
 from pathlib import Path
 
 from ai_fakes import (
+    QUESTION,
+    TOP_SQL,
     FakeExecutor,
     MemoryLedger,
     ScriptedAnthropic,
+    answer_text,
     make_deps,
     message_start,
+    normal_answer_script,
     part_types,
     result,
     stream_error,
@@ -26,18 +30,13 @@ from ai_fakes import (
     user,
 )
 
-from stockticker.ai.loop import ChatDeps, Limits, stream_answer
+from stockticker.ai.loop import ChatDeps, Limits
 
 GOLDEN = Path(__file__).parent / "golden"
 
-TOP_SQL = (
-    "SELECT c.name, m.market_cap FROM ai.market_caps m JOIN ai.companies c ON c.cik = m.cik "
-    "ORDER BY m.market_cap DESC LIMIT 2"
-)
 
-
-async def render(deps: ChatDeps, question: str = "Which 2 companies are largest?") -> str:
-    return "".join([chunk async for chunk in stream_answer(deps, [user(question)], "msg-golden")])
+async def render(deps: ChatDeps, question: str = QUESTION) -> str:
+    return await answer_text(deps, [user(question)], "msg-golden")
 
 
 def check(name: str, body: str) -> None:
@@ -49,27 +48,7 @@ def check(name: str, body: str) -> None:
 
 
 async def test_normal_answer_with_a_table() -> None:
-    anthropic = ScriptedAnthropic(
-        tool_call(
-            "toolu_01", "run_sql", {"sql": TOP_SQL, "purpose": "Rank by market cap"}, lead="Let me check."
-        ),
-        tool_call(
-            "toolu_02",
-            "show_table",
-            {
-                "result_id": "r1",
-                "title": "Largest companies",
-                "columns": [
-                    {"key": "name", "label": "Company"},
-                    {"key": "market_cap", "label": "Market cap", "format": "compact_currency"},
-                ],
-            },
-        ),
-        text_answer("Apple is the largest", " at $3.12T."),
-    )
-    executor = FakeExecutor(
-        result([("name", "text"), ("market_cap", "numeric")], [("Apple Inc.", Decimal("3123456789012.00"))])
-    )
+    anthropic, executor = normal_answer_script()
     body = await render(make_deps(anthropic, executor))
     check("normal_answer_with_table", body)
     assert part_types(body) == [

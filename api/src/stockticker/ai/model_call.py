@@ -31,12 +31,10 @@ from anthropic.types import MessageParam, TextBlockParam, ToolParam, ToolUseBloc
 from stockticker.ai import errors
 from stockticker.ai.pricing import ModelPrice, TokenUsage, cost_usd, worst_case_cost_usd
 from stockticker.ai.spend import SpendGate, SpendGateError, SpendLedger
-from stockticker.ai.stream import UIMessageStreamEncoder
+from stockticker.ai.stream import Emit, UIMessageStreamEncoder
 from stockticker.logging import get_logger
 
 logger = get_logger(__name__)
-
-Emit = Callable[[str], Awaitable[None]]
 
 
 @dataclass

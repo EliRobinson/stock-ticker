@@ -12,7 +12,7 @@ from collections.abc import AsyncIterator
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import URL, text
+from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
@@ -21,24 +21,17 @@ from stockticker.ai.guard import GuardError, guard_sql
 from stockticker.ai.prompt import _INSTRUCTIONS
 from stockticker.ai.schema_prompt import read_schema_catalog
 from stockticker.config import get_settings
-
-
-def _engine(dsn: URL, *, pool_size: int = 3) -> AsyncEngine:
-    return create_async_engine(
-        dsn,
-        pool_size=pool_size,
-        max_overflow=0,
-        pool_timeout=2,
-        pool_pre_ping=True,
-        connect_args={"statement_cache_size": 0, "prepared_statement_cache_size": 0},
-    )
+from stockticker.db import POOL_ACQUIRE_TIMEOUT_SECONDS, dispose_engines, get_ai_reader_engine
 
 
 @pytest_asyncio.fixture
 async def executor(ai_reader_engine: AsyncEngine) -> AsyncIterator[AiReaderExecutor]:
-    engine = _engine(get_settings().ai_reader_dsn)
-    yield AiReaderExecutor(engine)
-    await engine.dispose()
+    """The app's own ai_reader engine (`db.get_ai_reader_engine`). Requesting
+    `ai_reader_engine` makes the test skip, or fail under REQUIRE_DB, when
+    the role cannot connect. The engine is process-wide and each test has its
+    own event loop, so it is disposed after every test."""
+    yield AiReaderExecutor(get_ai_reader_engine())
+    await dispose_engines()
 
 
 @pytest_asyncio.fixture
@@ -159,17 +152,12 @@ async def test_executor_sql_error_is_a_tool_error_and_the_connection_is_reused(
 
 
 async def test_executor_discards_session_state_before_returning_the_connection(
-    ai_reader_engine: AsyncEngine,
+    executor: AiReaderExecutor,
 ) -> None:
-    engine = _engine(get_settings().ai_reader_dsn, pool_size=1)
-    try:
-        executor = AiReaderExecutor(engine)
-        await executor.execute(guard_sql("SELECT name FROM ai.companies").wrapped_sql)
-        async with engine.connect() as conn:
-            prepared = await conn.scalar(text("SELECT count(*) FROM pg_prepared_statements"))
-        assert prepared == 0
-    finally:
-        await engine.dispose()
+    await executor.execute(guard_sql("SELECT name FROM ai.companies").wrapped_sql)
+    async with get_ai_reader_engine().connect() as conn:
+        prepared = await conn.scalar(text("SELECT count(*) FROM pg_prepared_statements"))
+    assert prepared == 0
 
 
 async def test_every_limit_is_set_inside_the_transaction(executor: AiReaderExecutor) -> None:
@@ -201,7 +189,11 @@ async def test_temp_file_limit_is_a_tool_error(executor: AiReaderExecutor) -> No
 
 
 async def test_pool_acquire_timeout_is_a_tool_error(ai_reader_engine: AsyncEngine) -> None:
-    engine = _engine(get_settings().ai_reader_dsn, pool_size=1)
+    # A one-connection pool, because ai_reader's CONNECTION LIMIT 3 would
+    # otherwise be hit (the fixture's probe holds one) before the pool is.
+    engine = create_async_engine(
+        get_settings().ai_reader_dsn, pool_size=1, max_overflow=0, pool_timeout=POOL_ACQUIRE_TIMEOUT_SECONDS
+    )
     try:
         executor = AiReaderExecutor(engine)
         async with engine.connect():

@@ -1,7 +1,7 @@
 """`POST /api/v1/chat`: the AI SDK UI message stream (system design §6).
 
 The body is what `useChat`'s `DefaultChatTransport` sends. It is read with a
-size cap (1 MB) before it is parsed, so a huge body is refused as a 413
+size cap (`MAX_BODY_BYTES`) before it is parsed, so a huge body is refused as a 413
 without being held in memory. A body that is not a conversation is a 422
 problem+json before any stream starts; everything after that (no key, spend
 limit, model errors) arrives as stream parts. GZip must never wrap this
@@ -61,7 +61,11 @@ async def _read_body(request: Request) -> bytes:
 
 
 def _too_large() -> Problem:
-    return Problem("chat-request-too-large", 413, "The request is larger than 1 MB. Start a new chat.")
+    return Problem(
+        "chat-request-too-large",
+        413,
+        f"The request is larger than {MAX_BODY_BYTES // (1024 * 1024)} MB. Start a new chat.",
+    )
 
 
 @router.post(

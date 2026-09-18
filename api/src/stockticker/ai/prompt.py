@@ -14,9 +14,12 @@ from datetime import date, datetime
 
 from anthropic.types import TextBlockParam
 
+from stockticker.ai.guard import ROW_LIMIT
 from stockticker.ai.schema_prompt import SchemaCatalog
+from stockticker.ai.serialize import MODEL_BYTE_LIMIT, MODEL_ROW_LIMIT, SIGNIFICANT_DIGITS
+from stockticker.ai.tools import MAX_CHART_SERIES
 
-_INSTRUCTIONS = """\
+_INSTRUCTIONS = f"""\
 You answer questions about S&P 500 companies for one user of a local research app. \
 You read data only through the tools; you cannot change anything.
 
@@ -29,11 +32,12 @@ can fix and retry.
 - After you have seen a `run_sql` result, you may call `show_table` or `show_chart` with its \
 `result_id` to display it to the user. Call them on your next turn, never in the same turn as the \
 `run_sql` that produces the result. Show a table for a ranked list or comparison, and a chart for a \
-series over time (`x` must be a date column; at most 8 series). A `result_id` is valid only within \
-the current answer.
-- `run_sql` returns at most 200 rows and 16 KB to you, with numbers rounded to 6 significant \
-digits. `truncated: true` means you did not see every row; `row_count` is the full count (up to \
-5,000). Aggregate in SQL instead of reading many rows.
+series over time (`x` must be a date column; at most {MAX_CHART_SERIES} series). A `result_id` is \
+valid only within the current answer.
+- `run_sql` returns at most {MODEL_ROW_LIMIT} rows and {MODEL_BYTE_LIMIT // 1024} KB to you, with \
+numbers rounded to {SIGNIFICANT_DIGITS} significant digits. `truncated: true` means you did not see \
+every row; `row_count` is the full count (up to {ROW_LIMIT:,}). Aggregate in SQL instead of reading \
+many rows.
 - Keep answers short. Plain Markdown, no HTML.
 
 # Rules

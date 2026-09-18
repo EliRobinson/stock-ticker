@@ -10,29 +10,27 @@ from decimal import Decimal
 from typing import Any
 
 from ai_fakes import (
+    MODEL,
     ConnectionDrop,
     FakeExecutor,
     MemoryLedger,
     ScriptedAnthropic,
+    answer_text,
+    error_texts,
     make_deps,
-    parse_sse,
     part_types,
     text_answer,
     user,
 )
 
 from stockticker.ai.convert import UIMessage
-from stockticker.ai.loop import ChatDeps, Limits, PromptContext, stream_answer
+from stockticker.ai.loop import ChatDeps, Limits, PromptContext
 from stockticker.ai.pricing import PRICES, TokenUsage, cost_usd
 from stockticker.ai.stream import until_disconnected
 
 
 async def run(deps: ChatDeps, messages: list[UIMessage] | None = None) -> str:
-    return "".join([c async for c in stream_answer(deps, messages or [user("q")], "m")])
-
-
-def errors(body: str) -> list[str]:
-    return [str(p["errorText"]) for p in parse_sse(body) if isinstance(p, dict) and p["type"] == "error"]
+    return await answer_text(deps, messages)
 
 
 # --- #3 spend before message_start ------------------------------------------------
@@ -41,14 +39,14 @@ def errors(body: str) -> list[str]:
 async def test_a_connection_drop_before_message_start_is_charged_the_input_bound() -> None:
     ledger = MemoryLedger()
     out = await run(make_deps(ScriptedAnthropic(ConnectionDrop()), ledger=ledger))
-    assert errors(out) == ["Anthropic could not be reached. Try again."]
+    assert error_texts(out) == ["Anthropic could not be reached. Try again."]
     (row,) = ledger.rows
     assert row.state == "recorded"
     assert row.usage == TokenUsage()
     assert row.cost_usd > 0
     # The input bound, at the plain input rate (not the cache-write rate).
-    bound = int(row.cost_usd / PRICES["claude-sonnet-5"].input * 1_000_000)
-    assert cost_usd(PRICES["claude-sonnet-5"], TokenUsage(input_tokens=bound)) == row.cost_usd
+    bound = int(row.cost_usd / PRICES[MODEL].input * 1_000_000)
+    assert cost_usd(PRICES[MODEL], TokenUsage(input_tokens=bound)) == row.cost_usd
 
 
 async def test_a_refusal_at_stream_open_costs_nothing() -> None:
@@ -88,7 +86,7 @@ async def test_old_history_is_dropped_so_the_first_call_fits_the_input_budget() 
 async def test_a_message_too_long_for_the_budget_gets_its_own_error() -> None:
     anthropic = ScriptedAnthropic()
     out = await run(make_deps(anthropic, limits=Limits(max_input_tokens=5_000)), [user("x" * 20_000)])
-    assert errors(out) == ["This message is too long to answer. Shorten it and send it again."]
+    assert error_texts(out) == ["This message is too long to answer. Shorten it and send it again."]
     assert anthropic.requests == []
 
 
@@ -103,7 +101,7 @@ async def test_the_wall_clock_covers_loading_the_prompt_context() -> None:
     out = await run(
         make_deps(ScriptedAnthropic(), limits=Limits(wall_seconds=0.1), load_context=slow_context)
     )
-    assert errors(out) == ["Stopped after 0.1 s without a final answer. Ask a narrower question."]
+    assert error_texts(out) == ["Stopped after 0.1 s without a final answer. Ask a narrower question."]
 
 
 async def test_the_wall_clock_covers_the_spend_reservation() -> None:
@@ -113,7 +111,7 @@ async def test_the_wall_clock_covers_the_spend_reservation() -> None:
             return await super().reserve(**kwargs)
 
     out = await run(make_deps(ScriptedAnthropic(), ledger=SlowLedger(), limits=Limits(wall_seconds=0.1)))
-    assert errors(out) == ["Stopped after 0.1 s without a final answer. Ask a narrower question."]
+    assert error_texts(out) == ["Stopped after 0.1 s without a final answer. Ask a narrower question."]
 
 
 async def test_the_wall_clock_covers_opening_the_model_stream() -> None:
@@ -124,7 +122,7 @@ async def test_the_wall_clock_covers_opening_the_model_stream() -> None:
 
     ledger = MemoryLedger()
     out = await run(make_deps(SlowToOpen(text_answer("ok")), ledger=ledger, limits=Limits(wall_seconds=0.1)))
-    assert errors(out) == ["Stopped after 0.1 s without a final answer. Ask a narrower question."]
+    assert error_texts(out) == ["Stopped after 0.1 s without a final answer. Ask a narrower question."]
     (row,) = ledger.rows
     assert row.state == "recorded"
 
@@ -158,4 +156,4 @@ async def test_tool_failures_never_end_the_answer() -> None:
     out = await run(make_deps(anthropic, Exploding()))
     assert "tool-output-error" in part_types(out)
     assert part_types(out)[-2:] == ["finish", "[DONE]"]
-    assert errors(out) == []
+    assert error_texts(out) == []

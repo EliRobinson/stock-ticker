@@ -220,11 +220,12 @@ Every PR updates `README.md`: the brief-to-status table, and the "How this was b
 
 ### Review gate (before a PR is opened)
 
-Three reviewers run in parallel on the branch diff. None of them edits code.
+Four reviewers run in parallel on the branch diff. None of them edits code.
 
 1. **Thermonuclear code-quality review** (Opus, the `code-quality-review` skill). Covers maintainability, abstractions, and file size.
 2. **Correctness critic** (Opus). Covers edge cases, error paths, concurrency, data correctness, and whether the tests would catch a regression.
 3. **Spec, security, and copy critic** (Sonnet). Checks conformance with `docs/design/system-design.md` and `CONTEXT.md`, the security rules (roles, SQL guard, secrets, XSS), and every user-facing string, using the `copywriting` skill and the UI copy rules.
+4. **DRY critic** (Opus). Hunts duplication: repeated literals and constants, near-duplicate functions, parallel structures that should be one parametrized thing, hand-written types that duplicate generated ones, and the same rule written in two places. It also names abstractions to leave alone, where two things look alike but change for different reasons.
 
 The author checks each finding against the code and fixes the valid ones. Findings the author disagrees with are answered with evidence in the PR body, never dropped silently. The PR body gets a **Review** section that marks each finding as fixed, declined (and why), or filed (with an issue link). Anything that needs a human decision gets the `needs-eli` label.
 

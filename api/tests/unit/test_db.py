@@ -1,5 +1,6 @@
 from sqlalchemy.pool import QueuePool
 
+from stockticker.config import get_settings
 from stockticker.db import (
     dispose_engines,
     get_ai_reader_engine,
@@ -25,7 +26,9 @@ def test_each_purpose_gets_its_own_engine_with_the_right_pool_size() -> None:
     assert api_engine.pool.size() == 5
     assert worker_engine.pool.size() == 6
     assert quotes_engine.pool.size() == 1
-    assert ai_engine.pool.size() == 3
+    # Dev DB keeps pool_size=3 (role CONNECTION LIMIT); pytest DB uses 1 (#38).
+    expected_ai_pool = 1 if get_settings().postgres_db.endswith("_test") else 3
+    assert ai_engine.pool.size() == expected_ai_pool
 
 
 def test_getters_are_singletons() -> None:

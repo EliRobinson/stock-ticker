@@ -15,14 +15,17 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from stockticker.ai.pricing import TokenUsage
+from stockticker.ai.pricing import PRICES, TokenUsage
 from stockticker.ai.spend import (
     DailyTokenBudgetReached,
     PostgresSpendLedger,
     SpendGate,
     SpendLimitReached,
 )
-from stockticker.config import get_settings
+from stockticker.ai.status import ai_status, typical_worst_case_usd
+from stockticker.config import Settings, get_settings
+from stockticker.db import dispose_engines
+from stockticker.models.status import AiStatus
 
 LIMIT = Decimal("5.00")
 
@@ -129,7 +132,74 @@ async def test_app_writer_cannot_erase_spend(
             await conn.execute(text("DELETE FROM ai_usage"))
 
 
-async def test_status_reports_ai_spend(ledger: PostgresSpendLedger, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_stale_reservations_expire_at_their_reserved_cost(ledger: PostgresSpendLedger) -> None:
+    await ledger.reserve(model="claude-sonnet-5", worst_case_usd=Decimal("0.40"), gate=gate())
+    superuser = create_async_engine(get_settings().superuser_dsn)
+    try:
+        async with superuser.begin() as conn:
+            await conn.execute(text("UPDATE ai_usage SET created_at = now() - interval '11 minutes'"))
+        await ledger.reserve(model="claude-sonnet-5", worst_case_usd=Decimal("0.10"), gate=gate())
+        async with superuser.connect() as conn:
+            rows = (await conn.execute(text("SELECT state, cost_usd FROM ai_usage ORDER BY id"))).all()
+    finally:
+        await superuser.dispose()
+    assert [(row.state, row.cost_usd) for row in rows] == [
+        ("expired", Decimal("0.400000")),
+        ("reserved", Decimal("0.100000")),
+    ]
+    assert await ledger.spent_usd() == Decimal("0.50")  # expired is not refunded
+
+
+@pytest_asyncio.fixture
+async def app_engines() -> AsyncIterator[None]:
+    """`ai_status` and the app use the process-wide engines; each test has
+    its own event loop, so they are disposed after every test."""
+    yield
+    await dispose_engines()
+
+
+def _settings(**overrides: object) -> Settings:
+    values: dict[str, object] = {"anthropic_api_key": "test-key", "ai_model": "claude-sonnet-5"}
+    values.update(overrides)
+    return get_settings().model_copy(update=values)
+
+
+async def test_ai_status_reports_spend_and_is_enabled_with_room(
+    ledger: PostgresSpendLedger, app_engines: None
+) -> None:
+    await spend(ledger, "1.25")
+    status = await ai_status(_settings())
+    assert status == AiStatus(spend_usd=1.25, limit_usd=5.0, enabled=True)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"anthropic_api_key": None},
+        {"ai_model": "claude-unpriced-9"},
+        {"ai_spend_limit_usd": Decimal("1.30")},
+    ],
+)
+async def test_ai_status_fails_closed(
+    ledger: PostgresSpendLedger, app_engines: None, overrides: dict[str, object]
+) -> None:
+    await spend(ledger, "1.25")
+    status = await ai_status(_settings(**overrides))
+    assert status.enabled is False
+    assert status.spend_usd == 1.25
+
+
+async def test_ai_status_is_disabled_when_a_typical_call_would_not_fit(
+    ledger: PostgresSpendLedger, app_engines: None
+) -> None:
+    limit = Decimal("5.00")
+    await spend(ledger, str(limit - typical_worst_case_usd(PRICES["claude-sonnet-5"]) + Decimal("0.000001")))
+    assert (await ai_status(_settings(ai_spend_limit_usd=limit))).enabled is False
+
+
+async def test_status_reports_ai_spend(
+    ledger: PostgresSpendLedger, app_engines: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
     await spend(ledger, "1.25")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     get_settings.cache_clear()

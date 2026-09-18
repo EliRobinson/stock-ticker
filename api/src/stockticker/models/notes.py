@@ -26,7 +26,13 @@ class Note(BaseModel):
     updated_at: datetime
 
 
-class NoteCreate(BaseModel):
+class NotePut(BaseModel):
+    """Body for `PUT /api/v1/notes/{id}` -- an idempotent upsert. The
+    client generates `id` (a UUID) and puts it in the URL, not here: a
+    first PUT creates, a repeat PUT with the same id replaces it. That's
+    what makes the UI's Undo a plain retry (re-PUT the same id) rather
+    than a new resource."""
+
     cik: str | None = None
     start_date: date
     end_date: date | None = None
@@ -36,6 +42,11 @@ class NoteCreate(BaseModel):
     @classmethod
     def _validate_body(cls, value: str) -> str:
         return _trimmed_body(value)
+
+
+class NotesPage(BaseModel):
+    items: list[Note]
+    next_cursor: str | None = None
 
 
 class NoteUpdate(BaseModel):

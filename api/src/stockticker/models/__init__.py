@@ -1,9 +1,9 @@
-from stockticker.models.bars import Bar
+from stockticker.models.bars import Bar, BarsResponse, Timeframe
 from stockticker.models.companies import CompanyDetail, ListingSummary, MarketCapSummary
-from stockticker.models.events import Event, EventKind
+from stockticker.models.events import Event, EventKind, EventsPage
 from stockticker.models.health import HealthResponse
 from stockticker.models.market import MarketResponse, MarketRow
-from stockticker.models.notes import Note, NoteCreate, NoteUpdate
+from stockticker.models.notes import Note, NotePut, NotesPage, NoteUpdate
 from stockticker.models.problem import ProblemDetail
 from stockticker.models.status import (
     BackfillProgress,
@@ -23,16 +23,20 @@ from stockticker.models.views import (
 
 __all__ = [
     "Bar",
+    "BarsResponse",
+    "Timeframe",
     "CompanyDetail",
     "ListingSummary",
     "MarketCapSummary",
     "Event",
     "EventKind",
+    "EventsPage",
     "HealthResponse",
     "MarketResponse",
     "MarketRow",
     "Note",
-    "NoteCreate",
+    "NotePut",
+    "NotesPage",
     "NoteUpdate",
     "ProblemDetail",
     "BackfillProgress",

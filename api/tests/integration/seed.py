@@ -1,15 +1,19 @@
 """Shared seed/cleanup helpers for the read-endpoint and Notes contract
-tests (`tests/integration/test_*_api.py`).
+tests (`tests/integration/test_*_api.py`), plus the Market Cap math
+`Scenario` seeder (`test_market_caps_math.py`).
 
-Every helper here `COMMIT`s: the FastAPI app under test (`TestClient(app)`)
-reads through its own connection pool (`get_app_writer_connection`), a
-*different* Postgres session than whatever connection a fixture uses to set
-up rows -- an uncommitted seed row is invisible to the app's session, so
-there is no shortcut through a rolled-back transaction here. Every seeding
-fixture must therefore also clean up what it inserted (`cleanup_cik`/
-`cleanup_symbol` below), so repeated local runs against the same compose
-Postgres stay repeatable and the "empty DB" contract tests still see an
-empty result.
+Every helper above `Scenario` `COMMIT`s: the FastAPI app under test
+(`TestClient(app)`) reads through its own connection pool
+(`get_app_writer_connection`), a *different* Postgres session than whatever
+connection a fixture uses to set up rows -- an uncommitted seed row is
+invisible to the app's session, so there is no shortcut through a
+rolled-back transaction here. Every seeding fixture must therefore also
+clean up what it inserted (`cleanup_cik`/`cleanup_symbol` below), so
+repeated local runs against the same compose Postgres stay repeatable and
+the "empty DB" contract tests still see an empty result.
+
+`Scenario` is the exception: its methods never commit, because the math
+tests share one connection and roll the whole transaction back.
 """
 
 from __future__ import annotations

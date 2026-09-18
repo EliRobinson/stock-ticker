@@ -6,9 +6,9 @@ An S&P 500 research tool: live Quotes, charts and tables of price history, dated
 
 The [design brief](docs/design/brief.md) sets four requirements. This table tracks how each is met and where the work stands.
 
-| Requirement                                | How it's met                                                                                                                                                                                                              | Status                                                                                                                                                                                      |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Fresh data: live Quotes and daily history  | A Python worker polls Alpaca for Quotes and backfills Daily Bars, and computes Market Cap from SEC EDGAR share counts. FastAPI serves it all read-only.                                                                   | Planned: [#3](https://github.com/EliRobinson/stock-ticker/issues/3), [#4](https://github.com/EliRobinson/stock-ticker/issues/4), [#5](https://github.com/EliRobinson/stock-ticker/issues/5) |
+| Requirement                                | How it's met                                                                                                                                                                                                              | Status                                                                                                                                                                                                    |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Fresh data: live Quotes and daily history  | A Python worker polls Alpaca for Quotes and backfills Daily Bars, and computes Market Cap from SEC EDGAR share counts. FastAPI serves it all read-only.                                                                   | In review: [#3](https://github.com/EliRobinson/stock-ticker/issues/3) (API/worker/schema foundation) · Planned: [#4](https://github.com/EliRobinson/stock-ticker/issues/4), [#5](https://github.com/EliRobinson/stock-ticker/issues/5) |
 | Tables and charts, with zoom, filter, sort | TanStack Table and TanStack Virtual drive the Market table; lightweight-charts drives the price chart, with range presets and a custom range picker.                                                                      | In review: [#8](https://github.com/EliRobinson/stock-ticker/issues/8) (data layer). Planned: [#9](https://github.com/EliRobinson/stock-ticker/issues/9)                                     |
 | Notes tied to dates and companies          | A Notes CRUD endpoint on the API; the web app renders Notes as chart markers and as a filterable list, last write wins.                                                                                                   | Planned: [#6](https://github.com/EliRobinson/stock-ticker/issues/6), [#9](https://github.com/EliRobinson/stock-ticker/issues/9)                                                             |
 | AI that answers with tables and charts     | A Python tool loop runs Claude over guarded, read-only SQL and streams the AI SDK UI message protocol. The web app renders the resulting `data-view` parts with the same table and chart components used everywhere else. | Planned: [#7](https://github.com/EliRobinson/stock-ticker/issues/7). In review: [#8](https://github.com/EliRobinson/stock-ticker/issues/8) (data layer)                                     |
@@ -34,14 +34,14 @@ docker compose up
 
 Then open [http://127.0.0.1:3000](http://127.0.0.1:3000). The first start backfills price history in the background; the header shows its progress while it runs.
 
-The Docker stack (`docker-compose.yml`, the API, the worker) lands with [#3](https://github.com/EliRobinson/stock-ticker/issues/3). Until then, this repo is `web/` on its own:
+The Docker stack (`docker-compose.yml`, Postgres, the API, the worker) is up as of [#3](https://github.com/EliRobinson/stock-ticker/issues/3): `docker compose up` runs `db` → `migrate` → `api`/`worker`/`web`. The ingest jobs that actually populate data (Alpaca Quotes/Bars, SEC EDGAR/Market Cap) land with [#4](https://github.com/EliRobinson/stock-ticker/issues/4) and [#5](https://github.com/EliRobinson/stock-ticker/issues/5), so until those merge a fresh stack has schema and roles but empty tables. `web/` also still runs standalone against a `NEXT_PUBLIC_API_URL` elsewhere:
 
 ```bash
 pnpm install
 pnpm --filter web dev
 ```
 
-**Tests:** `pnpm --filter web test`. The API's test suite (pytest) arrives with [#3](https://github.com/EliRobinson/stock-ticker/issues/3).
+**Tests:** `pnpm --filter web test` for the frontend. The API's suite is `docker compose run --rm --no-deps api uv run pytest tests` -- unit tests run with no DB; integration tests need `docker compose up -d db` first (they skip, rather than fail, if it's not reachable, unless `REQUIRE_DB=1`).
 
 ## Architecture at a glance
 
@@ -65,14 +65,14 @@ Postgres holds Listings, Companies, Daily Bars, Notes, and Events. A Python work
 
 ## Tech stack
 
-| Layer    | Choice                                                                                                                                                                         |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Frontend | Next.js 16, TypeScript, Tailwind CSS v4, shadcn/ui, TanStack Query/Table/Virtual, lightweight-charts, AI Elements                                                              |
-| Backend  | Python 3.12, FastAPI, uv, Alembic (planned, [#3](https://github.com/EliRobinson/stock-ticker/issues/3))                                                                        |
-| Data     | Postgres 17, a worker on Alpaca and SEC EDGAR (planned, [#3](https://github.com/EliRobinson/stock-ticker/issues/3)-[#5](https://github.com/EliRobinson/stock-ticker/issues/5)) |
-| AI       | Claude, a Python tool loop over guarded SQL, the AI SDK protocol (planned, [#7](https://github.com/EliRobinson/stock-ticker/issues/7))                                         |
-| Tests    | Vitest, React Testing Library, Playwright; pytest (planned, [#3](https://github.com/EliRobinson/stock-ticker/issues/3))                                                        |
-| Tooling  | pnpm workspace, ESLint, Prettier, Husky, Commitlint, Renovate, Docker Compose (planned, [#3](https://github.com/EliRobinson/stock-ticker/issues/3))                            |
+| Layer    | Choice                                                                                                                                                                                                                                                                          |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Frontend | Next.js 16, TypeScript, Tailwind CSS v4, shadcn/ui, TanStack Query/Table/Virtual, lightweight-charts, AI Elements                                                                                                                                                               |
+| Backend  | Python 3.12, FastAPI, uv, Alembic, APScheduler worker ([#3](https://github.com/EliRobinson/stock-ticker/issues/3))                                                                                                                                                              |
+| Data     | Postgres 17; the worker and job framework are up ([#3](https://github.com/EliRobinson/stock-ticker/issues/3)), Alpaca and SEC EDGAR ingest are planned ([#4](https://github.com/EliRobinson/stock-ticker/issues/4), [#5](https://github.com/EliRobinson/stock-ticker/issues/5)) |
+| AI       | Claude, a Python tool loop over guarded SQL, the AI SDK protocol (planned, [#7](https://github.com/EliRobinson/stock-ticker/issues/7))                                                                                                                                          |
+| Tests    | Vitest, React Testing Library, Playwright; pytest, ruff, mypy ([#3](https://github.com/EliRobinson/stock-ticker/issues/3))                                                                                                                                                      |
+| Tooling  | pnpm workspace, ESLint, Prettier, Husky, Commitlint, Renovate, Docker Compose ([#3](https://github.com/EliRobinson/stock-ticker/issues/3))                                                                                                                                      |
 
 ## Known limits
 

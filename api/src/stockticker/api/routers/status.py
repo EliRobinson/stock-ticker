@@ -114,10 +114,16 @@ async def _ai_status(settings: Settings) -> AiStatus | None:
     # contract (the AI chat agent owns it end to end); imported here at
     # call time, not at module level, so this branch keeps working before
     # #7 merges to main and that module exists. Once it does, this starts
-    # returning real status with no further change here.
+    # returning real status with no further change here. Narrowed to
+    # "the ai package itself is missing", not a bare `except ImportError`:
+    # a real bug inside stockticker.ai (e.g. it importing a name that no
+    # longer exists on this branch) must fail loudly, not be swallowed and
+    # silently reported as ai: null (found during #7's review).
     try:
         from stockticker.ai.status import ai_status
-    except ImportError:
+    except ModuleNotFoundError as error:
+        if error.name not in ("stockticker.ai", "stockticker.ai.status"):
+            raise
         return None
     result: AiStatus = await ai_status(settings)
     return result

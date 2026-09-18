@@ -136,6 +136,7 @@ def upgrade() -> None:
     _create_tables()
     _create_indexes()
     _create_notes_trigger()
+    _create_shared_functions()
     _create_ai_views()
     _create_returns_between_function()
     _grant_app_writer_privileges()
@@ -495,6 +496,72 @@ def _create_notes_trigger() -> None:
     )
 
 
+def _create_shared_functions() -> None:
+    """Rules that were getting written twice, once per branch, with the
+    copies disagreeing (DRY review): every caller -- ai.quotes here, the
+    read API, and the ingest jobs -- should call these instead of
+    reimplementing the rule. `public`, not `ai`: app_writer (ingest,
+    the read API) calls these directly too, not just ai_reader through a
+    view. SECURITY DEFINER + a fixed search_path so ai.quotes (below) can
+    call prev_trading_day without ai_reader needing its own EXECUTE grant
+    -- it runs as app_owner, the view's own owner."""
+    op.execute(
+        """
+        CREATE FUNCTION public.prev_trading_day(anchor date) RETURNS date
+        LANGUAGE sql
+        STABLE
+        SECURITY DEFINER
+        SET search_path = pg_catalog, public, pg_temp
+        AS $$
+          SELECT td.trade_date
+          FROM trading_days td
+          WHERE td.trade_date < anchor
+          ORDER BY td.trade_date DESC
+          LIMIT 1;
+        $$;
+        """
+    )
+    op.execute(
+        "COMMENT ON FUNCTION public.prev_trading_day(date) IS "
+        "'The latest Trading Day strictly before anchor, or null if none precedes it. The "
+        'rule for "previous close": join daily_bars on exactly this date, never on "the '
+        "nearest earlier daily_bars row\" -- if that day''s bar is missing (an ingest gap), "
+        "the comparison must come back null, not silently fall back to an older close.';"
+    )
+    op.execute(
+        """
+        CREATE FUNCTION public.price_symbol(cik_in text) RETURNS text
+        LANGUAGE sql
+        STABLE
+        SECURITY DEFINER
+        SET search_path = pg_catalog, public, pg_temp
+        AS $$
+          SELECT COALESCE(
+            (
+              SELECT scr.price_symbol
+              FROM share_class_rules scr
+              JOIN listings l ON l.symbol = scr.price_symbol
+              WHERE scr.cik = cik_in AND l.is_active
+            ),
+            (
+              SELECT l.symbol
+              FROM listings l
+              WHERE l.cik = cik_in AND l.is_primary AND l.is_active
+              LIMIT 1
+            )
+          );
+        $$;
+        """
+    )
+    op.execute(
+        "COMMENT ON FUNCTION public.price_symbol(text) IS "
+        "'The Listing symbol that represents cik''s price for Market Cap and quoting "
+        "purposes: the seeded share_class_rules.price_symbol if that Listing is still "
+        "active, else the active primary Listing, else null (no active Listing at all). "
+        "Active Listings only -- a delisted or renamed symbol is never returned.';"
+    )
+
+
 def _create_ai_views() -> None:
     op.execute("CREATE VIEW ai.companies AS SELECT * FROM companies;")
     op.execute(
@@ -717,26 +784,21 @@ def _create_ai_views() -> None:
           q.observed_at,
           q.price / NULLIF(prev_bar.close, 0) - 1 AS change_pct
         FROM quotes q
-        LEFT JOIN LATERAL (
-          -- Anchored to the Quote's OWN New York date, not to today's --
-          -- a quote observed before today's open, or a stale weekend/
-          -- holiday quote still showing Friday's trade, must compare
-          -- against the close *before* the day it was actually observed,
-          -- not against "yesterday" relative to whenever this view happens
-          -- to be queried (which is wrong before the open, on weekends,
-          -- and on holidays, and would compare a stale quote to itself).
-          SELECT td.trade_date
-          FROM trading_days td
-          WHERE td.trade_date < (q.observed_at AT TIME ZONE 'America/New_York')::date
-          ORDER BY td.trade_date DESC
-          LIMIT 1
-        ) prev_day ON true
-        -- Joined on the *exact* previous Trading Day found above, not "the
-        -- nearest earlier daily_bars row" -- if that specific day's bar is
-        -- missing (an ingest gap), this must come back null, not silently
-        -- fall back to an older close and misreport change_pct.
+        -- public.prev_trading_day is the one place this rule is written:
+        -- anchored to the Quote's OWN New York date, not to today's -- a
+        -- quote observed before today's open, or a stale weekend/holiday
+        -- quote still showing Friday's trade, must compare against the
+        -- close *before* the day it was actually observed, not against
+        -- "yesterday" relative to whenever this view happens to be
+        -- queried (wrong before the open, on weekends, and on holidays).
+        -- Joined on that *exact* day, never "the nearest earlier
+        -- daily_bars row" -- a missing bar for that day (an ingest gap)
+        -- must come back null, not silently fall back to an older close.
         LEFT JOIN daily_bars prev_bar
-          ON prev_bar.symbol = q.symbol AND prev_bar.trade_date = prev_day.trade_date;
+          ON prev_bar.symbol = q.symbol
+          AND prev_bar.trade_date = public.prev_trading_day(
+            (q.observed_at AT TIME ZONE 'America/New_York')::date
+          );
         """
     )
     op.execute(
@@ -879,6 +941,10 @@ def _grant_app_writer_privileges() -> None:
         "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_writer;"
     )
     op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO app_writer;")
+    # The read API and ingest jobs call these directly, not just ai.quotes
+    # through SECURITY DEFINER -- see _create_shared_functions.
+    op.execute("GRANT EXECUTE ON FUNCTION public.prev_trading_day(date) TO app_writer;")
+    op.execute("GRANT EXECUTE ON FUNCTION public.price_symbol(text) TO app_writer;")
 
 
 def _grant_ai_reader_privileges() -> None:

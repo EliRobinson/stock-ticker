@@ -15,24 +15,13 @@ import {
   useDeleteNote,
   usePutNote
 } from '@/hooks/useNotes'
-import type { Note, NotesResponse } from '@/lib/api'
+import type { NotesResponse } from '@/lib/api'
+import { AAPL_CIK, infinitePages, makeNote, problemResponse } from '../fixtures'
 
-function makeNote(overrides: Partial<Note> = {}): Note {
-  return {
-    id: 'note-1',
-    cik: null,
-    start_date: '2024-06-03',
-    end_date: '2024-06-03',
-    body: 'hello',
-    created_at: '2024-06-03T00:00:00.000Z',
-    updated_at: '2024-06-03T00:00:00.000Z',
-    ...overrides
-  }
-}
-
-function page(items: Note[], nextCursor: string | null = null): NotesResponse {
-  return { items, next_cursor: nextCursor }
-}
+/** A second Company's cik, only used to prove a Note stays out of a list
+ * scoped to a different Company - not a shared fixture, since nothing
+ * else in this file cares which company it is. */
+const MSFT_CIK = '0000789019'
 
 describe('createNoteId', () => {
   it('generates a UUID', () => {
@@ -46,59 +35,59 @@ describe('createNoteId', () => {
 
 describe('noteMatchesList', () => {
   it('matches a note with no filter params at all', () => {
-    expect(noteMatchesList({}, makeNote({ cik: '0000320193' }))).toBe(true)
+    expect(noteMatchesList({}, makeNote({ cik: AAPL_CIK }))).toBe(true)
     expect(noteMatchesList({}, makeNote({ cik: null }))).toBe(true)
   })
 
   it('requires an exact cik match when cik is filtered', () => {
-    const note = makeNote({ cik: '0000320193' })
-    expect(noteMatchesList({ cik: '0000320193' }, note)).toBe(true)
-    expect(noteMatchesList({ cik: '0000789019' }, note)).toBe(false)
+    const note = makeNote({ cik: AAPL_CIK })
+    expect(noteMatchesList({ cik: AAPL_CIK }, note)).toBe(true)
+    expect(noteMatchesList({ cik: MSFT_CIK }, note)).toBe(false)
   })
 
   it('a cik filter excludes a market-wide note', () => {
-    expect(
-      noteMatchesList({ cik: '0000320193' }, makeNote({ cik: null }))
-    ).toBe(false)
+    expect(noteMatchesList({ cik: AAPL_CIK }, makeNote({ cik: null }))).toBe(
+      false
+    )
   })
 
   it('market_only matches only market-wide notes, ignoring any cik filter', () => {
     expect(
       noteMatchesList(
-        { cik: '0000320193', market_only: true },
+        { cik: AAPL_CIK, market_only: true },
         makeNote({ cik: null })
       )
     ).toBe(true)
     expect(
-      noteMatchesList({ market_only: true }, makeNote({ cik: '0000320193' }))
+      noteMatchesList({ market_only: true }, makeNote({ cik: AAPL_CIK }))
     ).toBe(false)
   })
 
   it('include_market matches a market-wide note alongside a cik filter', () => {
     expect(
       noteMatchesList(
-        { cik: '0000320193', include_market: true },
+        { cik: AAPL_CIK, include_market: true },
         makeNote({ cik: null })
       )
     ).toBe(true)
     expect(
       noteMatchesList(
-        { cik: '0000320193', include_market: true },
-        makeNote({ cik: '0000320193' })
+        { cik: AAPL_CIK, include_market: true },
+        makeNote({ cik: AAPL_CIK })
       )
     ).toBe(true)
     expect(
       noteMatchesList(
-        { cik: '0000320193', include_market: true },
-        makeNote({ cik: '0000789019' })
+        { cik: AAPL_CIK, include_market: true },
+        makeNote({ cik: MSFT_CIK })
       )
     ).toBe(false)
   })
 
   it('without include_market, a cik filter still excludes market-wide notes', () => {
-    expect(
-      noteMatchesList({ cik: '0000320193' }, makeNote({ cik: null }))
-    ).toBe(false)
+    expect(noteMatchesList({ cik: AAPL_CIK }, makeNote({ cik: null }))).toBe(
+      false
+    )
   })
 
   it('matches a note whose range overlaps the from/to window', () => {
@@ -127,10 +116,7 @@ describe('upsertNoteInPages', () => {
   })
 
   it('prepends a new note to the first page', () => {
-    const data: InfiniteData<NotesResponse> = {
-      pages: [page([makeNote({ id: 'existing' })])],
-      pageParams: [undefined]
-    }
+    const data = infinitePages([makeNote({ id: 'existing' })])
     const result = upsertNoteInPages(data, makeNote({ id: 'new' }))
     expect(result?.pages[0]?.items.map((n) => n.id)).toEqual([
       'new',
@@ -139,10 +125,7 @@ describe('upsertNoteInPages', () => {
   })
 
   it('replaces an existing note in place instead of duplicating it', () => {
-    const data: InfiniteData<NotesResponse> = {
-      pages: [page([makeNote({ id: 'note-1', body: 'old' })])],
-      pageParams: [undefined]
-    }
+    const data = infinitePages([makeNote({ id: 'note-1', body: 'old' })])
     const result = upsertNoteInPages(
       data,
       makeNote({ id: 'note-1', body: 'new' })
@@ -158,10 +141,7 @@ describe('removeNoteFromPages', () => {
   })
 
   it('removes the matching note from every page', () => {
-    const data: InfiniteData<NotesResponse> = {
-      pages: [page([makeNote({ id: 'a' }), makeNote({ id: 'b' })])],
-      pageParams: [undefined]
-    }
+    const data = infinitePages([makeNote({ id: 'a' }), makeNote({ id: 'b' })])
     const result = removeNoteFromPages(data, 'a')
     expect(result?.pages[0]?.items.map((n) => n.id)).toEqual(['b'])
   })
@@ -188,11 +168,8 @@ describe('usePutNote / useDeleteNote', () => {
   })
 
   it('optimistically writes the note before the PUT resolves, then settles on the server response', async () => {
-    const params = { cik: '0000320193' }
-    queryClient.setQueryData(notesKeys.list(params), {
-      pages: [page([])],
-      pageParams: [undefined]
-    } satisfies InfiniteData<NotesResponse>)
+    const params = { cik: AAPL_CIK }
+    queryClient.setQueryData(notesKeys.list(params), infinitePages([]))
 
     const serverNote = makeNote({ id: 'note-1', body: 'server body' })
     let resolveFetch: (value: Response) => void = () => {}
@@ -207,7 +184,7 @@ describe('usePutNote / useDeleteNote', () => {
 
     result.current.mutate({
       id: 'note-1',
-      cik: '0000320193',
+      cik: AAPL_CIK,
       start_date: '2024-06-03',
       body: 'optimistic body'
     })
@@ -238,16 +215,10 @@ describe('usePutNote / useDeleteNote', () => {
   })
 
   it('does not add the note to a cached list its params do not match', async () => {
-    const aaplParams = { cik: '0000320193' }
-    const msftParams = { cik: '0000789019' }
-    queryClient.setQueryData(notesKeys.list(aaplParams), {
-      pages: [page([])],
-      pageParams: [undefined]
-    } satisfies InfiniteData<NotesResponse>)
-    queryClient.setQueryData(notesKeys.list(msftParams), {
-      pages: [page([])],
-      pageParams: [undefined]
-    } satisfies InfiniteData<NotesResponse>)
+    const aaplParams = { cik: AAPL_CIK }
+    const msftParams = { cik: MSFT_CIK }
+    queryClient.setQueryData(notesKeys.list(aaplParams), infinitePages([]))
+    queryClient.setQueryData(notesKeys.list(msftParams), infinitePages([]))
 
     const fetchMock = vi.mocked(fetch)
     fetchMock.mockReturnValueOnce(new Promise(() => {})) // never resolves in this test
@@ -255,7 +226,7 @@ describe('usePutNote / useDeleteNote', () => {
     const { result } = renderHook(() => usePutNote(), { wrapper })
     result.current.mutate({
       id: 'note-1',
-      cik: '0000320193',
+      cik: AAPL_CIK,
       start_date: '2024-06-03',
       body: 'AAPL note'
     })
@@ -274,33 +245,22 @@ describe('usePutNote / useDeleteNote', () => {
   })
 
   it('rolls back the optimistic write when the PUT fails', async () => {
-    const params = { cik: '0000320193' }
-    const original = page([makeNote({ id: 'note-1', body: 'original body' })])
-    queryClient.setQueryData(notesKeys.list(params), {
-      pages: [original],
-      pageParams: [undefined]
-    } satisfies InfiniteData<NotesResponse>)
+    const params = { cik: AAPL_CIK }
+    queryClient.setQueryData(
+      notesKeys.list(params),
+      infinitePages([makeNote({ id: 'note-1', body: 'original body' })])
+    )
 
     const fetchMock = vi.mocked(fetch)
     fetchMock.mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          type: 'about:blank',
-          title: 'Server error',
-          status: 500
-        }),
-        {
-          status: 500,
-          headers: { 'Content-Type': 'application/json' }
-        }
-      )
+      problemResponse(500, { title: 'Server error' })
     )
 
     const { result } = renderHook(() => usePutNote(), { wrapper })
 
     result.current.mutate({
       id: 'note-1',
-      cik: '0000320193',
+      cik: AAPL_CIK,
       start_date: '2024-06-03',
       body: 'will fail'
     })
@@ -314,25 +274,15 @@ describe('usePutNote / useDeleteNote', () => {
   })
 
   it('optimistically removes a note on delete and rolls back on error', async () => {
-    const params = { cik: '0000320193' }
-    queryClient.setQueryData(notesKeys.list(params), {
-      pages: [page([makeNote({ id: 'note-1' })])],
-      pageParams: [undefined]
-    } satisfies InfiniteData<NotesResponse>)
+    const params = { cik: AAPL_CIK }
+    queryClient.setQueryData(
+      notesKeys.list(params),
+      infinitePages([makeNote({ id: 'note-1' })])
+    )
 
     const fetchMock = vi.mocked(fetch)
     fetchMock.mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          type: 'about:blank',
-          title: 'Server error',
-          status: 500
-        }),
-        {
-          status: 500,
-          headers: { 'Content-Type': 'application/json' }
-        }
-      )
+      problemResponse(500, { title: 'Server error' })
     )
 
     const { result } = renderHook(() => useDeleteNote(), { wrapper })
@@ -351,11 +301,11 @@ describe('usePutNote / useDeleteNote', () => {
   })
 
   it('invalidates once, not once per mutation, when two edits settle close together', async () => {
-    const params = { cik: '0000320193' }
-    queryClient.setQueryData(notesKeys.list(params), {
-      pages: [page([makeNote({ id: 'note-1', body: 'original' })])],
-      pageParams: [undefined]
-    } satisfies InfiniteData<NotesResponse>)
+    const params = { cik: AAPL_CIK }
+    queryClient.setQueryData(
+      notesKeys.list(params),
+      infinitePages([makeNote({ id: 'note-1', body: 'original' })])
+    )
 
     const fetchMock = vi.mocked(fetch)
     fetchMock.mockResolvedValue(
@@ -370,13 +320,13 @@ describe('usePutNote / useDeleteNote', () => {
 
     result.current.mutate({
       id: 'note-1',
-      cik: '0000320193',
+      cik: AAPL_CIK,
       start_date: '2024-06-03',
       body: 'edit 1'
     })
     result.current.mutate({
       id: 'note-1',
-      cik: '0000320193',
+      cik: AAPL_CIK,
       start_date: '2024-06-03',
       body: 'edit 2'
     })

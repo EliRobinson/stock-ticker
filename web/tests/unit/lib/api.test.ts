@@ -6,18 +6,15 @@ import {
   getEvents,
   getMarket,
   getNotes,
-  putNote,
-  type Bar,
-  type Note
+  putNote
 } from '@/lib/api'
-
-function jsonResponse(body: unknown, init: ResponseInit = {}) {
-  return new Response(JSON.stringify(body), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-    ...init
-  })
-}
+import {
+  AAPL_CIK,
+  jsonResponse,
+  makeBar,
+  makeNote,
+  problemResponse
+} from '../fixtures'
 
 /** The client's `fetch` wrapper hands openapi-fetch's built `Request`
  * straight to `globalThis.fetch` (see lib/api.ts), so the mock is called
@@ -56,15 +53,7 @@ describe('api client', () => {
 
   it('sends a PUT with a JSON content-type for putNote, defaulting cik and end_date', async () => {
     const fetchMock = vi.mocked(fetch)
-    const note: Note = {
-      id: 'note-1',
-      cik: null,
-      start_date: '2024-06-03',
-      end_date: '2024-06-03',
-      body: 'hello',
-      created_at: '2024-06-03T00:00:00.000Z',
-      updated_at: '2024-06-03T00:00:00.000Z'
-    }
+    const note = makeNote({ cik: null, body: 'hello' })
     fetchMock.mockResolvedValueOnce(jsonResponse(note, { status: 200 }))
 
     await putNote('note-1', { start_date: '2024-06-03', body: 'hello' })
@@ -90,19 +79,18 @@ describe('api client', () => {
   it('passes through an explicit end_date instead of defaulting it', async () => {
     const fetchMock = vi.mocked(fetch)
     fetchMock.mockResolvedValueOnce(
-      jsonResponse({
-        id: 'note-1',
-        cik: '0000320193',
-        start_date: '2024-06-01',
-        end_date: '2024-06-10',
-        body: 'range note',
-        created_at: '2024-06-03T00:00:00.000Z',
-        updated_at: '2024-06-03T00:00:00.000Z'
-      })
+      jsonResponse(
+        makeNote({
+          cik: AAPL_CIK,
+          start_date: '2024-06-01',
+          end_date: '2024-06-10',
+          body: 'range note'
+        })
+      )
     )
 
     await putNote('note-1', {
-      cik: '0000320193',
+      cik: AAPL_CIK,
       start_date: '2024-06-01',
       end_date: '2024-06-10',
       body: 'range note'
@@ -111,7 +99,7 @@ describe('api client', () => {
     const request = requestFrom(fetchMock)
     await expect(request.text()).resolves.toBe(
       JSON.stringify({
-        cik: '0000320193',
+        cik: AAPL_CIK,
         start_date: '2024-06-01',
         end_date: '2024-06-10',
         body: 'range note'
@@ -134,7 +122,7 @@ describe('api client', () => {
       jsonResponse({ items: [], next_cursor: null })
     )
 
-    await getNotes({ cik: '0000320193', limit: 20 })
+    await getNotes({ cik: AAPL_CIK, limit: 20 })
 
     const request = requestFrom(fetchMock)
     expect(request.url).toBe(
@@ -148,7 +136,7 @@ describe('api client', () => {
       jsonResponse({ items: [], next_cursor: null })
     )
 
-    await getNotes({ cik: '0000320193', include_market: true })
+    await getNotes({ cik: AAPL_CIK, include_market: true })
 
     const request = requestFrom(fetchMock)
     expect(request.url).toBe(
@@ -158,15 +146,7 @@ describe('api client', () => {
 
   it('unwraps BarsResponse to a plain Bar[]', async () => {
     const fetchMock = vi.mocked(fetch)
-    const bar: Bar = {
-      trade_date: '2024-06-03',
-      open: '100',
-      high: '105',
-      low: '99',
-      close: '104',
-      volume: 1_000_000,
-      adj_close: '104'
-    }
+    const bar = makeBar()
     fetchMock.mockResolvedValueOnce(
       jsonResponse({ symbol: 'AAPL', timeframe: '1d', bars: [bar] })
     )
@@ -186,7 +166,7 @@ describe('api client', () => {
       jsonResponse({ items: [], next_cursor: null })
     )
 
-    await getEvents({ cik: '0000320193', kind: ['split', 'cash_dividend'] })
+    await getEvents({ cik: AAPL_CIK, kind: ['split', 'cash_dividend'] })
 
     const request = requestFrom(fetchMock)
     expect(request.url).toBe(
@@ -197,18 +177,12 @@ describe('api client', () => {
   it('throws a typed ApiError parsed from a problem+json body, carrying the full problem', async () => {
     const fetchMock = vi.mocked(fetch)
     fetchMock.mockResolvedValueOnce(
-      jsonResponse(
-        {
-          type: 'https://stockticker.local/problems/unknown-cik',
-          title: 'Unknown CIK',
-          status: 422,
-          detail: 'No company with that CIK.',
-          errors: [
-            { loc: ['query', 'cik'], msg: 'unknown', type: 'value_error' }
-          ]
-        },
-        { status: 422 }
-      )
+      problemResponse(422, {
+        type: 'https://stockticker.local/problems/unknown-cik',
+        title: 'Unknown CIK',
+        detail: 'No company with that CIK.',
+        errors: [{ loc: ['query', 'cik'], msg: 'unknown', type: 'value_error' }]
+      })
     )
 
     const error = await getMarket().catch((e: unknown) => e)

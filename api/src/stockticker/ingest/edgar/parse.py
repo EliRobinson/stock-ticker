@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
@@ -14,6 +15,10 @@ SHARES_CONCEPTS = (DEI_SHARES, US_GAAP_SHARES)
 # latest one on the first Trading Days of 2018.
 SHARES_SINCE = date(2016, 1, 1)
 FILINGS_SINCE = date(2018, 1, 1)
+
+# Only names of this shape are fetched, so a page name from the response
+# can never steer a request off the fixed submissions path.
+FILES_PAGE_NAME = re.compile(r"CIK\d{10}-submissions-\d{3}\.json")
 
 FILING_KINDS = {"10-K": "filing_10k", "10-Q": "filing_10q", "8-K": "filing_8k"}
 FILING_TITLES = {"10-K": "Annual report (10-K)", "10-Q": "Quarterly report (10-Q)"}
@@ -139,11 +144,33 @@ def _shares_fact(concept: str, entry: dict[str, Any]) -> SharesFact | None:
 
 def parse_filings(submissions: dict[str, Any], cik: str) -> list[FilingEvent]:
     """10-K, 10-Q, and 8-K filings from `filings.recent`, filed since 2018.
-    Amendments (`10-K/A`, ...) and the older `files[]` pages are skipped."""
-    recent = (submissions.get("filings") or {}).get("recent") or {}
-    accessions: list[str] = recent.get("accessionNumber") or []
+    Amendments (`10-K/A`, ...) are skipped. Older filings are in the pages
+    `older_filing_pages` names; parse each with `parse_filings_page`."""
+    return parse_filings_page((submissions.get("filings") or {}).get("recent") or {}, cik)
+
+
+def older_filing_pages(submissions: dict[str, Any]) -> list[str]:
+    """Names of the `filings.files[]` pages that reach 2018 or later. A heavy
+    filer's `recent` block (the latest ~1000 filings of every form) can stop
+    well short of 2018."""
+    names = []
+    for page in (submissions.get("filings") or {}).get("files") or []:
+        name = str(page.get("name") or "")
+        try:
+            filing_to = date.fromisoformat(str(page.get("filingTo")))
+        except ValueError:
+            continue
+        if FILES_PAGE_NAME.fullmatch(name) and filing_to >= FILINGS_SINCE:
+            names.append(name)
+    return names
+
+
+def parse_filings_page(page: dict[str, Any], cik: str) -> list[FilingEvent]:
+    """One block of filing columns: `filings.recent`, or a `files[]` page,
+    which has the same columns at its top level."""
+    accessions: list[str] = page.get("accessionNumber") or []
     columns = {
-        name: recent.get(name) or []
+        name: page.get(name) or []
         for name in ("filingDate", "reportDate", "form", "items", "primaryDocument")
     }
 

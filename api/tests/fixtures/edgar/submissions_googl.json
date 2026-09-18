@@ -1,0 +1,52 @@
+{
+  "cik": "0001652044",
+  "entityType": "operating",
+  "sic": "7370",
+  "sicDescription": "Services-Computer Programming, Data Processing, Etc.",
+  "name": "Alphabet Inc.",
+  "tickers": ["GOOGL", "GOOG"],
+  "exchanges": ["Nasdaq", "Nasdaq"],
+  "fiscalYearEnd": "1231",
+  "filings": {
+    "recent": {
+      "accessionNumber": [
+        "0001652044-26-000071",
+        "0001209191-26-041517",
+        "0001652044-26-000066",
+        "0001652044-23-000045"
+      ],
+      "filingDate": ["2026-07-23", "2026-07-15", "2026-07-23", "2023-04-25"],
+      "reportDate": ["2026-06-30", "2026-07-13", "2026-07-23", "2023-04-25"],
+      "acceptanceDateTime": [
+        "2026-07-23T20:05:31.000Z",
+        "2026-07-15T21:30:11.000Z",
+        "2026-07-23T20:04:02.000Z",
+        "2023-04-25T20:05:14.000Z"
+      ],
+      "act": ["34", "", "34", "34"],
+      "form": ["10-Q", "4", "8-K", "8-K"],
+      "fileNumber": ["001-37580", "", "001-37580", "001-37580"],
+      "filmNumber": ["261117012", "", "261116944", "23846512"],
+      "items": ["", "", "2.02,9.01", "2.02,9.01"],
+      "size": [9123456, 5210, 402113, 398221],
+      "isXBRL": [1, 0, 1, 1],
+      "isInlineXBRL": [1, 0, 1, 1],
+      "primaryDocument": ["goog-20260630.htm", "xslF345X05/wk-form4.xml", "goog-20260723.htm", "goog-20230425.htm"],
+      "primaryDocDescription": ["10-Q", "FORM 4", "8-K", "8-K"]
+    },
+    "files": [
+      {
+        "name": "CIK0001652044-submissions-001.json",
+        "filingCount": 2000,
+        "filingFrom": "2019-06-21",
+        "filingTo": "2023-04-25"
+      },
+      {
+        "name": "CIK0001652044-submissions-002.json",
+        "filingCount": 1874,
+        "filingFrom": "2015-08-10",
+        "filingTo": "2017-12-29"
+      }
+    ]
+  }
+}

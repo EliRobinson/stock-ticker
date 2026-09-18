@@ -22,7 +22,9 @@ from stockticker.ingest.edgar.parse import (
     FilingEvent,
     SharesFact,
     cik_path,
+    older_filing_pages,
     parse_filings,
+    parse_filings_page,
     parse_shares,
 )
 from stockticker.ingest.http import RateBudgetName, build_http_client, request
@@ -61,6 +63,24 @@ async def fetch_submissions(client: httpx.AsyncClient, cik: str) -> dict[str, An
     return data
 
 
+async def fetch_submissions_page(client: httpx.AsyncClient, name: str) -> dict[str, Any]:
+    """One `filings.files[]` page, by the name `older_filing_pages` vetted."""
+    response = await request(client, "GET", f"/submissions/{name}", rate_budget=RateBudgetName.SEC)
+    data: dict[str, Any] = response.json()
+    return data
+
+
+async def fetch_filings(client: httpx.AsyncClient, cik: str) -> list[FilingEvent]:
+    """Filing Events from `filings.recent` plus every `files[]` page that
+    reaches 2018, deduplicated by accession."""
+    submissions = await fetch_submissions(client, cik)
+    events = parse_filings(submissions, cik)
+    for name in older_filing_pages(submissions):
+        events.extend(parse_filings_page(await fetch_submissions_page(client, name), cik))
+    by_accession = {event.accession: event for event in reversed(events)}
+    return sorted(by_accession.values(), key=lambda event: (event.event_date, event.accession))
+
+
 async def run_edgar_sync(engine: AsyncEngine, *, user_agent: str) -> JobResult:
     async with engine.connect() as conn:
         companies = await _active_companies(conn)
@@ -73,7 +93,7 @@ async def run_edgar_sync(engine: AsyncEngine, *, user_agent: str) -> JobResult:
         for cik, symbol in companies:
             try:
                 companyfacts = await fetch_companyfacts(client, cik)
-                submissions = await fetch_submissions(client, cik)
+                filings = await fetch_filings(client, cik)
             except httpx.HTTPError as exc:
                 result.failed_items.append(FailedItem(key=cik, error=f"EDGAR request failed: {exc}"))
                 continue
@@ -89,7 +109,6 @@ async def run_edgar_sync(engine: AsyncEngine, *, user_agent: str) -> JobResult:
                 result.failed_items.extend(
                     FailedItem(key=f"{cik}:{key}", error=reason) for key, reason in parsed.rejected
                 )
-            filings = parse_filings(submissions, cik)
 
             async with engine.connect() as conn:
                 result.rows_written += await store_edgar_company(conn, cik, symbol, shares, filings)

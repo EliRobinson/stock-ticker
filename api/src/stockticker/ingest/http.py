@@ -30,6 +30,7 @@ class RateBudgetName(StrEnum):
     ALPACA_QUOTES = "alpaca_quotes"
     ALPACA = "alpaca"
     SEC = "sec"
+    WIKIPEDIA = "wikipedia"
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +44,7 @@ RATE_BUDGETS: dict[RateBudgetName, RateBudget] = {
     RateBudgetName.ALPACA_QUOTES: RateBudget(RateBudgetName.ALPACA_QUOTES, capacity=40, per_seconds=60.0),
     RateBudgetName.ALPACA: RateBudget(RateBudgetName.ALPACA, capacity=100, per_seconds=60.0),
     RateBudgetName.SEC: RateBudget(RateBudgetName.SEC, capacity=5, per_seconds=1.0),
+    RateBudgetName.WIKIPEDIA: RateBudget(RateBudgetName.WIKIPEDIA, capacity=10, per_seconds=60.0),
 }
 
 

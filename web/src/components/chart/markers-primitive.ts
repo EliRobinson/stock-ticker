@@ -9,19 +9,11 @@ import type {
   Time
 } from 'lightweight-charts'
 
+import type { PlacedMarker } from '@/lib/chart-data'
+
 import type { ChartColors } from './chart-theme'
 
 type Target = Parameters<IPrimitivePaneRenderer['draw']>[0]
-
-// A marker already snapped to a loaded bar (`barDate`, from #8's chart-data
-// mapping). `start`/`end` carry a Note's range for shading.
-export interface PlacedMarker {
-  id: string
-  kind: 'note' | 'event'
-  barDate: string
-  start: string
-  end: string
-}
 
 interface State {
   markers: PlacedMarker[]

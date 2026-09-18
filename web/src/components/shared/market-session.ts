@@ -1,14 +1,14 @@
 import type { MarketClock } from '@/lib/api'
-import { getMarketStatus, getQuoteStaleness } from '@/lib/staleness'
+import { NY_TZ, formatTimeET } from '@/lib/format'
+import { getMarketStatus } from '@/lib/staleness'
 
 import { shellCopy } from '../shell/copy'
-import { formatTimeET } from './format'
 
 export type Session = 'open' | 'closed' | 'pre' | 'after' | 'unknown'
 
 function nyParts(iso: string) {
   const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York',
+    timeZone: NY_TZ,
     weekday: 'short',
     hour: 'numeric',
     minute: 'numeric',
@@ -23,7 +23,8 @@ function nyParts(iso: string) {
 
 // The API reports only is_open plus the next boundaries. The design's
 // pre-market and after-hours pills are a display split of "closed", read off
-// the response's own server_time in New York time; they never change staleness.
+// the response's own server_time in New York time; they never change
+// staleness, which lib/staleness decides from is_open alone.
 export function sessionOf(
   clock: MarketClock | null | undefined,
   serverTime: string
@@ -55,15 +56,4 @@ export function sessionLabel(
     default:
       return shellCopy.status.closed(open)
   }
-}
-
-// Staleness only matters while the market is open; a closed market's last
-// close is final, not stale (design M8).
-export function quoteState(
-  observedAt: string | null,
-  serverTime: string,
-  isOpen: boolean
-) {
-  const { ageMs, isStale } = getQuoteStaleness(observedAt, serverTime, isOpen)
-  return { ageMs, stale: isStale }
 }

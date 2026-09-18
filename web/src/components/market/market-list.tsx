@@ -3,9 +3,10 @@
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useRef } from 'react'
 
+import { formatPrice } from '@/lib/format'
+
 import { ChangeCell } from '../shared/cells'
 import { SkeletonBar } from '../shared/feedback'
-import { formatPrice } from '../shared/format'
 import { marketCopy } from './copy'
 import type { MarketRowView } from './market-rows'
 
@@ -62,7 +63,7 @@ export function MarketList({
                       : 'block text-base font-bold'
                   }
                 >
-                  {formatPrice(r.price)}
+                  {formatPrice(r.price, { currency: false })}
                 </span>
                 {r.backfillPending ? (
                   <SkeletonBar className='ml-auto w-16' />

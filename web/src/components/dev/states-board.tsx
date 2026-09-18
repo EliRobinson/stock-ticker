@@ -46,11 +46,17 @@ import {
   statusOk
 } from '@/fixtures/status'
 import type { MarketResponse, StatusResponse } from '@/lib/api'
+import { companyHref } from '@/lib/routes'
 import { cn } from '@/lib/utils'
+
+import './board.css'
 
 import { AskPanel } from '../ask/ask-panel'
 import { askCopy } from '../ask/copy'
-import type { AskMessage } from '../ask/types'
+import type { ChatUIMessage as AskMessage } from '@/lib/chat'
+import { prepareTurns } from '../ask/prepare'
+import type { CompanyView } from '../company/company-screen'
+import { parseRange } from '../company/range'
 import { CompanyScreen, CompanySkeleton } from '../company/company-screen'
 import type { CompanyScreenProps } from '../company/company-screen'
 import { quotesProblemOf } from '../containers/market-container'
@@ -58,8 +64,9 @@ import { MarketScreen } from '../market/market-screen'
 import type { QuotesProblem } from '../market/market-screen'
 import { notesCopy } from '../notes/copy'
 import { NoteForm } from '../notes/note-dialog'
-import { NotesScreen } from '../notes/notes-screen'
-import { Blueprint } from '../shared/blueprint'
+import { NotesScreen, noFilters } from '../notes/notes-screen'
+import type { NotesFilters } from '../notes/notes-screen'
+import { Blueprint } from './blueprint'
 import { ChangeCell, QuoteCell } from '../shared/cells'
 import { MarkerLegend } from '../shared/marker-legend'
 import {
@@ -69,12 +76,15 @@ import {
 } from '../shared/status-pills'
 import { AppShell } from '../shell/app-shell'
 import type { Screen } from '../shell/app-shell'
-import { CommandPalettePreview } from '../shell/command-palette'
+import { Command } from '@/components/ui/command'
+import { PaletteBody } from '../shell/command-palette'
+import type { PaletteEntry } from '../shell/command-palette'
 import { shellCopy } from '../shell/copy'
 import { StatusStrip } from '../shell/status-strip'
 import { boardCopy as copy } from './copy'
 
 const noop = () => {}
+const noSave = async () => {}
 const TODAY = '2024-09-17'
 
 const paletteEntries = marketOpen.listings.map((r) => ({
@@ -198,8 +208,7 @@ function MarketHarness({
   loading,
   problem,
   initialQuery = '',
-  initialSector = null,
-  touch
+  initialSector = null
 }: {
   market: MarketResponse | null
   status: StatusResponse | null
@@ -207,7 +216,6 @@ function MarketHarness({
   problem?: QuotesProblem
   initialQuery?: string
   initialSector?: string | null
-  touch?: boolean
 }) {
   const [query, setQuery] = useState(initialQuery)
   const [sector, setSector] = useState<string | null>(initialSector)
@@ -228,17 +236,24 @@ function MarketHarness({
         sorting={sorting}
         onSortingChange={setSorting}
         onOpenCompany={noop}
-        forceTouchList={touch}
       />
     </>
   )
 }
 
-function CompanyHarness(
-  props: Partial<CompanyScreenProps> & {
-    company: CompanyScreenProps['company']
-  }
-) {
+function CompanyHarness({
+  initialView,
+  ...props
+}: Partial<CompanyScreenProps> & {
+  company: CompanyScreenProps['company']
+  initialView?: Partial<CompanyView>
+}) {
+  const [view, setView] = useState<CompanyView>({
+    range: parseRange(null),
+    mode: 'line',
+    tab: 'notes',
+    ...initialView
+  })
   const [symbol, setSymbol] = useState(
     props.company?.listings[0]?.symbol ?? 'AAPL'
   )
@@ -257,7 +272,9 @@ function CompanyHarness(
           : appleEvents.items
       }
       today={TODAY}
-      onSaveNote={noop}
+      onSaveNote={noSave}
+      view={view}
+      onViewChange={(v) => setView((prev) => ({ ...prev, ...v }))}
       {...props}
     />
   )
@@ -272,7 +289,7 @@ function AskHarness({
 }) {
   return (
     <AskPanel
-      messages={messages}
+      turns={prepareTurns(messages, status)}
       status={status}
       onSend={noop}
       onClose={noop}
@@ -308,13 +325,13 @@ function ShellHarness({
       crumbs={crumbs}
       status={statusOk}
       ai={aiOk}
-      company={{ symbol: 'AAPL', href: `/companies/${apple.cik}` }}
-      notesCount={notes.length}
+      company={{ symbol: 'AAPL', href: companyHref(apple.cik) }}
+      onNavigate={noop}
       paletteEntries={paletteEntries}
       onPaletteSelect={noop}
       askOpen={open}
       onAskOpenChange={setOpen}
-      initialCollapsed={collapsed}
+      defaultCollapsed={collapsed}
       ask={
         <AskHarness messages={chatTableAnswer} onClose={() => setOpen(false)} />
       }
@@ -335,7 +352,9 @@ function ScreenBody({ screen }: { screen: string }) {
           companies={companies}
           symbolByCik={symbolByCik}
           today={TODAY}
-          onSave={noop}
+          filters={noFilters}
+          onFiltersChange={noop}
+          onSave={noSave}
           onDelete={noop}
         />
       )
@@ -443,9 +462,7 @@ export function StatesBoard() {
       {show('M') && (
         <Group id='M'>
           <Frame id='M0' width={390} height={560} themes={themes}>
-            {() => (
-              <MarketHarness market={marketStale} status={statusStale} touch />
-            )}
+            {() => <MarketHarness market={marketStale} status={statusStale} />}
           </Frame>
           <Frame id='M1' width={880} height={420} themes={themes}>
             {() => <MarketHarness market={null} status={statusOk} loading />}
@@ -510,9 +527,11 @@ export function StatesBoard() {
               <CompanyHarness
                 company={alphabet}
                 bars={googBars}
-                initialMode='candles'
-                initialPreset='5Y'
-                initialTab='events'
+                initialView={{
+                  mode: 'candles',
+                  range: parseRange('5Y'),
+                  tab: 'events'
+                }}
               />
             )}
           </Frame>
@@ -523,7 +542,7 @@ export function StatesBoard() {
             {() => <CompanyHarness company={apple} notes={[]} events={[]} />}
           </Frame>
           <Frame id='C5' width={880} height={420} themes={themes}>
-            {() => <CompanyHarness company={apple} chartError />}
+            {() => <CompanyHarness company={apple} barsError />}
           </Frame>
           <Frame id='C6' width={880} height={200} themes={themes}>
             {() => (
@@ -538,7 +557,7 @@ export function StatesBoard() {
               <CompanyHarness
                 company={apple}
                 bars={partialBars}
-                initialPreset='1M'
+                initialView={{ range: parseRange('1M') }}
                 backfill={{ loaded: 214, expected: 1753 }}
               />
             )}
@@ -576,13 +595,18 @@ export function StatesBoard() {
                 lockCompany
                 origin='range'
                 today={TODAY}
-                onSave={noop}
+                onSave={noSave}
                 onCancel={noop}
               />
             )}
           </Frame>
           <Frame id='C10' width={400} height={900} themes={themes}>
-            {() => <CompanyHarness company={apple} initialPreset='1Y' />}
+            {() => (
+              <CompanyHarness
+                company={apple}
+                initialView={{ range: parseRange('1Y') }}
+              />
+            )}
           </Frame>
         </Group>
       )}
@@ -600,7 +624,9 @@ export function StatesBoard() {
                 companies={companies}
                 symbolByCik={symbolByCik}
                 today={TODAY}
-                onSave={noop}
+                filters={noFilters}
+                onFiltersChange={noop}
+                onSave={noSave}
                 onDelete={noop}
               />
             )}
@@ -612,7 +638,9 @@ export function StatesBoard() {
                 companies={companies}
                 symbolByCik={symbolByCik}
                 today={TODAY}
-                onSave={noop}
+                filters={noFilters}
+                onFiltersChange={noop}
+                onSave={noSave}
                 onDelete={noop}
               />
             )}
@@ -628,7 +656,9 @@ export function StatesBoard() {
                 companies={companies}
                 symbolByCik={symbolByCik}
                 today={TODAY}
-                onSave={noop}
+                filters={noFilters}
+                onFiltersChange={noop}
+                onSave={noSave}
                 onDelete={noop}
               />
             )}
@@ -834,7 +864,7 @@ export function StatesBoard() {
             className='p-5.5 items-center'
           >
             {() => (
-              <CommandPalettePreview
+              <PalettePreview
                 entries={paletteEntries.filter((e) =>
                   ['NVDA', 'NVR', 'NI'].includes(e.symbol)
                 )}
@@ -867,16 +897,36 @@ export function StatesBoard() {
 }
 
 function NotesFiltered() {
+  const [filters, setFilters] = useState<NotesFilters>({
+    ...noFilters,
+    q: 'dividend'
+  })
   return (
     <NotesScreen
       notes={notes.slice(0, 1)}
       companies={companies}
       symbolByCik={symbolByCik}
       today={TODAY}
-      onSave={noop}
+      filters={filters}
+      onFiltersChange={(f) => setFilters((prev) => ({ ...prev, ...f }))}
+      onSave={noSave}
       onDelete={noop}
-      initialQuery='dividend'
     />
+  )
+}
+
+function PalettePreview({ entries }: { entries: PaletteEntry[] }) {
+  const first = entries[0]
+  return (
+    <Blueprint className='bg-background w-[440px] max-w-full shadow-lg'>
+      <Command
+        label={shellCopy.palette.title}
+        defaultValue={first ? `${first.symbol} ${first.name}` : undefined}
+        className='bg-background'
+      >
+        <PaletteBody entries={entries} onSelect={noop} />
+      </Command>
+    </Blueprint>
   )
 }
 

@@ -2,31 +2,30 @@
 
 import { useQueryClient } from '@tanstack/react-query'
 import type { SortingState } from '@tanstack/react-table'
-import type { Route } from 'next'
-import { usePathname, useRouter, useSearchParams } from 'next/navigation'
+import { useRouter } from 'next/navigation'
 import { useCallback, useMemo } from 'react'
 
+import { prefetchBars } from '@/hooks/useBars'
 import { prefetchCompany } from '@/hooks/useCompany'
 import { useMarket } from '@/hooks/useMarket'
 import { useStatus } from '@/hooks/useStatus'
 import type { StatusResponse } from '@/lib/api'
-import {
-  marketFilterStateToSearchParams,
-  parseMarketFilterState
-} from '@/lib/market-table'
-import type { MarketFilterState } from '@/lib/market-table'
+import { parseMarketFilterState } from '@/lib/market-table'
+import { companyHref } from '@/lib/routes'
 
 import { MarketScreen } from '../market/market-screen'
 import type { QuotesProblem } from '../market/market-screen'
-import { companyHref } from './shell-container'
+import type { MarketRowView } from '../market/market-rows'
+import { useUrlParams } from './url-state'
+
+const SEARCH_DEBOUNCE_MS = 250
 
 export function quotesProblemOf(
   status: StatusResponse | undefined
 ): QuotesProblem {
   if (!status) return null
-  if (status.missing_keys.some((k) => k.startsWith('ALPACA'))) {
+  if (status.missing_keys.some((k) => k.startsWith('ALPACA')))
     return { kind: 'missing-key' }
-  }
   const quotes = status.jobs.find((j) => j.job === 'quotes')
   if (quotes?.status === 'failed') {
     return {
@@ -40,16 +39,12 @@ export function quotesProblemOf(
 // Filter and sort state lives in the URL (?q=&sector=&sort=), system design §7.
 export function MarketContainer() {
   const router = useRouter()
-  const pathname = usePathname()
-  const params = useSearchParams()
   const queryClient = useQueryClient()
   const market = useMarket()
   const status = useStatus()
+  const { params, set } = useUrlParams()
 
-  const state = useMemo(
-    () => parseMarketFilterState(new URLSearchParams(params.toString())),
-    [params]
-  )
+  const state = useMemo(() => parseMarketFilterState(params), [params])
   const sorting: SortingState = useMemo(
     () =>
       state.sort
@@ -58,14 +53,25 @@ export function MarketContainer() {
     [state.sort]
   )
 
-  const write = useCallback(
-    (next: MarketFilterState) => {
-      const qs = marketFilterStateToSearchParams(next).toString()
-      router.replace(`${pathname}${qs ? `?${qs}` : ''}` as Route, {
-        scroll: false
-      })
+  const onQueryChange = useCallback(
+    (q: string) => set({ q }, { debounceMs: SEARCH_DEBOUNCE_MS }),
+    [set]
+  )
+  const onSectorChange = useCallback(
+    (sector: string | null) => set({ sector }),
+    [set]
+  )
+  const onSortingChange = useCallback(
+    (s: SortingState) =>
+      set({ sort: s[0] ? `${s[0].desc ? '-' : ''}${s[0].id}` : null }),
+    [set]
+  )
+  const onPrefetch = useCallback(
+    (row: MarketRowView) => {
+      prefetchCompany(queryClient, row.cik).catch(() => {})
+      prefetchBars(queryClient, row.symbol).catch(() => {})
     },
-    [router, pathname]
+    [queryClient]
   )
 
   return (
@@ -78,20 +84,13 @@ export function MarketContainer() {
           : quotesProblemOf(status.data)
       }
       query={state.q}
-      onQueryChange={(q) => write({ ...state, q })}
+      onQueryChange={onQueryChange}
       sector={state.sector}
-      onSectorChange={(sector) => write({ ...state, sector })}
+      onSectorChange={onSectorChange}
       sorting={sorting}
-      onSortingChange={(s) =>
-        write({
-          ...state,
-          sort: s[0] ? { id: s[0].id, desc: s[0].desc } : null
-        })
-      }
+      onSortingChange={onSortingChange}
       onOpenCompany={(row) => router.push(companyHref(row.cik))}
-      onPrefetchCompany={(row) => {
-        prefetchCompany(queryClient, row.cik).catch(() => {})
-      }}
+      onPrefetchCompany={onPrefetch}
     />
   )
 }

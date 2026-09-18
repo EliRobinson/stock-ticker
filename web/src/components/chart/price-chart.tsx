@@ -4,73 +4,28 @@ import {
   AreaSeries,
   CandlestickSeries,
   createChart,
-  HistogramSeries,
-  LineStyle
+  HistogramSeries
 } from 'lightweight-charts'
 import type {
-  DeepPartial,
-  ChartOptions,
+  CandlestickData,
+  HistogramData,
   IChartApi,
   ISeriesApi,
   Time
 } from 'lightweight-charts'
 import { useEffect, useMemo, useRef } from 'react'
 
+import type { PlacedMarker } from '@/lib/chart-data'
+import { formatPrice } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
-import { useChartColors } from './chart-theme'
+import { baseChartOptions, useChartColors } from './chart-theme'
 import type { ChartColors } from './chart-theme'
 import { MarkersPrimitive } from './markers-primitive'
-import type { PlacedMarker } from './markers-primitive'
-
-export interface ChartBar {
-  time: string
-  open: number
-  high: number
-  low: number
-  close: number
-}
-
-export interface VolumePoint {
-  time: string
-  value: number
-}
-
-export function baseChartOptions(
-  colors: ChartColors,
-  height: number
-): DeepPartial<ChartOptions> {
-  return {
-    height,
-    autoSize: true,
-    layout: {
-      background: { color: 'transparent' },
-      textColor: colors.muted,
-      fontFamily: colors.font,
-      fontSize: 11,
-      attributionLogo: false,
-      panes: { separatorColor: colors.border, enableResize: false }
-    },
-    grid: {
-      vertLines: { visible: false },
-      horzLines: { color: colors.grid, style: LineStyle.Solid }
-    },
-    rightPriceScale: { borderColor: colors.border },
-    timeScale: {
-      borderColor: colors.border,
-      fixLeftEdge: true,
-      fixRightEdge: true
-    },
-    crosshair: {
-      vertLine: { color: colors.muted, labelBackgroundColor: colors.line },
-      horzLine: { color: colors.muted, labelBackgroundColor: colors.line }
-    }
-  }
-}
 
 export interface PriceChartProps {
-  bars: ChartBar[]
-  volume: VolumePoint[]
+  candles: CandlestickData<Time>[]
+  volume: HistogramData<Time>[]
   mode: 'line' | 'candles'
   markers?: PlacedMarker[]
   highlightedId?: string | null
@@ -79,14 +34,46 @@ export interface PriceChartProps {
   height?: number
   volumeHeight?: number
   ariaLabel: string
+  summary: string
   className?: string
 }
 
+interface ChartParts {
+  chart: IChartApi
+  area: ISeriesApi<'Area'>
+  candles: ISeriesApi<'Candlestick'>
+  volume: ISeriesApi<'Histogram'>
+  primitive: MarkersPrimitive
+  attachedTo: ISeriesApi<'Area'> | ISeriesApi<'Candlestick'>
+}
+
+function seriesColors(colors: ChartColors) {
+  return {
+    area: {
+      lineColor: colors.line,
+      topColor: colors.area,
+      bottomColor: colors.area,
+      crosshairMarkerBackgroundColor: colors.line
+    },
+    candles: {
+      upColor: colors.up,
+      downColor: colors.down,
+      borderUpColor: colors.up,
+      borderDownColor: colors.down,
+      wickUpColor: colors.up,
+      wickDownColor: colors.down
+    },
+    volume: { color: colors.volume }
+  }
+}
+
 // Adjusted close (line) or adjusted OHLC (candles), a synced volume pane, and
-// Note/Event markers. Click selects a date, drag selects a range.
+// Note/Event markers. The chart is built once; data, mode, theme, markers
+// and range each update it in place, so zoom and an in-progress drag survive
+// a refetch or a toggle. Click selects a date, a mouse drag selects a range.
 export function PriceChart({
-  bars,
-  volume: volumePoints,
+  candles,
+  volume,
   mode,
   markers = [],
   highlightedId = null,
@@ -95,31 +82,27 @@ export function PriceChart({
   height = 250,
   volumeHeight = 58,
   ariaLabel,
+  summary,
   className
 }: PriceChartProps) {
   const hostRef = useRef<HTMLDivElement>(null)
   const colors = useChartColors(hostRef)
-  const chartRef = useRef<IChartApi | null>(null)
-  const mainRef = useRef<ISeriesApi<'Area'> | ISeriesApi<'Candlestick'> | null>(
-    null
-  )
-  const primitiveRef = useRef<MarkersPrimitive | null>(null)
+  const partsRef = useRef<ChartParts | null>(null)
+  const datesRef = useRef<string[]>([])
   const onSelectRef = useRef(onSelect)
   useEffect(() => {
     onSelectRef.current = onSelect
   }, [onSelect])
 
-  const values = useMemo(
-    () => new Map(bars.map((b) => [b.time, b.close])),
-    [bars]
-  )
-  const placed = markers
+  const ready = colors !== null
 
+  // Build once, when the theme tokens are first readable.
   useEffect(() => {
     const host = hostRef.current
-    if (!host || !colors) return
+    if (!host || !ready || !colors) return
     const chart = createChart(host, {
-      ...baseChartOptions(colors, height + volumeHeight),
+      ...baseChartOptions(colors),
+      height: height + volumeHeight,
       handleScroll: {
         pressedMouseMove: false,
         mouseWheel: true,
@@ -132,61 +115,28 @@ export function PriceChart({
         axisPressedMouseMove: false
       }
     })
-    chartRef.current = chart
-
-    const main =
-      mode === 'candles'
-        ? chart.addSeries(CandlestickSeries, {
-            upColor: colors.up,
-            downColor: colors.down,
-            borderUpColor: colors.up,
-            borderDownColor: colors.down,
-            wickUpColor: colors.up,
-            wickDownColor: colors.down,
-            priceLineVisible: false
-          })
-        : chart.addSeries(AreaSeries, {
-            lineColor: colors.line,
-            lineWidth: 2,
-            topColor: colors.area,
-            bottomColor: colors.area,
-            priceLineVisible: false,
-            crosshairMarkerBackgroundColor: colors.line
-          })
-    if (mode === 'candles') {
-      ;(main as ISeriesApi<'Candlestick'>).setData(
-        bars.map((b) => ({
-          time: b.time as Time,
-          open: b.open,
-          high: b.high,
-          low: b.low,
-          close: b.close
-        }))
-      )
-    } else {
-      ;(main as ISeriesApi<'Area'>).setData(
-        bars.map((b) => ({ time: b.time as Time, value: b.close }))
-      )
-    }
-    mainRef.current = main
-
-    const volume = chart.addSeries(
+    const palette = seriesColors(colors)
+    // No last-value labels: the stat row already shows the price, and the
+    // label collides with the axis ticks near the top of the scale.
+    const common = { priceLineVisible: false, lastValueVisible: false }
+    const area = chart.addSeries(AreaSeries, {
+      ...common,
+      ...palette.area,
+      lineWidth: 2
+    })
+    const candleSeries = chart.addSeries(CandlestickSeries, {
+      ...common,
+      ...palette.candles,
+      visible: false
+    })
+    const volumeSeries = chart.addSeries(
       HistogramSeries,
-      {
-        color: colors.volume,
-        priceFormat: { type: 'volume' },
-        priceLineVisible: false,
-        lastValueVisible: false
-      },
+      { ...common, ...palette.volume, priceFormat: { type: 'volume' } },
       1
-    )
-    volume.setData(
-      volumePoints.map((v) => ({ time: v.time as Time, value: v.value }))
     )
     const panes = chart.panes()
     panes[0]?.setHeight(height)
     panes[1]?.setHeight(volumeHeight)
-
     const primitive = new MarkersPrimitive({
       markers: [],
       values: new Map(),
@@ -194,88 +144,145 @@ export function PriceChart({
       selection: null,
       colors
     })
-    main.attachPrimitive(primitive)
-    primitiveRef.current = primitive
+    area.attachPrimitive(primitive)
+    partsRef.current = {
+      chart,
+      area,
+      candles: candleSeries,
+      volume: volumeSeries,
+      primitive,
+      attachedTo: area
+    }
 
     let dragFrom: number | null = null
     const xOf = (e: PointerEvent) =>
       e.clientX - host.getBoundingClientRect().left
     const dateAt = (x: number) => {
+      const dates = datesRef.current
       const logical = chart.timeScale().coordinateToLogical(x)
-      if (logical == null) return null
-      const i = Math.max(0, Math.min(bars.length - 1, Math.round(logical)))
-      return bars[i]?.time ?? null
+      if (logical == null || dates.length === 0) return null
+      const i = Math.max(0, Math.min(dates.length - 1, Math.round(logical)))
+      return dates[i] ?? null
     }
+    const cancel = () => {
+      dragFrom = null
+      primitive.update({ selection: null })
+    }
+    // Touch pans the chart; only a mouse or pen selects dates.
     const down = (e: PointerEvent) => {
-      if (e.button !== 0 || !onSelectRef.current) return
+      if (e.pointerType === 'touch' || e.button !== 0 || !onSelectRef.current)
+        return
       dragFrom = xOf(e)
     }
     const move = (e: PointerEvent) => {
       if (dragFrom == null) return
       const x = xOf(e)
-      if (Math.abs(x - dragFrom) > 4) {
+      if (Math.abs(x - dragFrom) > 4)
         primitive.update({ selection: { from: dragFrom, to: x } })
-      }
     }
     const up = (e: PointerEvent) => {
       if (dragFrom == null) return
       const x = xOf(e)
       const a = dateAt(Math.min(dragFrom, x))
       const b = dateAt(Math.max(dragFrom, x))
-      dragFrom = null
-      primitive.update({ selection: null })
+      cancel()
       if (a && b) onSelectRef.current?.(a, b)
     }
     host.addEventListener('pointerdown', down)
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', cancel)
 
     return () => {
       host.removeEventListener('pointerdown', down)
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', cancel)
       chart.remove()
-      chartRef.current = null
-      mainRef.current = null
-      primitiveRef.current = null
+      partsRef.current = null
     }
-  }, [bars, volumePoints, mode, colors, height, volumeHeight])
+    // Colors are applied by their own effect; rebuilding on a theme change
+    // would reset zoom.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, height, volumeHeight])
 
   useEffect(() => {
-    primitiveRef.current?.update({ markers: placed, values, highlightedId })
-  }, [placed, values, highlightedId, colors, mode, bars])
+    const parts = partsRef.current
+    if (!parts || !colors) return
+    const palette = seriesColors(colors)
+    parts.chart.applyOptions(baseChartOptions(colors))
+    parts.area.applyOptions(palette.area)
+    parts.candles.applyOptions(palette.candles)
+    parts.volume.applyOptions(palette.volume)
+    parts.primitive.update({ colors })
+  }, [colors])
+
+  const values = useMemo(
+    () => new Map(candles.map((c) => [String(c.time), c.close])),
+    [candles]
+  )
 
   useEffect(() => {
-    const chart = chartRef.current
-    if (!chart || bars.length === 0) return
+    const parts = partsRef.current
+    if (!parts) return
+    datesRef.current = candles.map((c) => String(c.time))
+    parts.area.setData(candles.map((c) => ({ time: c.time, value: c.close })))
+    parts.candles.setData(candles)
+  }, [candles, ready])
+
+  useEffect(() => {
+    partsRef.current?.volume.setData(volume)
+  }, [volume, ready])
+
+  useEffect(() => {
+    const parts = partsRef.current
+    if (!parts) return
+    parts.area.applyOptions({ visible: mode === 'line' })
+    parts.candles.applyOptions({ visible: mode === 'candles' })
+    const next = mode === 'line' ? parts.area : parts.candles
+    if (next !== parts.attachedTo) {
+      parts.attachedTo.detachPrimitive(parts.primitive)
+      next.attachPrimitive(parts.primitive)
+      parts.attachedTo = next
+    }
+  }, [mode, ready])
+
+  useEffect(() => {
+    partsRef.current?.primitive.update({ markers, values, highlightedId })
+  }, [markers, values, highlightedId, ready])
+
+  const hasData = candles.length > 0
+  useEffect(() => {
+    const chart = partsRef.current?.chart
+    if (!chart || !hasData) return
     if (visibleRange) {
-      chart.timeScale().setVisibleRange({
-        from: visibleRange.from as Time,
-        to: visibleRange.to as Time
-      })
+      chart
+        .timeScale()
+        .setVisibleRange({
+          from: visibleRange.from as Time,
+          to: visibleRange.to as Time
+        })
     } else {
       chart.timeScale().fitContent()
     }
-  }, [visibleRange, bars, mode, colors])
+  }, [visibleRange, hasData, ready])
 
-  const first = bars[0]
-  const last = bars[bars.length - 1]
   const sampled = useMemo(() => {
-    const step = Math.max(1, Math.floor(bars.length / 24))
-    return bars.filter((_, i) => i % step === 0 || i === bars.length - 1)
-  }, [bars])
+    const step = Math.max(1, Math.floor(candles.length / 24))
+    return candles.filter((_, i) => i % step === 0 || i === candles.length - 1)
+  }, [candles])
 
   return (
     <figure className={cn('m-0', className)}>
       <div
         ref={hostRef}
         role='img'
-        aria-label={`${ariaLabel}${first && last ? `, ${first.time} to ${last.time}, from ${first.close.toFixed(2)} to ${last.close.toFixed(2)}` : ''}. ${placed.filter((m) => m.kind === 'note').length} Notes and ${placed.filter((m) => m.kind === 'event').length} Events marked.`}
+        aria-label={`${ariaLabel}. ${summary}`}
         className={cn('w-full touch-pan-y', onSelect && 'cursor-crosshair')}
         style={{ height: height + volumeHeight }}
       />
       <table className='sr-only'>
-        <caption>{ariaLabel}, sampled points</caption>
+        <caption>{ariaLabel}</caption>
         <thead>
           <tr>
             <th scope='col'>Trading Day</th>
@@ -283,10 +290,10 @@ export function PriceChart({
           </tr>
         </thead>
         <tbody>
-          {sampled.map((b) => (
-            <tr key={b.time}>
-              <td>{b.time}</td>
-              <td>{b.close.toFixed(2)}</td>
+          {sampled.map((c) => (
+            <tr key={String(c.time)}>
+              <td>{String(c.time)}</td>
+              <td>{formatPrice(c.close, { currency: false })}</td>
             </tr>
           ))}
         </tbody>

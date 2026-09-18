@@ -1,3 +1,5 @@
+import { sharedCopy } from '../shared/copy'
+
 // Every user-facing string in the app shell, status strip, pills and ⌘K palette.
 // Chrome copy: the fact, then the consequence, then the action (AGENTS.md).
 
@@ -53,8 +55,8 @@ export const shellCopy = {
 
   palette: {
     title: 'Jump to Company',
-    description: 'Search by symbol or Company name.',
-    placeholder: 'Symbol or Company name',
+    description: 'Search by ticker or Company name.',
+    placeholder: sharedCopy.tickerOrName,
     empty: 'No Company matches.',
     move: '↑↓ move',
     open: '↵ open Company',

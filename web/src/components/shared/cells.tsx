@@ -7,31 +7,30 @@ import {
   TooltipContent,
   TooltipTrigger
 } from '@/components/ui/tooltip'
+import {
+  directionOf,
+  EMPTY,
+  formatChange,
+  formatPercent,
+  formatPrice,
+  formatQuoteAge
+} from '@/lib/format'
+import type { NumericInput } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
-import {
-  direction,
-  formatAge,
-  formatPrice,
-  formatSignedMoney,
-  formatSignedPercent
-} from './format'
-import type { NumericInput } from './format'
-import { marketCopy } from '../market/copy'
+import { sharedCopy } from './copy'
 
 const DIR_TEXT = {
   up: 'text-up',
   down: 'text-down',
   flat: 'text-flat'
 } as const
-
 const ARROW = { up: '↑ ', down: '↓ ', flat: '' } as const
 
+/** "↑ +1.23% (+$3.14)": sign, arrow and percent, with the dollar move when given. */
 export function changeText(pct: NumericInput, abs?: NumericInput): string {
-  const dir = direction(pct)
-  const head = `${ARROW[dir]}${formatSignedPercent(pct)}`
-  if (abs === undefined) return head
-  return `${head} (${formatSignedMoney(abs)})`
+  const head = `${ARROW[directionOf(pct)]}${formatPercent(pct)}`
+  return abs === undefined ? head : `${head} (${formatChange(abs)})`
 }
 
 // Sign, arrow and color together: color is never the only signal (S2).
@@ -46,7 +45,7 @@ export function ChangeCell({
   stale?: boolean
   className?: string
 }) {
-  const dir = direction(pct)
+  const dir = directionOf(pct)
   return (
     <span
       className={cn(
@@ -64,53 +63,83 @@ export function ChangeCell({
 
 export type QuoteState = 'fresh' | 'stale' | 'closed'
 
-// Price with tabular numerals; a Stale Quote drops emphasis and carries its age (S1).
+/** "14m old": the one way a Quote's age is written. */
+export function quoteAgeText(ageMs: number | null, stale: boolean): string {
+  if (ageMs === null) return EMPTY
+  const age = formatQuoteAge(ageMs)
+  return stale ? sharedCopy.ageOld(age) : age
+}
+
+// Price with tabular numerals; a Stale Quote drops emphasis and carries its
+// age inline (S1). `lg` is the stat-row size on the Company screen.
 export function QuoteCell({
   price,
   ageMs,
   state,
+  size = 'sm',
   className
 }: {
   price: NumericInput
   ageMs: number | null
   state: QuoteState
+  size?: 'sm' | 'lg'
   className?: string
 }) {
-  if (state === 'stale' && ageMs != null) {
-    const age = formatAge(ageMs)
+  const value = formatPrice(price, { currency: false })
+  if (state === 'stale' && ageMs !== null) {
     return (
       <span
-        className={cn('tabular text-stale', className)}
-        aria-description={marketCopy.quoteAge(age)}
+        className={cn(
+          'tabular text-stale',
+          size === 'lg' && 'text-2xl',
+          className
+        )}
+        aria-description={sharedCopy.quoteAge(formatQuoteAge(ageMs))}
       >
-        {formatPrice(price)}
-        <span className='text-2xs'>{` · ${marketCopy.ageOld(age)}`}</span>
+        {value}
+        <span className={size === 'lg' ? 'text-xs' : 'text-2xs'}>
+          {` · ${quoteAgeText(ageMs, true)}`}
+        </span>
       </span>
     )
   }
-  return <span className={cn('tabular', className)}>{formatPrice(price)}</span>
+  return (
+    <span
+      className={cn(
+        'tabular',
+        size === 'lg' && 'text-2xl font-bold',
+        className
+      )}
+    >
+      {value}
+    </span>
+  )
 }
 
-// A missing value whose reason is known: a dash plus the reason on hover or focus.
+// A missing value whose reason is known: a dash plus the reason on hover or
+// focus. Inside a focusable table row the dash is not its own tab stop; the
+// reason is read as part of the cell.
 export function ExplainedDash({
   reason,
+  focusable = true,
   className
 }: {
   reason: string
+  focusable?: boolean
   className?: string
 }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <span
-          tabIndex={0}
-          aria-label={reason}
+          tabIndex={focusable ? 0 : undefined}
           className={cn(
             'text-muted-foreground cursor-help border-b border-dotted border-current',
             className
           )}
         >
-          {'—'}
+          <span aria-hidden='true'>{EMPTY}</span>
+          <span className='sr-only'>{reason}</span>
         </span>
       </TooltipTrigger>
       <TooltipContent className='max-w-[26ch]'>{reason}</TooltipContent>

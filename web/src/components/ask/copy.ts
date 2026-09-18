@@ -1,3 +1,5 @@
+import { sharedCopy } from '../shared/copy'
+
 // Every user-facing string in the Ask panel, in one place for review.
 // Chrome copy: the fact, then the consequence, then the action (AGENTS.md).
 
@@ -32,10 +34,15 @@ export const askCopy = {
     show_table: 'Built the table',
     show_chart: 'Built the chart'
   } as Record<string, string>,
-  stepRunning: 'running',
-  stepDone: 'done',
-  stepFailed: 'failed',
+  stepState: {
+    running: 'running',
+    done: 'done',
+    failed: 'failed',
+    stopped: 'stopped'
+  },
+  stopped: 'Stopped',
   retry: 'Retry',
+  viewFailed: sharedCopy.viewFailed,
   errors: {
     'backend-down':
       'The answer could not be generated. The AI service is unreachable. Try the question again.',
@@ -49,6 +56,5 @@ export const askCopy = {
   spendBody: (limit: string) =>
     `AI spend limit reached (${limit}). Raise AI_SPEND_LIMIT_USD to continue.`,
   otherScreensWork:
-    'Market, Company and Notes keep working. Only this panel is out.',
-  tableFallback: 'Result'
+    'Market, Company and Notes keep working. Only this panel is out.'
 } as const

@@ -2,7 +2,6 @@
 
 import { EllipsisVertical } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import type { DateRange } from 'react-day-picker'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -27,17 +26,61 @@ import {
   SelectValue
 } from '@/components/ui/select'
 import type { Note } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import type { CompanyOption } from '@/lib/company'
+import { formatDateRange } from '@/lib/format'
 
+import { ClampedText } from '../shared/clamped-text'
+import { sharedCopy } from '../shared/copy'
 import { EmptyState, SkeletonBar, StatusAlert } from '../shared/feedback'
 import { SafeMarkdown } from '../shared/markdown'
-import { formatDateRange } from '../shared/format'
+import { useDraft } from '../shared/use-draft'
 import { notesCopy as copy } from './copy'
-import { NoteDialog } from './note-dialog'
-import type { CompanyOption, NoteDraft } from './note-dialog'
+import { NoteDialog, emptyDraft } from './note-dialog'
+import type { NoteDraft } from './note-dialog'
 
 const ALL = '__all__'
-const MARKET = '__market__'
+export const MARKET_FILTER = '__market__'
+
+export interface NotesFilters {
+  /** A cik, MARKET_FILTER for whole-market Notes, or null for all. */
+  company: string | null
+  from: string | null
+  to: string | null
+  q: string
+}
+
+export const noFilters: NotesFilters = {
+  company: null,
+  from: null,
+  to: null,
+  q: ''
+}
+
+export function filterNotes(notes: Note[], f: NotesFilters): Note[] {
+  const q = f.q.trim().toLowerCase()
+  return notes
+    .filter((n) =>
+      f.company === null
+        ? true
+        : f.company === MARKET_FILTER
+          ? n.cik == null
+          : n.cik === f.company
+    )
+    .filter((n) => (f.from ? n.end_date >= f.from : true))
+    .filter((n) => (f.to ? n.start_date <= f.to : true))
+    .filter((n) => (q ? n.body.toLowerCase().includes(q) : true))
+    .sort((a, b) => b.start_date.localeCompare(a.start_date))
+}
+
+const toIso = (d?: Date) =>
+  d
+    ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    : null
+const toDate = (s: string | null) => {
+  if (!s) return undefined
+  const [y, m, d] = s.split('-').map(Number)
+  return new Date(y!, (m ?? 1) - 1, d ?? 1)
+}
 
 export interface NotesScreenProps {
   notes: Note[]
@@ -46,11 +89,10 @@ export interface NotesScreenProps {
   companies: CompanyOption[]
   symbolByCik: Record<string, string>
   today: string
-  onSave: (draft: NoteDraft) => void
+  filters: NotesFilters
+  onFiltersChange: (filters: Partial<NotesFilters>) => void
+  onSave: (draft: NoteDraft) => Promise<unknown>
   onDelete: (note: Note) => void
-  saveError?: string | null
-  initialDialog?: NoteDraft | null
-  initialQuery?: string
 }
 
 export function NotesScreen({
@@ -60,50 +102,26 @@ export function NotesScreen({
   companies,
   symbolByCik,
   today,
+  filters,
+  onFiltersChange,
   onSave,
-  onDelete,
-  saveError = null,
-  initialDialog = null,
-  initialQuery = ''
+  onDelete
 }: NotesScreenProps) {
-  const [company, setCompany] = useState<string>(ALL)
-  const [range, setRange] = useState<DateRange | undefined>()
-  const [query, setQuery] = useState(initialQuery)
-  const [dialog, setDialog] = useState<NoteDraft | null>(initialDialog)
-
-  const iso = (d?: Date) =>
-    d
-      ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-      : null
-  const from = iso(range?.from)
-  const to = iso(range?.to ?? range?.from)
-
-  const shown = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    return [...notes]
-      .filter((n) =>
-        company === ALL
-          ? true
-          : company === MARKET
-            ? n.cik == null
-            : n.cik === company
-      )
-      .filter((n) =>
-        from && to ? n.end_date >= from && n.start_date <= to : true
-      )
-      .filter((n) => (q ? n.body.toLowerCase().includes(q) : true))
-      .sort((a, b) => b.start_date.localeCompare(a.start_date))
-  }, [notes, company, from, to, query])
-
-  const filtered = company !== ALL || from != null || query.trim() !== ''
-  const clear = () => {
-    setCompany(ALL)
-    setRange(undefined)
-    setQuery('')
-  }
+  const [dialog, setDialog] = useState<NoteDraft | null>(null)
+  const [query, setQuery] = useDraft(filters.q, (q) => onFiltersChange({ q }))
+  const shown = useMemo(
+    () => filterNotes(notes, { ...filters, q: query }),
+    [notes, filters, query]
+  )
+  const filtered =
+    filters.company !== null ||
+    filters.from !== null ||
+    filters.to !== null ||
+    query.trim() !== ''
+  const openNew = () => setDialog(emptyDraft(null, today))
 
   return (
-    <div className='flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-3.5'>
+    <div className='@container flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-3.5'>
       <div className='flex items-center gap-2.5'>
         <h1 className='m-0 text-3xl'>{copy.title}</h1>
         {!loading && !error && (
@@ -115,9 +133,7 @@ export function NotesScreen({
           className='touch:min-h-12 ml-auto'
           disabled={error}
           aria-disabled={error || undefined}
-          onClick={() =>
-            setDialog({ cik: null, start_date: today, end_date: '', body: '' })
-          }
+          onClick={openNew}
         >
           {copy.newNote}
         </Button>
@@ -126,17 +142,22 @@ export function NotesScreen({
       {error ? (
         <StatusAlert title={copy.errorTitle}>{copy.errorBody}</StatusAlert>
       ) : (
-        <div className='flex flex-wrap gap-2 max-sm:flex-col'>
-          <Select value={company} onValueChange={setCompany}>
+        <div className='@max-toolbar:flex-col flex flex-wrap gap-2'>
+          <Select
+            value={filters.company ?? ALL}
+            onValueChange={(v) =>
+              onFiltersChange({ company: v === ALL ? null : v })
+            }
+          >
             <SelectTrigger
               aria-label={copy.companyFilter}
-              className='w-47.5 max-sm:w-full'
+              className='w-47.5 @max-toolbar:w-full'
             >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value={ALL}>{copy.allCompanies}</SelectItem>
-              <SelectItem value={MARKET}>{copy.wholeMarket}</SelectItem>
+              <SelectItem value={MARKET_FILTER}>{copy.wholeMarket}</SelectItem>
               {companies.map((c) => (
                 <SelectItem key={c.cik} value={c.cik}>
                   {c.label}
@@ -149,24 +170,35 @@ export function NotesScreen({
               <Button
                 variant='outline'
                 aria-label={copy.dateFilter}
-                className='tabular font-sans text-sm font-normal max-sm:w-full'
+                className='tabular @max-toolbar:w-full font-sans text-sm font-normal'
               >
-                {from && to ? formatDateRange(from, to) : copy.anyDate}
+                {filters.from
+                  ? formatDateRange(filters.from, filters.to ?? filters.from)
+                  : copy.anyDate}
               </Button>
             </PopoverTrigger>
             <PopoverContent align='start' className='w-auto p-0'>
               <Calendar
                 mode='range'
-                selected={range}
-                onSelect={setRange}
+                selected={
+                  filters.from
+                    ? { from: toDate(filters.from), to: toDate(filters.to) }
+                    : undefined
+                }
+                onSelect={(r) =>
+                  onFiltersChange({
+                    from: toIso(r?.from),
+                    to: toIso(r?.to ?? r?.from)
+                  })
+                }
                 captionLayout='dropdown'
               />
-              {range && (
+              {filters.from && (
                 <div className='border-border border-t p-2'>
                   <Button
                     variant='ghost'
                     size='sm'
-                    onClick={() => setRange(undefined)}
+                    onClick={() => onFiltersChange({ from: null, to: null })}
                   >
                     {copy.clearDates}
                   </Button>
@@ -180,7 +212,7 @@ export function NotesScreen({
             placeholder={copy.search}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            className='w-50 max-sm:w-full'
+            className='w-50 @max-toolbar:w-full'
           />
         </div>
       )}
@@ -205,28 +237,21 @@ export function NotesScreen({
         <EmptyState
           title={copy.emptyTitle}
           body={copy.emptyBody}
-          action={
-            <Button
-              onClick={() =>
-                setDialog({
-                  cik: null,
-                  start_date: today,
-                  end_date: '',
-                  body: ''
-                })
-              }
-            >
-              {copy.newNote}
-            </Button>
-          }
+          action={<Button onClick={openNew}>{copy.newNote}</Button>}
         />
       ) : shown.length === 0 && filtered ? (
         <EmptyState
           title={copy.noMatchTitle}
           body={copy.noMatchBody}
           action={
-            <Button variant='outline' onClick={clear}>
-              {copy.clearFilters}
+            <Button
+              variant='outline'
+              onClick={() => {
+                setQuery('')
+                onFiltersChange(noFilters)
+              }}
+            >
+              {sharedCopy.clearFilters}
             </Button>
           }
         />
@@ -256,16 +281,10 @@ export function NotesScreen({
       <NoteDialog
         open={dialog != null}
         onOpenChange={(o) => !o && setDialog(null)}
-        initial={
-          dialog ?? { cik: null, start_date: today, end_date: '', body: '' }
-        }
+        initial={dialog ?? emptyDraft(null, today)}
         companies={companies}
         today={today}
-        saveError={saveError}
-        onSave={(draft) => {
-          onSave(draft)
-          setDialog(null)
-        }}
+        onSave={onSave}
       />
     </div>
   )
@@ -282,8 +301,6 @@ export function NoteCard({
   onEdit: () => void
   onDelete: () => void
 }) {
-  const [open, setOpen] = useState(false)
-  const long = note.body.length > 160
   return (
     <article className='border-border flex gap-3 border px-3 py-2.5'>
       <div className='min-w-0 flex-1'>
@@ -297,28 +314,17 @@ export function NoteCard({
             <Badge variant='default'>{copy.wholeMarket}</Badge>
           )}
           <span className='text-muted-foreground text-2xs'>
-            {note.start_date === note.end_date ? copy.singleDate : copy.range}
+            {note.start_date === note.end_date
+              ? sharedCopy.singleDate
+              : sharedCopy.range}
           </span>
         </div>
-        <div
-          className={cn(
-            'text-sm leading-[1.55] [&_p]:m-0',
-            !open && 'line-clamp-3'
-          )}
+        <ClampedText
+          length={note.body.length}
+          className='text-sm leading-[1.55]'
         >
           <SafeMarkdown>{note.body}</SafeMarkdown>
-        </div>
-        {long && (
-          <Button
-            variant='ghost'
-            size='xs'
-            aria-expanded={open}
-            onClick={() => setOpen(!open)}
-            className='mt-1 px-0 font-sans text-xs font-normal'
-          >
-            {open ? copy.showLess : copy.readMore}
-          </Button>
-        )}
+        </ClampedText>
       </div>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>

@@ -1,83 +1,96 @@
 'use client'
 
-import { useState } from 'react'
+import { notFound } from 'next/navigation'
+import { useCallback, useMemo } from 'react'
 
 import { useBars } from '@/hooks/useBars'
 import { useCompany } from '@/hooks/useCompany'
 import { useEvents } from '@/hooks/useEvents'
 import { useMarket } from '@/hooks/useMarket'
-import { createNoteId, useNotes, usePutNote } from '@/hooks/useNotes'
+import { useNotes, useSaveNote } from '@/hooks/useNotes'
+import { ApiError } from '@/lib/api'
+import { primaryListing } from '@/lib/company'
+import { HISTORY_START, todayInNewYork, weekdaysBetween } from '@/lib/dates'
 
 import { CompanyScreen } from '../company/company-screen'
-import { noteDialogCopy } from '../company/copy'
-import { todayInNewYork } from './today'
+import type { CompanyView } from '../company/company-screen'
+import type { PanelTab } from '../company/notes-events-panel'
+import { parseRange, rangeToParam } from '../company/range'
+import { isBackfillPending } from '../market/market-rows'
+import { useUrlParams } from './url-state'
 
-const HISTORY_START = '2018-01-02'
-
-// Weekdays from the history start to today: an upper bound on Trading Days,
-// used only to size the "History loading" banner while backfill runs.
-function expectedTradingDays(today: string) {
-  let n = 0
-  const end = Date.parse(`${today}T00:00:00Z`)
-  for (
-    let t = Date.parse(`${HISTORY_START}T00:00:00Z`);
-    t <= end;
-    t += 86_400_000
-  ) {
-    const dow = new Date(t).getUTCDay()
-    if (dow !== 0 && dow !== 6) n++
-  }
-  return n
+export function isNotFound(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 404
 }
 
+// The chosen Listing, range, chart mode and side tab live in the URL
+// (?listing=&range=&mode=&tab=), so a Company view can be linked to.
 export function CompanyContainer({ cik }: { cik: string }) {
   const company = useCompany(cik)
   const market = useMarket()
-  const primary =
-    company.data?.listings.find((l) => l.is_primary)?.symbol ??
-    company.data?.listings[0]?.symbol ??
+  const { params, set } = useUrlParams()
+  const symbol =
+    params.get('listing') ??
+    (company.data
+      ? primaryListing(company.data.listings)?.symbol
+      : undefined) ??
     ''
-  const [picked, setPicked] = useState<string | null>(null)
-  const symbol = picked ?? primary
   const bars = useBars(symbol || undefined)
   const events = useEvents({ cik })
   const notes = useNotes({ cik })
-  const putNote = usePutNote()
+  const { save } = useSaveNote()
   const today = todayInNewYork()
+
+  const view: CompanyView = useMemo(
+    () => ({
+      range: parseRange(params.get('range')),
+      mode: params.get('mode') === 'candles' ? 'candles' : 'line',
+      tab: (params.get('tab') === 'events' ? 'events' : 'notes') as PanelTab
+    }),
+    [params]
+  )
+  const onViewChange = useCallback(
+    (next: Partial<CompanyView>) =>
+      set({
+        ...(next.range && { range: rangeToParam(next.range) }),
+        ...(next.mode && { mode: next.mode === 'line' ? null : next.mode }),
+        ...(next.tab && { tab: next.tab === 'notes' ? null : next.tab })
+      }),
+    [set]
+  )
+
+  if (isNotFound(company.error)) notFound()
 
   const listing = company.data?.listings.find((l) => l.symbol === symbol)
   const quote = market.data?.listings.find((r) => r.symbol === symbol) ?? null
   const loaded = bars.data?.length ?? 0
   const backfill =
-    listing && listing.first_bar_date == null && loaded > 0
-      ? { loaded, expected: expectedTradingDays(today) }
+    listing && isBackfillPending(listing) && loaded > 0
+      ? { loaded, expected: weekdaysBetween(HISTORY_START, today) }
       : null
 
   return (
     <CompanyScreen
       company={company.data ?? null}
       loading={company.isPending}
-      chartError={company.isError || bars.isError}
+      error={company.isError}
+      onRetry={() => {
+        company.refetch().catch(() => {})
+      }}
       symbol={symbol}
-      onSymbolChange={setPicked}
+      onSymbolChange={(s) => set({ listing: s })}
       quote={quote}
       serverTime={market.data?.server_time ?? null}
       isOpen={market.data?.market_clock?.is_open ?? false}
-      bars={bars.data ?? null}
+      bars={bars.data ?? (bars.isError ? [] : null)}
+      barsError={bars.isError}
       backfill={backfill}
-      notes={notes.data?.pages.flatMap((p) => p.items) ?? []}
-      events={events.data?.pages.flatMap((p) => p.items) ?? []}
+      notes={notes.data ?? []}
+      events={events.data ?? []}
       today={today}
-      noteSaveError={putNote.isError ? noteDialogCopy.saveFailed : null}
-      onSaveNote={(draft) =>
-        putNote.mutate({
-          id: draft.id ?? createNoteId(),
-          cik: draft.cik,
-          start_date: draft.start_date,
-          end_date: draft.end_date,
-          body: draft.body
-        })
-      }
+      view={view}
+      onViewChange={onViewChange}
+      onSaveNote={save}
     />
   )
 }

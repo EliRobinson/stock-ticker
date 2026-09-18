@@ -46,7 +46,7 @@ describe('Market table', () => {
     const user = userEvent.setup()
     render(<Harness />)
     expect(firstSymbol()).toBe('AAPL')
-    const header = screen.getByRole('columnheader', { name: /symbol/i })
+    const header = screen.getByRole('columnheader', { name: /ticker/i })
     expect(header).toHaveAttribute('aria-sort', 'ascending')
 
     await user.click(within(header).getByRole('button'))

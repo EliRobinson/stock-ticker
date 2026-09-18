@@ -1,10 +1,10 @@
 import type { MarketResponse, MarketRow } from '@/lib/api'
+import { HISTORY_START } from '@/lib/dates'
+import { formatDateShort, toNumber } from '@/lib/format'
+import { getQuoteStaleness } from '@/lib/staleness'
 
-import { formatAge, formatDate, toNumber } from '../shared/format'
-import { quoteState } from '../shared/market-session'
-import { marketCopy as copy } from './copy'
-
-export const HISTORY_START = '2018-01-02'
+import { quoteAgeText } from '../shared/cells'
+import { sharedCopy } from '../shared/copy'
 
 export interface MarketRowView extends MarketRow {
   ageMs: number | null
@@ -16,33 +16,47 @@ export interface MarketRowView extends MarketRow {
   capNote: string | null
 }
 
+// A Listing's history is still loading until the API marks its backfill
+// done. Until `backfill_completed_at` is in the generated types, a Listing
+// with no first bar yet stands in for it.
+export function isBackfillPending(
+  row: Pick<MarketRow, 'first_bar_date'>
+): boolean {
+  if ('backfill_completed_at' in row) {
+    return (
+      (row as { backfill_completed_at: string | null }).backfill_completed_at ==
+      null
+    )
+  }
+  return row.first_bar_date == null
+}
+
 export function toRowViews(
   market: MarketResponse,
   { forceStale = false }: { forceStale?: boolean } = {}
 ): MarketRowView[] {
   const isOpen = market.market_clock?.is_open ?? false
   return market.listings.map((r) => {
-    const q = quoteState(r.observed_at, market.server_time, isOpen)
-    const stale = forceStale || q.stale
-    const backfillPending = r.first_bar_date == null
+    const q = getQuoteStaleness(r.observed_at, market.server_time, isOpen)
+    const stale = forceStale || q.isStale
+    const backfillPending = isBackfillPending(r)
     const partialHistory =
       r.first_bar_date != null && r.first_bar_date > HISTORY_START
     return {
       ...r,
       ageMs: q.ageMs,
-      ageLabel:
-        q.ageMs == null
-          ? '—'
-          : `${stale ? copy.ageOld(formatAge(q.ageMs)) : formatAge(q.ageMs)}`,
+      ageLabel: quoteAgeText(q.ageMs, stale),
       stale,
       closed: !isOpen,
       backfillPending,
       historyNote:
         partialHistory && toNumber(r.change_pct) == null
-          ? copy.historyStarts(formatDate(r.first_bar_date!))
+          ? sharedCopy.historyStarts(formatDateShort(r.first_bar_date))
           : null,
       capNote:
-        !backfillPending && r.market_cap == null ? copy.capUnavailable : null
+        !backfillPending && r.market_cap == null
+          ? sharedCopy.capUnavailable
+          : null
     }
   })
 }

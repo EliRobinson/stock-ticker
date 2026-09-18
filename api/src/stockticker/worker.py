@@ -20,6 +20,7 @@ theirs later) is skipped with a log line, not an error.
 from __future__ import annotations
 
 import asyncio
+import signal
 from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -135,8 +136,15 @@ async def main() -> None:
     logger.info("worker.started", jobs=[spec.name for spec in JOBS])
 
     stop_event = asyncio.Event()
+    # `docker compose stop`/`down` send SIGTERM. asyncio installs no
+    # handler for it by default, so without this the process is killed
+    # outright -- the `finally` below (and its pool disposal) never runs,
+    # and every pooled connection ends as an abrupt disconnect instead of
+    # a clean close.
+    asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, stop_event.set)
     try:
         await stop_event.wait()
+        logger.info("worker.shutdown_requested")
     finally:
         scheduler.shutdown(wait=False)
         await dispose_engines()

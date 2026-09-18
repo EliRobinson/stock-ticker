@@ -69,6 +69,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from stockticker.config import RequiredKey, Settings, get_settings
+from stockticker.ingest.watermarks import read_watermark, write_watermark
 from stockticker.logging import FilteringBoundLogger, get_logger
 from stockticker.models.status import JobRunStatus
 from stockticker.timeutil import today_ny
@@ -375,18 +376,15 @@ async def _record_skipped_locked(engine: AsyncEngine, job_name: str) -> None:
 
 async def _request_rerun(engine: AsyncEngine, job_name: str) -> None:
     async with engine.connect() as conn:
-        await conn.execute(
-            text(
-                "INSERT INTO ingest_watermarks (job, key, value, updated_at) "
-                "VALUES (:job, :key, '1', now()) "
-                "ON CONFLICT (job, key) DO UPDATE SET value = '1', updated_at = now()"
-            ),
-            {"job": job_name, "key": RERUN_REQUESTED_KEY},
-        )
+        await write_watermark(conn, job_name, RERUN_REQUESTED_KEY, "1")
         await conn.commit()
 
 
 async def _consume_rerun_flag(engine: AsyncEngine, job_name: str) -> bool:
+    """Atomic test-and-clear: `watermarks.delete_watermarks` doesn't report
+    whether a row existed, so this stays a direct `DELETE ... RETURNING`
+    rather than a `read_watermark` + `delete_watermarks` pair, which would
+    race another writer between the two calls."""
     async with engine.connect() as conn:
         row = await conn.execute(
             text("DELETE FROM ingest_watermarks WHERE job = :job AND key = :key RETURNING value"),
@@ -398,11 +396,7 @@ async def _consume_rerun_flag(engine: AsyncEngine, job_name: str) -> bool:
 
 async def _rerun_flag_is_set(engine: AsyncEngine, job_name: str) -> bool:
     async with engine.connect() as conn:
-        row = await conn.execute(
-            text("SELECT 1 FROM ingest_watermarks WHERE job = :job AND key = :key"),
-            {"job": job_name, "key": RERUN_REQUESTED_KEY},
-        )
-        return row.first() is not None
+        return await read_watermark(conn, job_name, RERUN_REQUESTED_KEY) is not None
 
 
 async def _finish_run(engine: AsyncEngine, run_id: int, outcome: JobOutcome) -> None:

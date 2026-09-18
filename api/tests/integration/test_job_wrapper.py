@@ -3,11 +3,10 @@ See tests/integration/conftest.py for how to run these."""
 
 from __future__ import annotations
 
+import asyncio
 import uuid
-from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import pytest
 from sqlalchemy import text
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -15,9 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from stockticker.ingest.job import (
     ConfigMissingError,
     FailedItem,
+    JobContext,
     JobResult,
     JobSkipped,
-    cleanup_orphan_runs,
+    cleanup_orphan_runs_at_startup,
     run_job,
 )
 
@@ -41,19 +41,23 @@ async def _runs_for(engine: AsyncEngine, job_name: str) -> list[Row[Any]]:
 async def _cleanup(engine: AsyncEngine, job_name: str) -> None:
     async with engine.connect() as conn:
         await conn.execute(text("DELETE FROM ingest_runs WHERE job = :job"), {"job": job_name})
+        await conn.execute(text("DELETE FROM ingest_watermarks WHERE job = :job"), {"job": job_name})
         await conn.commit()
 
 
 async def test_run_job_succeeds_and_records_the_run(app_writer_engine: AsyncEngine) -> None:
     job_name = _job_name()
 
-    async def fn(conn: object) -> JobResult:
+    async def fn(ctx: JobContext) -> JobResult:
+        assert ctx.run_id > 0
+        assert ctx.settings is not None
         return JobResult(rows_written=3)
 
     try:
-        result = await run_job(job_name, fn, engine=app_writer_engine)
-        assert result is not None
-        assert result.rows_written == 3
+        outcome = await run_job(job_name, fn, engine=app_writer_engine)
+        assert outcome.status == "succeeded"
+        assert outcome.result is not None
+        assert outcome.result.rows_written == 3
 
         rows = await _runs_for(app_writer_engine, job_name)
         assert len(rows) == 1
@@ -66,13 +70,14 @@ async def test_run_job_succeeds_and_records_the_run(app_writer_engine: AsyncEngi
 async def test_run_job_is_partial_when_items_failed(app_writer_engine: AsyncEngine) -> None:
     job_name = _job_name()
 
-    async def fn(conn: object) -> JobResult:
+    async def fn(ctx: JobContext) -> JobResult:
         return JobResult(rows_written=1, failed_items=[FailedItem(key="AAPL", error="boom")])
 
     try:
-        result = await run_job(job_name, fn, engine=app_writer_engine)
-        assert result is not None
-        assert len(result.failed_items) == 1
+        outcome = await run_job(job_name, fn, engine=app_writer_engine)
+        assert outcome.status == "partial"
+        assert outcome.result is not None
+        assert len(outcome.result.failed_items) == 1
 
         rows = await _runs_for(app_writer_engine, job_name)
         assert rows[0].status == "partial"
@@ -82,15 +87,19 @@ async def test_run_job_is_partial_when_items_failed(app_writer_engine: AsyncEngi
         await _cleanup(app_writer_engine, job_name)
 
 
-async def test_run_job_is_failed_on_uncaught_exception(app_writer_engine: AsyncEngine) -> None:
+async def test_run_job_is_failed_on_uncaught_exception_and_never_raises(
+    app_writer_engine: AsyncEngine,
+) -> None:
     job_name = _job_name()
 
-    async def fn(conn: object) -> JobResult:
+    async def fn(ctx: JobContext) -> JobResult:
         raise RuntimeError("kaboom")
 
     try:
-        with pytest.raises(RuntimeError, match="kaboom"):
-            await run_job(job_name, fn, engine=app_writer_engine)
+        outcome = await run_job(job_name, fn, engine=app_writer_engine)  # must not raise
+        assert outcome.status == "failed"
+        assert outcome.error is not None
+        assert outcome.error["message"] == "kaboom"
 
         rows = await _runs_for(app_writer_engine, job_name)
         assert rows[0].status == "failed"
@@ -99,15 +108,46 @@ async def test_run_job_is_failed_on_uncaught_exception(app_writer_engine: AsyncE
         await _cleanup(app_writer_engine, job_name)
 
 
-async def test_run_job_skips_when_another_process_holds_the_lock(
-    app_writer_engine: AsyncEngine,
-) -> None:
+async def test_run_job_records_config_missing(app_writer_engine: AsyncEngine) -> None:
     job_name = _job_name()
 
-    # app_writer only has EXECUTE on pg_try_advisory_lock/pg_advisory_unlock
-    # (the plain, blocking pg_advisory_lock was never granted -- run_job
-    # never calls it), so the "another process holds it" setup uses the try
-    # variant too; it still holds the lock until unlocked.
+    async def fn(ctx: JobContext) -> JobResult:
+        raise ConfigMissingError(["ALPACA_KEY_ID"])
+
+    try:
+        outcome = await run_job(job_name, fn, engine=app_writer_engine)
+        assert outcome.status == "failed"
+        assert outcome.error is not None
+        assert outcome.error["type"] == "config_missing"
+        assert outcome.error["missing_keys"] == ["ALPACA_KEY_ID"]
+
+        rows = await _runs_for(app_writer_engine, job_name)
+        assert rows[0].status == "failed"
+        assert rows[0].error["type"] == "config_missing"
+    finally:
+        await _cleanup(app_writer_engine, job_name)
+
+
+async def test_run_job_records_skipped(app_writer_engine: AsyncEngine) -> None:
+    job_name = _job_name()
+
+    async def fn(ctx: JobContext) -> JobResult:
+        raise JobSkipped("no listings yet")
+
+    try:
+        outcome = await run_job(job_name, fn, engine=app_writer_engine)
+        assert outcome.status == "skipped"
+
+        rows = await _runs_for(app_writer_engine, job_name)
+        assert rows[0].status == "skipped"
+        assert rows[0].error["message"] == "no listings yet"
+    finally:
+        await _cleanup(app_writer_engine, job_name)
+
+
+async def test_run_job_skips_when_another_process_holds_the_lock(app_writer_engine: AsyncEngine) -> None:
+    job_name = _job_name()
+
     holder = await app_writer_engine.connect()
     still_locked = await holder.scalar(text("SELECT pg_try_advisory_lock(hashtext(:job))"), {"job": job_name})
     await holder.commit()
@@ -115,14 +155,14 @@ async def test_run_job_skips_when_another_process_holds_the_lock(
 
     called = False
 
-    async def fn(conn: object) -> JobResult:
+    async def fn(ctx: JobContext) -> JobResult:
         nonlocal called
         called = True
         return JobResult()
 
     try:
-        result = await run_job(job_name, fn, engine=app_writer_engine)
-        assert result is None
+        outcome = await run_job(job_name, fn, engine=app_writer_engine)
+        assert outcome.status == "skipped_locked"
         assert called is False
 
         rows = await _runs_for(app_writer_engine, job_name)
@@ -134,90 +174,10 @@ async def test_run_job_skips_when_another_process_holds_the_lock(
         await _cleanup(app_writer_engine, job_name)
 
 
-async def test_cleanup_orphan_runs_marks_stale_running_rows_failed(
-    app_writer_engine: AsyncEngine,
-) -> None:
-    job_name = _job_name()
-    try:
-        async with app_writer_engine.connect() as conn:
-            await conn.execute(
-                text(
-                    "INSERT INTO ingest_runs (job, status, started_at) VALUES (:job, 'running', :started_at)"
-                ),
-                {"job": job_name, "started_at": datetime.now(UTC) - timedelta(hours=2)},
-            )
-            await conn.commit()
-
-            count = await cleanup_orphan_runs(conn)
-            assert count >= 1
-
-        rows = await _runs_for(app_writer_engine, job_name)
-        assert rows[0].status == "failed"
-    finally:
-        await _cleanup(app_writer_engine, job_name)
-
-
-async def test_cleanup_orphan_runs_leaves_recent_running_rows_alone(
-    app_writer_engine: AsyncEngine,
-) -> None:
-    job_name = _job_name()
-    try:
-        async with app_writer_engine.connect() as conn:
-            await conn.execute(
-                text(
-                    "INSERT INTO ingest_runs (job, status, started_at) VALUES (:job, 'running', :started_at)"
-                ),
-                {"job": job_name, "started_at": datetime.now(UTC)},
-            )
-            await conn.commit()
-
-            await cleanup_orphan_runs(conn)
-
-        rows = await _runs_for(app_writer_engine, job_name)
-        assert rows[0].status == "running"
-    finally:
-        await _cleanup(app_writer_engine, job_name)
-
-
-async def test_run_job_records_config_missing(app_writer_engine: AsyncEngine) -> None:
-    job_name = _job_name()
-
-    async def fn(conn: object) -> JobResult:
-        raise ConfigMissingError(["ALPACA_KEY_ID"])
-
-    try:
-        result = await run_job(job_name, fn, engine=app_writer_engine)
-        assert result == JobResult()
-
-        rows = await _runs_for(app_writer_engine, job_name)
-        assert rows[0].status == "failed"
-        assert rows[0].error["type"] == "config_missing"
-        assert rows[0].error["missing_keys"] == ["ALPACA_KEY_ID"]
-    finally:
-        await _cleanup(app_writer_engine, job_name)
-
-
-async def test_run_job_records_skipped(app_writer_engine: AsyncEngine) -> None:
-    job_name = _job_name()
-
-    async def fn(conn: object) -> JobResult:
-        raise JobSkipped("no listings yet")
-
-    try:
-        result = await run_job(job_name, fn, engine=app_writer_engine)
-        assert result == JobResult()
-
-        rows = await _runs_for(app_writer_engine, job_name)
-        assert rows[0].status == "skipped"
-        assert rows[0].error["message"] == "no listings yet"
-    finally:
-        await _cleanup(app_writer_engine, job_name)
-
-
 async def test_run_job_fails_a_stale_running_row_at_any_age(app_writer_engine: AsyncEngine) -> None:
-    """The per-trigger orphan check (not just the 1h `cleanup_orphan_runs`
-    backstop) marks a leftover `running` row failed the moment the job is
-    next attempted, however recent it is."""
+    """The per-trigger orphan check (not just the startup sweep) marks a
+    leftover `running` row failed the moment the job is next attempted,
+    however recent it is."""
     job_name = _job_name()
     try:
         async with app_writer_engine.connect() as conn:
@@ -230,7 +190,7 @@ async def test_run_job_fails_a_stale_running_row_at_any_age(app_writer_engine: A
             )
             await conn.commit()
 
-        async def fn(conn: object) -> JobResult:
+        async def fn(ctx: JobContext) -> JobResult:
             return JobResult(rows_written=1)
 
         await run_job(job_name, fn, engine=app_writer_engine)
@@ -245,6 +205,52 @@ async def test_run_job_fails_a_stale_running_row_at_any_age(app_writer_engine: A
         await _cleanup(app_writer_engine, job_name)
 
 
+async def test_cleanup_orphan_runs_at_startup_fails_rows_it_can_lock(app_writer_engine: AsyncEngine) -> None:
+    job_name = _job_name()
+    try:
+        async with app_writer_engine.connect() as conn:
+            await conn.execute(
+                text("INSERT INTO ingest_runs (job, status, started_at) VALUES (:job, 'running', now())"),
+                {"job": job_name},
+            )
+            await conn.commit()
+
+        count = await cleanup_orphan_runs_at_startup(app_writer_engine, [job_name])
+        assert count == 1
+
+        rows = await _runs_for(app_writer_engine, job_name)
+        assert rows[0].status == "failed"
+    finally:
+        await _cleanup(app_writer_engine, job_name)
+
+
+async def test_cleanup_orphan_runs_at_startup_skips_a_job_someone_else_holds(
+    app_writer_engine: AsyncEngine,
+) -> None:
+    job_name = _job_name()
+    holder = await app_writer_engine.connect()
+    await holder.execute(text("SELECT pg_try_advisory_lock(hashtext(:job))"), {"job": job_name})
+    await holder.commit()
+    try:
+        async with app_writer_engine.connect() as conn:
+            await conn.execute(
+                text("INSERT INTO ingest_runs (job, status, started_at) VALUES (:job, 'running', now())"),
+                {"job": job_name},
+            )
+            await conn.commit()
+
+        count = await cleanup_orphan_runs_at_startup(app_writer_engine, [job_name])
+        assert count == 0
+
+        rows = await _runs_for(app_writer_engine, job_name)
+        assert rows[0].status == "running"
+    finally:
+        await holder.execute(text("SELECT pg_advisory_unlock(hashtext(:job))"), {"job": job_name})
+        await holder.commit()
+        await holder.close()
+        await _cleanup(app_writer_engine, job_name)
+
+
 async def test_skipped_locked_run_queues_a_rerun_the_holder_honors(app_writer_engine: AsyncEngine) -> None:
     job_name = _job_name()
 
@@ -253,14 +259,12 @@ async def test_skipped_locked_run_queues_a_rerun_the_holder_honors(app_writer_en
     await holder.commit()
     assert still_locked is True
 
-    async def never_called(conn: object) -> JobResult:
+    async def never_called(ctx: JobContext) -> JobResult:
         raise AssertionError("fn must not run while the lock is held")
 
     try:
-        # A second attempt while the lock is held: skipped_locked, and it
-        # should leave a rerun_requested watermark for the holder.
         skipped = await run_job(job_name, never_called, engine=app_writer_engine)
-        assert skipped is None
+        assert skipped.status == "skipped_locked"
 
         async with app_writer_engine.connect() as conn:
             watermark = (
@@ -270,7 +274,6 @@ async def test_skipped_locked_run_queues_a_rerun_the_holder_honors(app_writer_en
                 )
             ).first()
             assert watermark is not None
-
     finally:
         await holder.execute(text("SELECT pg_advisory_unlock(hashtext(:job))"), {"job": job_name})
         await holder.commit()
@@ -278,7 +281,7 @@ async def test_skipped_locked_run_queues_a_rerun_the_holder_honors(app_writer_en
 
     call_count = 0
 
-    async def counting_fn(conn: object) -> JobResult:
+    async def counting_fn(ctx: JobContext) -> JobResult:
         nonlocal call_count
         call_count += 1
         return JobResult(rows_written=call_count)
@@ -288,8 +291,8 @@ async def test_skipped_locked_run_queues_a_rerun_the_holder_honors(app_writer_en
         # Finding the rerun_requested watermark left by the skipped_locked
         # attempt above, it should run counting_fn twice: once for itself,
         # once more to honor the queued rerun.
-        result = await run_job(job_name, counting_fn, engine=app_writer_engine)
-        assert result is not None
+        outcome = await run_job(job_name, counting_fn, engine=app_writer_engine)
+        assert outcome.status == "succeeded"
         assert call_count == 2
 
         rows = await _runs_for(app_writer_engine, job_name)
@@ -306,3 +309,75 @@ async def test_skipped_locked_run_queues_a_rerun_the_holder_honors(app_writer_en
             assert watermark is None  # cleared once honored
     finally:
         await _cleanup(app_writer_engine, job_name)
+
+
+async def test_run_job_detects_a_terminated_lock_connection(app_writer_engine: AsyncEngine) -> None:
+    """Kills the backend holding the advisory lock mid-run with
+    `pg_terminate_backend`, proving the liveness check catches asyncpg's
+    `InterfaceError`/`ConnectionDoesNotExistError` -- not `OperationalError`,
+    which SQLAlchemy's asyncpg dialect never raises for these."""
+    job_name = _job_name()
+
+    async def fn(ctx: JobContext) -> JobResult:
+        async with ctx.engine.connect() as conn:
+            pid = await conn.scalar(text("SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND granted"))
+            assert pid is not None, "expected the lock connection to hold a granted advisory lock"
+            await conn.execute(text("SELECT pg_terminate_backend(:pid)"), {"pid": pid})
+            await conn.commit()
+        return JobResult(rows_written=1)
+
+    try:
+        outcome = await run_job(job_name, fn, engine=app_writer_engine)
+        assert outcome.status == "failed"
+        assert outcome.error is not None
+        assert outcome.error["type"] == "lock_connection_lost"
+
+        rows = await _runs_for(app_writer_engine, job_name)
+        assert rows[0].status == "failed"
+        assert rows[0].error["type"] == "lock_connection_lost"
+    finally:
+        await _cleanup(app_writer_engine, job_name)
+
+
+async def test_concurrent_attempts_are_all_served_with_no_stranded_rerun(
+    app_writer_engine: AsyncEngine,
+) -> None:
+    """Several run_job calls for the same job, fired concurrently: exactly
+    one holds the lock at a time, but nothing raises, no attempt is
+    silently dropped, and no rerun_requested watermark is left dangling
+    once everything settles -- the property the requester-sets-flag-then-
+    tries-the-lock race (system design §4) exists to protect."""
+    job_name = _job_name()
+    run_count = 0
+    count_lock = asyncio.Lock()
+
+    async def fn(ctx: JobContext) -> JobResult:
+        nonlocal run_count
+        async with count_lock:
+            run_count += 1
+        await asyncio.sleep(0.2)
+        return JobResult(rows_written=1)
+
+    try:
+        outcomes = await asyncio.gather(*(run_job(job_name, fn, engine=app_writer_engine) for _ in range(4)))
+
+        assert all(o.status in ("succeeded", "skipped_locked") for o in outcomes)
+        assert run_count >= 1
+
+        async with app_writer_engine.connect() as conn:
+            watermark = (
+                await conn.execute(
+                    text("SELECT 1 FROM ingest_watermarks WHERE job = :job AND key = 'rerun_requested'"),
+                    {"job": job_name},
+                )
+            ).first()
+        assert watermark is None
+    finally:
+        await _cleanup(app_writer_engine, job_name)
+
+
+async def test_cleanup_orphan_runs_at_startup_is_a_no_op_with_no_stale_rows(
+    app_writer_engine: AsyncEngine,
+) -> None:
+    count = await cleanup_orphan_runs_at_startup(app_writer_engine, [f"nonexistent_{uuid.uuid4().hex[:8]}"])
+    assert count == 0

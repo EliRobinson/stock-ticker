@@ -2,7 +2,7 @@
   "components": {
     "schemas": {
       "AiStatus": {
-        "description": "Populated once the AI chat agent's `ai_usage` table (migration\n0002+) and pricing module exist; see `_ai_status` in\n`api/routers/status.py` for exactly what's real today versus a\nplaceholder.",
+        "description": "Owned end to end by the AI chat agent's `stockticker.ai.status.\nai_status(settings)` (issue #7's agreed contract) -- this model just\ngives it a shape to return. `StatusResponse.ai` is null until that\nmodule exists and `api/routers/status.py` calls it.",
         "properties": {
           "enabled": {
             "title": "Enabled",
@@ -103,6 +103,21 @@
         },
         "required": ["timeframe", "bars"],
         "title": "BarsResponse",
+        "type": "object"
+      },
+      "ChartSeries": {
+        "properties": {
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": ["key", "label"],
+        "title": "ChartSeries",
         "type": "object"
       },
       "CompanyDetail": {
@@ -226,6 +241,42 @@
           "first_bar_date"
         ],
         "title": "CompanyDetail",
+        "type": "object"
+      },
+      "DataViewPart": {
+        "description": "The `data-view` stream part: a table or chart built from a result the\nmodel has seen. Documented here so the web app can generate its type.",
+        "properties": {
+          "data": {
+            "discriminator": {
+              "mapping": {
+                "table": "#/components/schemas/TableSpec",
+                "timeseries": "#/components/schemas/TimeseriesChartSpec"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TableSpec"
+              },
+              {
+                "$ref": "#/components/schemas/TimeseriesChartSpec"
+              }
+            ],
+            "title": "Data"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "data-view",
+            "default": "data-view",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": ["id", "data"],
+        "title": "DataViewPart",
         "type": "object"
       },
       "Event": {
@@ -431,6 +482,18 @@
       },
       "ListingSummary": {
         "properties": {
+          "backfill_completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backfill Completed At"
+          },
           "first_bar_date": {
             "anyOf": [
               {
@@ -456,7 +519,13 @@
             "type": "string"
           }
         },
-        "required": ["symbol", "is_primary", "is_active", "first_bar_date"],
+        "required": [
+          "symbol",
+          "is_primary",
+          "is_active",
+          "first_bar_date",
+          "backfill_completed_at"
+        ],
         "title": "ListingSummary",
         "type": "object"
       },
@@ -535,6 +604,18 @@
       },
       "MarketRow": {
         "properties": {
+          "backfill_completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backfill Completed At"
+          },
           "change": {
             "anyOf": [
               {
@@ -574,6 +655,10 @@
               }
             ],
             "title": "First Bar Date"
+          },
+          "is_primary": {
+            "title": "Is Primary",
+            "type": "boolean"
           },
           "market_cap": {
             "anyOf": [
@@ -656,6 +741,7 @@
           "cik",
           "name",
           "sector",
+          "is_primary",
           "price",
           "observed_at",
           "prev_close",
@@ -664,7 +750,8 @@
           "volume",
           "market_cap",
           "market_cap_is_approx",
-          "first_bar_date"
+          "first_bar_date",
+          "backfill_completed_at"
         ],
         "title": "MarketRow",
         "type": "object"
@@ -842,6 +929,7 @@
         "type": "object"
       },
       "ReadyResponse": {
+        "description": "`/api/v1/health/ready`: DB reachable and schema at the Alembic head.",
         "properties": {
           "database": {
             "const": "ok",
@@ -866,7 +954,14 @@
       "StatusResponse": {
         "properties": {
           "ai": {
-            "$ref": "#/components/schemas/AiStatus"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AiStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "backfill": {
             "$ref": "#/components/schemas/BackfillProgress"
@@ -930,6 +1025,119 @@
         "title": "StatusResponse",
         "type": "object"
       },
+      "TableColumn": {
+        "properties": {
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Format"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": ["key", "label"],
+        "title": "TableColumn",
+        "type": "object"
+      },
+      "TableSpec": {
+        "properties": {
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/TableColumn"
+            },
+            "title": "Columns",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "table",
+            "default": "table",
+            "title": "Kind",
+            "type": "string"
+          },
+          "rows": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": ["id", "title", "columns", "rows"],
+        "title": "TableSpec",
+        "type": "object"
+      },
+      "TimeseriesChartSpec": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "timeseries",
+            "default": "timeseries",
+            "title": "Kind",
+            "type": "string"
+          },
+          "rows": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "series": {
+            "items": {
+              "$ref": "#/components/schemas/ChartSeries"
+            },
+            "title": "Series",
+            "type": "array"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "x": {
+            "title": "X",
+            "type": "string"
+          },
+          "y_format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Y Format"
+          }
+        },
+        "required": ["id", "title", "x", "series", "rows"],
+        "title": "TimeseriesChartSpec",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -977,16 +1185,96 @@
     "/api/v1/chat": {
       "post": {
         "operationId": "chat_api_v1_chat_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "description": "What `DefaultChatTransport` POSTs: `{id, messages, trigger, messageId}`\nplus any extra `body` fields the client adds, which are ignored.",
+                "properties": {
+                  "id": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "messageId": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "messages": {
+                    "items": {
+                      "additionalProperties": true,
+                      "properties": {
+                        "id": {
+                          "default": "",
+                          "type": "string"
+                        },
+                        "parts": {
+                          "items": {
+                            "additionalProperties": true,
+                            "type": "object"
+                          },
+                          "maxItems": 200,
+                          "type": "array"
+                        },
+                        "role": {
+                          "enum": ["system", "user", "assistant"],
+                          "type": "string"
+                        }
+                      },
+                      "required": ["role"],
+                      "type": "object"
+                    },
+                    "maxItems": 500,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "trigger": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": ["messages"],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DataViewPart"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataViewPart"
+                }
               }
             },
-            "description": "Successful Response"
+            "description": "An AI SDK UI message stream (v1): `data: <json>` server-sent events, ending with `data: [DONE]`. The schema shown is the app-specific `data-view` part; the other parts are the AI SDK's own."
           },
-          "501": {
+          "413": {
             "content": {
               "application/json": {
                 "schema": {
@@ -994,7 +1282,27 @@
                 }
               }
             },
-            "description": "Not Implemented"
+            "description": "Request Entity Too Large"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unsupported Media Type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
           }
         },
         "summary": "Chat",

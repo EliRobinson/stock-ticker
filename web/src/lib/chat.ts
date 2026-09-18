@@ -3,6 +3,7 @@ import { DefaultChatTransport } from 'ai'
 import type { UIMessage, UIMessagePart } from 'ai'
 import { z } from 'zod'
 import { env } from '@/env'
+import type { components } from './api-types'
 
 /** Created once, not per render/per hook call - a fresh transport instance
  * on every render is wasted work and has no reason to differ between
@@ -12,33 +13,30 @@ const chatTransport = new DefaultChatTransport({
 })
 
 /**
- * The stub `/api/v1/chat` route in web/openapi/openapi.json documents no
- * response body yet, so `ViewSpec` isn't in the generated api-types.ts. This
- * schema was confirmed directly with the #7 (ai-chat) agent, which validates
- * its golden streams against the same shape with ai@7.0.106's
- * uiMessageChunkSchema - swap this for its generated DataViewPart/
- * TableSpec/TimeseriesChartSpec once feat/ai-chat pushes the OpenAPI
- * components.
+ * `/api/v1/chat`'s response documents `DataViewPart` (system-design.md
+ * §6, "View specs") in api/openapi.json, so these are in the generated
+ * api-types.ts like any other route's schema - `TableColumn.format` and
+ * `TimeseriesChartSpec.y_format` are typed as `string | null` there
+ * because the OpenAPI schema doesn't carry Python's `ValueFormat` Literal,
+ * so that's what gets validated here too; an unrecognized format string
+ * just falls through to `cellText`'s default case (view-table.tsx) rather
+ * than failing this parse.
  */
-const viewValueFormatSchema = z
-  .enum([
-    'text',
-    'integer',
-    'number',
-    'currency',
-    'compact_currency',
-    'percent',
-    'fraction_as_percent',
-    'date',
-    'datetime'
-  ])
-  .nullable()
+type GeneratedTableColumn = components['schemas']['TableColumn']
+type GeneratedChartSeries = components['schemas']['ChartSeries']
+type GeneratedTableSpec = components['schemas']['TableSpec']
+type GeneratedTimeseriesChartSpec = components['schemas']['TimeseriesChartSpec']
 
+// `satisfies`, not a `: z.ZodType<...>` annotation - the latter would widen
+// each const to the abstract ZodType interface and lose the concrete
+// ZodObject shape (its `.shape`) that `z.discriminatedUnion` below needs,
+// while `satisfies` still fails the build the moment a schema here stops
+// matching the generated OpenAPI type.
 const viewColumnSchema = z.object({
   key: z.string(),
   label: z.string(),
-  format: viewValueFormatSchema
-})
+  format: z.string().nullable().optional()
+}) satisfies z.ZodType<GeneratedTableColumn>
 
 const tableViewSpecSchema = z.object({
   kind: z.literal('table'),
@@ -46,12 +44,12 @@ const tableViewSpecSchema = z.object({
   title: z.string(),
   columns: z.array(viewColumnSchema),
   rows: z.array(z.record(z.string(), z.unknown()))
-})
+}) satisfies z.ZodType<GeneratedTableSpec>
 
 const timeseriesSeriesSchema = z.object({
   key: z.string(),
   label: z.string()
-})
+}) satisfies z.ZodType<GeneratedChartSeries>
 
 const timeseriesViewSpecSchema = z.object({
   kind: z.literal('timeseries'),
@@ -59,9 +57,9 @@ const timeseriesViewSpecSchema = z.object({
   title: z.string(),
   x: z.string(),
   series: z.array(timeseriesSeriesSchema).min(1).max(8),
-  y_format: viewValueFormatSchema,
+  y_format: z.string().nullable().optional(),
   rows: z.array(z.record(z.string(), z.unknown()))
-})
+}) satisfies z.ZodType<GeneratedTimeseriesChartSpec>
 
 /** Catches a spec whose columns/series reference a key no row actually
  * has (a model or server bug, not a shape violation Zod's structural check

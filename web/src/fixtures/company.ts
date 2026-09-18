@@ -15,7 +15,8 @@ export const apple: CompanyDetail = {
       symbol: 'AAPL',
       is_primary: true,
       is_active: true,
-      first_bar_date: '2018-01-02'
+      first_bar_date: '2018-01-02',
+      backfill_completed_at: null
     }
   ],
   market_cap: {
@@ -41,13 +42,15 @@ export const alphabet: CompanyDetail = {
       symbol: 'GOOGL',
       is_primary: true,
       is_active: true,
-      first_bar_date: '2018-01-02'
+      first_bar_date: '2018-01-02',
+      backfill_completed_at: null
     },
     {
       symbol: 'GOOG',
       is_primary: false,
       is_active: true,
-      first_bar_date: '2018-01-02'
+      first_bar_date: '2018-01-02',
+      backfill_completed_at: null
     }
   ],
   market_cap: {
@@ -73,7 +76,8 @@ export const solventum: CompanyDetail = {
       symbol: 'SOLV',
       is_primary: true,
       is_active: true,
-      first_bar_date: '2021-03-12'
+      first_bar_date: '2021-03-12',
+      backfill_completed_at: null
     }
   ],
   market_cap: null,
@@ -95,7 +99,8 @@ export const tsmc: CompanyDetail = {
       symbol: 'TSM',
       is_primary: true,
       is_active: true,
-      first_bar_date: '2018-01-02'
+      first_bar_date: '2018-01-02',
+      backfill_completed_at: null
     }
   ],
   market_cap: {

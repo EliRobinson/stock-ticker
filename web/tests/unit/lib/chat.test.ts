@@ -51,6 +51,72 @@ describe('parseViewSpec', () => {
   it('rejects a table spec missing required fields', () => {
     expect(parseViewSpec({ kind: 'table' }).success).toBe(false)
   })
+
+  // `format`/`y_format` are `string | null` in the generated OpenAPI types
+  // (api/openapi.json's `TableColumn`/`TimeseriesChartSpec` don't carry
+  // Python's `ValueFormat` Literal), not the fixed enum this schema used to
+  // hand-copy - an unrecognized value still parses, and just falls through
+  // to `cellText`'s default case (view-table.tsx) at render time.
+  it('accepts a table spec with a format string outside the old hand-copied enum', () => {
+    const data = {
+      kind: 'table',
+      id: 'view-4',
+      title: 'Custom format',
+      columns: [{ key: 'note', label: 'Note', format: 'some_future_format' }],
+      rows: [{ note: 'hi' }]
+    }
+    expect(parseViewSpec(data).success).toBe(true)
+  })
+
+  it('accepts a table spec whose column omits format entirely', () => {
+    const data = {
+      kind: 'table',
+      id: 'view-5',
+      title: 'No format',
+      columns: [{ key: 'note', label: 'Note' }],
+      rows: [{ note: 'hi' }]
+    }
+    expect(parseViewSpec(data).success).toBe(true)
+  })
+
+  it.each([
+    {
+      name: 'a table spec whose column key is not one of its rows',
+      data: {
+        kind: 'table',
+        id: 'view-6',
+        title: 'Bad column',
+        columns: [{ key: 'missing', label: 'Missing', format: null }],
+        rows: [{ symbol: 'AAPL' }]
+      }
+    },
+    {
+      name: 'a timeseries spec whose x is not one of its rows',
+      data: {
+        kind: 'timeseries',
+        id: 'view-7',
+        title: 'Bad x',
+        x: 'missing',
+        series: [{ key: 'close', label: 'Close' }],
+        y_format: null,
+        rows: [{ trade_date: '2024-06-03', close: 190.12 }]
+      }
+    },
+    {
+      name: 'a timeseries spec whose series key is not one of its rows',
+      data: {
+        kind: 'timeseries',
+        id: 'view-8',
+        title: 'Bad series',
+        x: 'trade_date',
+        series: [{ key: 'missing', label: 'Missing' }],
+        y_format: null,
+        rows: [{ trade_date: '2024-06-03', close: 190.12 }]
+      }
+    }
+  ])('rejects $name', ({ data }) => {
+    expect(parseViewSpec(data).success).toBe(false)
+  })
 })
 
 describe('isDataViewPart', () => {

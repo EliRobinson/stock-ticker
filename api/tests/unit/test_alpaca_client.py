@@ -16,8 +16,10 @@ from stockticker.ingest.alpaca.client import (
     DATA_API_BASE_URL,
     TRADING_API_BASE_URL,
     AlpacaClient,
+    _bars_end,
     _is_open_between,
 )
+from stockticker.ingest.common import FEED_IEX, FEED_SIP
 from stockticker.ingest.http import RateBudgetName, get_rate_budget, reset_rate_budgets
 
 
@@ -270,11 +272,102 @@ async def test_get_snapshots_skips_a_symbol_missing_a_trade() -> None:
 
 
 @respx.mock
-async def test_get_snapshots_with_retry_false_does_not_retry_on_500() -> None:
+async def test_get_snapshots_with_attempts_one_does_not_retry_on_500() -> None:
     route = respx.get(f"{DATA_API_BASE_URL}/v2/stocks/snapshots").mock(return_value=httpx.Response(500))
     with pytest.raises(httpx.HTTPStatusError):
-        await _client().get_snapshots(["AAPL"], feed="iex", retry=False)
+        await _client().get_snapshots(["AAPL"], feed="iex", attempts=1)
     assert route.call_count == 1
+
+
+@pytest.mark.parametrize(
+    ("end", "feed", "now", "expected"),
+    [
+        pytest.param(
+            date(2026, 1, 2),
+            FEED_SIP,
+            datetime(2026, 9, 17, 20, 0, tzinfo=UTC),
+            "2026-01-02",
+            id="sip historical end stays a bare date",
+        ),
+        pytest.param(
+            date(2026, 9, 17),
+            FEED_SIP,
+            datetime(2026, 9, 17, 20, 0, tzinfo=UTC),
+            "2026-09-17T19:44:00.000000Z",
+            id="sip end on cutoff's NY date becomes the embargo timestamp",
+        ),
+        pytest.param(
+            date(2026, 9, 18),
+            FEED_SIP,
+            datetime(2026, 9, 17, 20, 0, tzinfo=UTC),
+            "2026-09-17T19:44:00.000000Z",
+            id="sip future end also gets the embargo timestamp",
+        ),
+        pytest.param(
+            date(2026, 9, 17),
+            FEED_IEX,
+            datetime(2026, 9, 17, 20, 0, tzinfo=UTC),
+            "2026-09-17",
+            id="iex ignores the SIP embargo and keeps the bare date",
+        ),
+    ],
+)
+def test_bars_end_applies_sip_embargo_only_for_sip_feed(
+    end: date, feed: str, now: datetime, expected: str
+) -> None:
+    assert _bars_end(end, feed=feed, now=now) == expected
+
+
+def _freeze_client_now(monkeypatch: pytest.MonkeyPatch, frozen_now: datetime) -> None:
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz: object = None) -> FrozenDateTime:
+            value = frozen_now if tz is None else frozen_now.astimezone(tz)  # type: ignore[arg-type]
+            return cls(
+                value.year,
+                value.month,
+                value.day,
+                value.hour,
+                value.minute,
+                value.second,
+                value.microsecond,
+                tzinfo=value.tzinfo,
+            )
+
+    monkeypatch.setattr("stockticker.ingest.alpaca.client.datetime", FrozenDateTime)
+
+
+@respx.mock
+async def test_get_bars_sends_sip_embargo_end_when_range_includes_today(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Wire-level: SIP `end` for today is the capped timestamp, not a bare date."""
+    _freeze_client_now(monkeypatch, datetime(2026, 9, 17, 20, 0, tzinfo=UTC))
+    route = respx.get(f"{DATA_API_BASE_URL}/v2/stocks/bars").mock(
+        return_value=httpx.Response(200, json={"bars": {}, "next_page_token": None})
+    )
+
+    await _client().get_bars(["AAPL"], date(2026, 9, 1), date(2026, 9, 17), adjustment="raw", feed=FEED_SIP)
+
+    params = dict(httpx.QueryParams(route.calls[0].request.url.query))
+    assert params["end"] == "2026-09-17T19:44:00.000000Z"
+    assert params["feed"] == FEED_SIP
+
+
+@respx.mock
+async def test_get_bars_iex_keeps_bare_date_end_even_for_today(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _freeze_client_now(monkeypatch, datetime(2026, 9, 17, 20, 0, tzinfo=UTC))
+    route = respx.get(f"{DATA_API_BASE_URL}/v2/stocks/bars").mock(
+        return_value=httpx.Response(200, json={"bars": {}, "next_page_token": None})
+    )
+
+    await _client().get_bars(["AAPL"], date(2026, 9, 1), date(2026, 9, 17), adjustment="raw", feed=FEED_IEX)
+
+    params = dict(httpx.QueryParams(route.calls[0].request.url.query))
+    assert params["end"] == "2026-09-17"
+    assert params["feed"] == FEED_IEX
 
 
 @respx.mock

@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import gzip
 from datetime import UTC, datetime
-from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncConnection
@@ -28,20 +27,6 @@ from stockticker.timeutil import today_ny
 router = APIRouter(tags=["market"])
 
 
-def _market_row(row_mapping: dict[str, object]) -> MarketRow:
-    price = row_mapping.get("price")
-    prev_close = row_mapping.get("prev_close")
-    change: Decimal | None = None
-    change_pct: Decimal | None = None
-    if isinstance(price, Decimal) and isinstance(prev_close, Decimal):
-        change = price - prev_close
-        if prev_close != 0:
-            change_pct = change / prev_close
-    return MarketRow.model_validate(
-        {**row_mapping, "volume": row_mapping.get("prev_volume"), "change": change, "change_pct": change_pct}
-    )
-
-
 @router.get("/market", response_model=MarketResponse)
 async def list_market(
     request: Request, conn: AsyncConnection = Depends(get_app_writer_connection)
@@ -50,7 +35,7 @@ async def list_market(
     payload = MarketResponse(
         server_time=datetime.now(UTC),
         market_clock=await fetch_market_clock(),
-        listings=[_market_row(dict(row._mapping)) for row in rows],
+        listings=[MarketRow.model_validate(row._mapping) for row in rows],
     )
     body = payload.model_dump_json().encode()
     accept_encoding = request.headers.get("accept-encoding", "")

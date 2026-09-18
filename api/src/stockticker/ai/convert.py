@@ -5,7 +5,9 @@ The server keeps no history; every request carries the whole conversation as
 UIMessages. Their parts are validated at the boundary into `UIPart`, a
 discriminated union that mirrors `UIMessagePart` in the `ai` package (v7).
 A part type this server does not know becomes an `OtherPart`, so a newer
-client never breaks the chat. Conversion rules:
+client never breaks the chat. A known type with a bad shape is dropped the
+same way, so one malformed persisted part cannot 422 every later turn.
+Conversion rules:
 
 - `text` parts map to text blocks.
 - Tool parts (`tool-<name>`, or `dynamic-tool`) map to a `tool_use` block in
@@ -24,7 +26,17 @@ from __future__ import annotations
 from typing import Annotated, Any, Literal, cast
 
 from anthropic.types import MessageParam
-from pydantic import BaseModel, ConfigDict, Discriminator, Field, Tag, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Discriminator,
+    Field,
+    Tag,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from stockticker.ai.serialize import compact_json, tool_result_block, wrap_untrusted, wrap_untrusted_cut
 
@@ -53,14 +65,8 @@ class StepStartPart(BaseModel):
     type: Literal["step-start"]
 
 
-class DataPart(BaseModel):
-    type: str = Field(pattern=r"^data-")
-    id: str | None = None
-    data: Any = None
-
-
 class OtherPart(BaseModel):
-    """A part the converter drops unread: `reasoning`, `reasoning-file`,
+    """A part the converter drops unread: `data-*`, `reasoning`, `reasoning-file`,
     `file`, `source-url`, `source-document`, `custom`, and any part type a
     newer AI SDK adds. Only `type` is kept."""
 
@@ -72,20 +78,18 @@ class ToolPart(BaseModel):
 
     type: str = Field(pattern=r"^(tool-.+|dynamic-tool)$")
     toolCallId: str = Field(min_length=1)  # noqa: N815 -- the AI SDK's field names
-    toolName: str | None = None  # noqa: N815
-    input: dict[str, Any] | None = None
+    toolName: str = Field(min_length=1)  # noqa: N815
+    input: Any = None
 
-    @model_validator(mode="after")
-    def _dynamic_tool_is_named(self) -> ToolPart:
-        if self.type == "dynamic-tool" and not self.toolName:
-            raise ValueError("a dynamic-tool part needs a toolName")
-        return self
-
-    @property
-    def tool_name(self) -> str:
-        if self.type == "dynamic-tool":
-            return cast(str, self.toolName)
-        return self.type.removeprefix("tool-")
+    @model_validator(mode="before")
+    @classmethod
+    def _fill_tool_name(cls, data: Any) -> Any:
+        if not isinstance(data, dict) or data.get("toolName"):
+            return data
+        part_type = data.get("type")
+        if isinstance(part_type, str) and part_type.startswith("tool-"):
+            return {**data, "toolName": part_type.removeprefix("tool-")}
+        return data
 
 
 class ToolOutputAvailable(ToolPart):
@@ -95,7 +99,7 @@ class ToolOutputAvailable(ToolPart):
 
 class ToolOutputError(ToolPart):
     state: Literal["output-error"]
-    errorText: str  # noqa: N815
+    errorText: str = ""  # noqa: N815
 
 
 class ToolWithoutOutput(ToolPart):
@@ -103,7 +107,12 @@ class ToolWithoutOutput(ToolPart):
     `approval-requested`, `approval-responded`, `output-denied`, and any state
     a newer AI SDK adds. The call has no result the model can see."""
 
-    state: str
+    state: str = ""
+
+    @field_validator("state", mode="before")
+    @classmethod
+    def _null_state_is_unfinished(cls, value: Any) -> Any:
+        return "" if value is None else value
 
 
 def _field(value: Any, name: str) -> Any:
@@ -123,8 +132,6 @@ def _part_tag(value: Any) -> str | None:
         return part_type
     if part_type == "dynamic-tool" or part_type.startswith("tool-"):
         return "tool"
-    if part_type.startswith("data-"):
-        return "data"
     return "other"
 
 
@@ -139,10 +146,11 @@ UIPart = Annotated[
     Annotated[TextPart, Tag("text")]
     | Annotated[StepStartPart, Tag("step-start")]
     | Annotated[AnyToolPart, Tag("tool")]
-    | Annotated[DataPart, Tag("data")]
     | Annotated[OtherPart, Tag("other")],
     Discriminator(_part_tag),
 ]
+
+_part_adapter: TypeAdapter[UIPart] = TypeAdapter(UIPart)
 
 
 class UIMessage(BaseModel):
@@ -151,6 +159,19 @@ class UIMessage(BaseModel):
     id: str = ""
     role: Literal["system", "user", "assistant"]
     parts: list[UIPart] = Field(default_factory=list, max_length=MAX_PARTS_PER_MESSAGE)
+
+    @field_validator("parts", mode="before")
+    @classmethod
+    def _drop_malformed_parts(cls, parts: Any) -> Any:
+        if not isinstance(parts, list):
+            return parts
+        kept: list[Any] = []
+        for part in parts:
+            try:
+                kept.append(_part_adapter.validate_python(part))
+            except ValidationError:
+                continue
+        return kept
 
 
 class ChatRequest(BaseModel):
@@ -203,6 +224,10 @@ def _assistant_steps(parts: list[UIPart]) -> list[list[TextPart | ToolPart]]:
     return [step for step in steps if step]
 
 
+def _tool_input(part: ToolPart) -> dict[str, Any]:
+    return part.input if isinstance(part.input, dict) else {}
+
+
 def _convert_assistant(parts: list[UIPart], tool_names: frozenset[str]) -> list[_Turn]:
     messages: list[_Turn] = []
     for step in _assistant_steps(parts):
@@ -213,10 +238,10 @@ def _convert_assistant(parts: list[UIPart], tool_names: frozenset[str]) -> list[
                 if part.text.strip():
                     content.append({"type": "text", "text": part.text})
                 continue
-            if part.tool_name not in tool_names:
+            if part.toolName not in tool_names:
                 continue
             content.append(
-                {"type": "tool_use", "id": part.toolCallId, "name": part.tool_name, "input": part.input or {}}
+                {"type": "tool_use", "id": part.toolCallId, "name": part.toolName, "input": _tool_input(part)}
             )
             results.append(_tool_result(part))
         if content:

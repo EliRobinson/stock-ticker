@@ -22,8 +22,9 @@ from stockticker.ai.context import build_chat_deps
 from stockticker.ai.convert import ChatRequest
 from stockticker.ai.loop import answer_producer, new_message_id
 from stockticker.ai.serialize import inline_schema_refs
-from stockticker.ai.stream import SSE_MEDIA_TYPE, ui_message_stream_response
+from stockticker.ai.stream import SSE_MEDIA_TYPE
 from stockticker.api.problems import Problem
+from stockticker.api.streaming import ui_message_stream_response
 from stockticker.config import Settings, get_settings
 from stockticker.models.problem import ProblemDetail
 from stockticker.models.views import ViewSpec

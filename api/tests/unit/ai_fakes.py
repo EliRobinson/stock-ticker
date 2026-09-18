@@ -132,6 +132,18 @@ def text_answer(*chunks: str, input_tokens: int = 100, output_tokens: int = 20) 
     return message_start(input_tokens) + text_block(0, *chunks) + message_end("end_turn", output_tokens)
 
 
+def stalling_text_answer(*chunks: str) -> ScriptedAnthropic:
+    """A text stream that stalls after the first SSE chunk (disconnect tests)."""
+    body = message_start() + text_block(0, *(chunks or ("a", "b"))) + message_end("end_turn")
+    return ScriptedAnthropic(body, stall_after_first_chunk=True)
+
+
+def start_event(message_id: str = "m") -> str:
+    from stockticker.ai.stream import sse
+
+    return sse({"type": "start", "messageId": message_id})
+
+
 def tool_call(
     tool_id: str, name: str, tool_input: dict[str, Any], *, lead: str | None = None, input_tokens: int = 100
 ) -> str:
@@ -348,6 +360,51 @@ def part_types(body: str) -> list[str]:
 
 def error_texts(body: str) -> list[str]:
     return [str(p["errorText"]) for p in parse_sse(body) if isinstance(p, dict) and p["type"] == "error"]
+
+
+class FakeClient:
+    """ASGI `receive` (and optional `send`) for disconnect tests.
+
+    Pass `body` to drive a full HTTP request: the first receive returns the
+    body frame; later ones wait for `leave()`. Without `body`, every receive
+    waits (unit tests of `until_disconnected`).
+    """
+
+    def __init__(self, body: bytes | None = None) -> None:
+        self._body = body
+        self._sent_body = body is None
+        self.gone = asyncio.Event()
+        self.reads = 0
+        self.waiting = 0
+        self.most_waiting = 0
+        self.sent: list[dict[str, Any]] = []
+        self.chunk_arrived = asyncio.Event()
+
+    def leave(self) -> None:
+        self.gone.set()
+
+    async def receive(self) -> dict[str, Any]:
+        if not self._sent_body:
+            self._sent_body = True
+            assert self._body is not None
+            return {"type": "http.request", "body": self._body, "more_body": False}
+        self.reads += 1
+        self.waiting += 1
+        self.most_waiting = max(self.most_waiting, self.waiting)
+        try:
+            await self.gone.wait()
+        finally:
+            self.waiting -= 1
+        return {"type": "http.disconnect"}
+
+    async def send(self, message: dict[str, Any]) -> None:
+        self.sent.append(message)
+        self.chunk_arrived.set()
+
+    def body_text(self) -> str:
+        return "".join(
+            m.get("body", b"").decode() for m in self.sent if m["type"] == "http.response.body"
+        )
 
 
 async def answer_text(deps: ChatDeps, messages: list[UIMessage] | None = None, message_id: str = "m") -> str:

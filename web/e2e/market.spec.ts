@@ -8,6 +8,11 @@ test.describe('Market', () => {
   test.beforeEach(async ({ page }) => {
     await mockApi(page)
     await page.goto('/')
+    await expect(
+      page
+        .getByRole('region', { name: 'Constituent list' })
+        .getByRole('row', { name: /AAPL/ })
+    ).toBeVisible()
   })
 
   test('lists the Constituent List with status in the header strip', async ({

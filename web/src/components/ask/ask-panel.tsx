@@ -1,7 +1,7 @@
 'use client'
 
 import { ChevronDown, ChevronRight, X } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useSyncExternalStore } from 'react'
 import type { ComponentProps } from 'react'
 
 import { CodeBlock } from '@/components/ai-elements/code-block'
@@ -49,6 +49,8 @@ import type {
   RunSqlOutput
 } from './types'
 import { ViewTable } from './view-table'
+
+const noopSubscribe = () => () => {}
 
 type Part = AskMessage['parts'][number]
 type ToolPart = Extract<Part, { toolCallId: string }>
@@ -422,6 +424,13 @@ function SqlDisclosure({
   defaultOpen: boolean
 }) {
   const [open, setOpen] = useState(defaultOpen)
+  // Shiki highlights on the client only; rendering the plain SQL until mount
+  // keeps an open-by-default disclosure from mismatching on hydration.
+  const mounted = useSyncExternalStore(
+    noopSubscribe,
+    () => true,
+    () => false
+  )
   const code = useMemo(() => sql.filter(Boolean).join('\n\n'), [sql])
   if (!code) return null
   return (
@@ -457,11 +466,17 @@ function SqlDisclosure({
           tabIndex={0}
           className='focus-visible:outline-ring focus-visible:outline-2'
         >
-          <CodeBlock
-            code={code}
-            language='sql'
-            className='border-border bg-secondary text-2xs rounded-none border'
-          />
+          {mounted ? (
+            <CodeBlock
+              code={code}
+              language='sql'
+              className='border-border bg-secondary [&_code]:text-2xs [&_pre]:bg-transparent! rounded-none border [&_pre]:p-2.5'
+            />
+          ) : (
+            <pre className='border-border bg-secondary text-2xs m-0 overflow-x-auto border p-2.5 font-mono'>
+              {code}
+            </pre>
+          )}
         </div>
       </CollapsibleContent>
     </Collapsible>

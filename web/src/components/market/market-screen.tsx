@@ -140,9 +140,11 @@ export function MarketScreen({
     [width, userColumns]
   )
   const anyStale = rows.some((r) => r.stale)
+  const compact = width < 520
   const labels = useMemo(
-    () =>
-      quotesProblem?.kind === 'api-down'
+    () => ({
+      compact,
+      ...(quotesProblem?.kind === 'api-down'
         ? {
             price: copy.columnLabels.priceStale,
             age: copy.columnLabels.age,
@@ -157,8 +159,9 @@ export function MarketScreen({
               price: copy.columnLabels.price,
               age: copy.columnLabels.age,
               widePrice: anyStale
-            },
-    [market, quotesProblem, anyStale]
+            })
+    }),
+    [market, quotesProblem, anyStale, compact]
   )
 
   const table = useMarketTable({
@@ -172,7 +175,11 @@ export function MarketScreen({
   })
   const shown = table.getRowModel().rows.length
   const total = rows.length
-  const firstRun = !loading && market != null && total === 0
+  const firstRun =
+    !loading &&
+    market != null &&
+    total === 0 &&
+    quotesProblem?.kind !== 'missing-key'
   const noMatches = !loading && total > 0 && shown === 0
 
   const clearFilters = () => {

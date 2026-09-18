@@ -44,7 +44,12 @@ export type MarketColumnId =
   | 'volume'
   | 'observed_at'
 
-export type Labels = { price: string; age: string; widePrice?: boolean }
+export type Labels = {
+  price: string
+  age: string
+  widePrice?: boolean
+  compact?: boolean
+}
 
 type Cell = NonNullable<ColumnDef<MarketRowView>['cell']>
 
@@ -58,7 +63,7 @@ function display(labels: Labels): Record<MarketColumnId, ColumnDisplay> {
   return {
     symbol: {
       header: copy.columnLabels.symbol,
-      meta: { width: 84 },
+      meta: { width: labels.compact ? 66 : 84 },
       cell: ({ row }) => (
         <span className='font-bold'>{row.original.symbol}</span>
       )
@@ -77,7 +82,10 @@ function display(labels: Labels): Record<MarketColumnId, ColumnDisplay> {
     },
     price: {
       header: labels.price,
-      meta: { width: labels.widePrice ? 150 : 104, align: 'right' },
+      meta: {
+        width: labels.compact ? 84 : labels.widePrice ? 150 : 104,
+        align: 'right'
+      },
       cell: ({ row }) => (
         <QuoteCell
           price={row.original.price}
@@ -94,7 +102,11 @@ function display(labels: Labels): Record<MarketColumnId, ColumnDisplay> {
     },
     change_pct: {
       header: copy.columnLabels.change,
-      meta: { width: 176, align: 'right' },
+      meta: {
+        width: labels.compact ? undefined : 176,
+        align: 'right',
+        className: labels.compact ? 'text-xs' : undefined
+      },
       cell: ({ row }) => {
         const r = row.original
         if (r.backfillPending) return <SkeletonBar className='w-23 ml-auto' />

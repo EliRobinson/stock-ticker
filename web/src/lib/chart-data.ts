@@ -8,6 +8,10 @@ import type {
 import { directionOf, toNumber, type Direction } from './format'
 import type { Bar, MarketEvent, Note } from './api'
 
+/** A marker's tooltip text is a preview, not the full Note/Event - both
+ * mapNotesToMarkers and mapEventsToMarkers truncate to this length. */
+const MARKER_TEXT_MAX_CHARS = 40
+
 /** Bars with no usable close (0, missing, or unparseable) can't produce an
  * adjustment factor - skip them rather than dividing by zero or drawing a
  * bogus candle. */
@@ -219,7 +223,7 @@ export function mapNotesToMarkers(notes: Note[], bars: Bar[]): MappedNotes {
       time,
       position: 'belowBar',
       shape: 'circle',
-      text: note.body.slice(0, 40)
+      text: note.body.slice(0, MARKER_TEXT_MAX_CHARS)
     }),
     (note, from, to) => ({ id: note.id, from, to })
   )
@@ -244,7 +248,7 @@ export function mapEventsToMarkers(
       time,
       position: 'aboveBar',
       shape: 'square',
-      text: event.title.slice(0, 40)
+      text: event.title.slice(0, MARKER_TEXT_MAX_CHARS)
     })
   )
   return { markers, outsideRange }

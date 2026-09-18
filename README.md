@@ -45,7 +45,7 @@ pnpm --filter web dev
 
 ## Architecture at a glance
 
-Full detail: [docs/design/system-design.md](docs/design/system-design.md). Diagrams: `docs/design/diagrams.md` (arriving in PR #11).
+Full detail: [docs/design/system-design.md](docs/design/system-design.md). Diagrams: [docs/design/diagrams.md](docs/design/diagrams.md).
 
 Postgres holds Listings, Companies, Daily Bars, Notes, and Events. A Python worker ingests Alpaca and SEC EDGAR data on a schedule, one job per advisory lock. FastAPI serves a read-only REST API plus a chat stream, and runs a Claude tool loop over guarded SQL for that chat. Next.js (`web/`) calls the API directly from the browser, no server-side proxy, and renders the result with TanStack Table, lightweight-charts, and AI Elements. Claude is the model behind Ask, restricted to read-only views and an allow-listed SQL surface.
 
@@ -56,7 +56,7 @@ Postgres holds Listings, Companies, Daily Bars, Notes, and Events. A Python work
 | `CONTEXT.md`                               | Domain glossary: the vocabulary this app and its code use                                                                                                                                                       | [CONTEXT.md](CONTEXT.md)                                     |
 | `docs/adr/`                                | Architectural decision records: 0001 Alpaca and SEC EDGAR as free data sources, 0002 Local Postgres over SQLite, 0003 AI loop runs in Python speaking the AI SDK protocol, 0004 Drop the personal design system | [docs/adr/](docs/adr)                                        |
 | `docs/design/system-design.md`             | The full system design, reviewed by parallel critic agents across two rounds                                                                                                                                    | [docs/design/system-design.md](docs/design/system-design.md) |
-| `docs/design/diagrams.md`                  | Mermaid architecture diagrams                                                                                                                                                                                   | Arriving in PR #11                                           |
+| `docs/design/diagrams.md`                  | Mermaid architecture diagrams: C4 levels 1 to 4 with requirement traceability                                                                                                                                   | [docs/design/diagrams.md](docs/design/diagrams.md)           |
 | `docs/design/brief.md`                     | The Claude Design UI brief, the prompt the four screens are built from                                                                                                                                          | [docs/design/brief.md](docs/design/brief.md)                 |
 | GitHub issues and labels                   | The work tracker: `status:*`, `area:*`, `model:*`, `needs-eli`                                                                                                                                                  | [Issues](https://github.com/EliRobinson/stock-ticker/issues) |
 | Git worktrees, parallel Claude Code agents | One model picked per task: Opus 5 for design critique, the AI loop, Market Cap math, and reviews; Sonnet 5 for most building; Haiku 4.5 for docs                                                                | -                                                            |

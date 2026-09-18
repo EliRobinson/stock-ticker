@@ -221,3 +221,18 @@ async def test_a_filled_gap_resets_the_attempt_count(conn: AsyncConnection) -> N
     await check_gaps(conn)
 
     assert (await _request(conn, symbol)).attempts == 1
+
+
+async def test_a_request_that_failed_with_an_error_counts_as_an_attempt(conn: AsyncConnection) -> None:
+    symbol = await _listing(conn, _without(DAYS[4]))
+    await check_gaps(conn)
+    await conn.execute(
+        text("UPDATE refetch_requests SET last_error = 'provider returned 422' WHERE symbol = :s"),
+        {"s": symbol},
+    )
+
+    summary = await check_gaps(conn)
+
+    request = await _request(conn, symbol)
+    assert request.attempts == 2
+    assert summary.queued == 1

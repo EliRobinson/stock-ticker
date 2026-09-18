@@ -31,6 +31,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from stockticker.ingest.job import JobContext, JobResult, JobSkipped
+from stockticker.ingest.watermarks import delete_watermarks, read_watermarks, write_watermark
 from stockticker.logging import get_logger
 
 logger = get_logger(__name__)
@@ -94,11 +95,12 @@ async def check_gaps(conn: AsyncConnection) -> GapCheckSummary:
     pending = await _pending_requests(conn)
 
     summary = GapCheckSummary()
+    no_gaps: list[str] = []
     for symbol in symbols:
         accepted = set(state.accepted.get(symbol, []))
         open_gaps = [day for day in gaps_by_symbol.get(symbol, []) if day not in accepted]
         if not open_gaps:
-            await _delete_watermark(conn, _ATTEMPTS + symbol)
+            no_gaps.append(symbol)
             continue
         if symbol in pending:
             await _widen_pending(conn, symbol, open_gaps[0])
@@ -112,6 +114,9 @@ async def check_gaps(conn: AsyncConnection) -> GapCheckSummary:
             continue
         await _queue(conn, symbol, open_gaps[0], attempts + 1)
         summary.queued += 1
+    await delete_watermarks(
+        conn, JOB_NAME, [_ATTEMPTS + symbol for symbol in no_gaps if symbol in state.attempts]
+    )
     return summary
 
 
@@ -122,23 +127,25 @@ class _State:
 
 
 async def _load_state(conn: AsyncConnection) -> _State:
-    result = await conn.execute(
-        text("SELECT key, value FROM ingest_watermarks WHERE job = :job"), {"job": JOB_NAME}
+    return _State(
+        attempts={
+            symbol: int(value) for symbol, value in (await read_watermarks(conn, JOB_NAME, _ATTEMPTS)).items()
+        },
+        accepted={
+            symbol: [date.fromisoformat(day) for day in json.loads(value)]
+            for symbol, value in (await read_watermarks(conn, JOB_NAME, _ACCEPTED)).items()
+        },
     )
-    state = _State(attempts={}, accepted={})
-    for row in result:
-        if row.key.startswith(_ATTEMPTS):
-            state.attempts[row.key.removeprefix(_ATTEMPTS)] = int(row.value)
-        elif row.key.startswith(_ACCEPTED):
-            state.accepted[row.key.removeprefix(_ACCEPTED)] = [
-                date.fromisoformat(day) for day in json.loads(row.value)
-            ]
-    return state
 
 
 async def _pending_requests(conn: AsyncConnection) -> set[str]:
+    """Rows `bars_backfill` has not tried yet. A row with `last_error` set was
+    tried and failed, which counts as a served attempt."""
     result = await conn.execute(
-        text("SELECT symbol FROM refetch_requests WHERE reason = :reason AND accepted_at IS NULL"),
+        text(
+            "SELECT symbol FROM refetch_requests "
+            "WHERE reason = :reason AND accepted_at IS NULL AND last_error IS NULL"
+        ),
         {"reason": REASON},
     )
     return set(result.scalars())
@@ -154,7 +161,7 @@ async def _queue(conn: AsyncConnection, symbol: str, from_date: date, attempts: 
         ),
         {"symbol": symbol, "reason": REASON, "from_date": from_date, "attempts": attempts},
     )
-    await _set_watermark(conn, _ATTEMPTS + symbol, str(attempts))
+    await write_watermark(conn, JOB_NAME, _ATTEMPTS + symbol, str(attempts))
 
 
 async def _widen_pending(conn: AsyncConnection, symbol: str, from_date: date) -> None:
@@ -179,21 +186,7 @@ async def _accept(
         ),
         {"symbol": symbol, "reason": REASON, "from_date": open_gaps[0], "attempts": MAX_ATTEMPTS},
     )
-    await _set_watermark(conn, _ACCEPTED + symbol, json.dumps([day.isoformat() for day in all_accepted]))
-    await _delete_watermark(conn, _ATTEMPTS + symbol)
-
-
-async def _set_watermark(conn: AsyncConnection, key: str, value: str) -> None:
-    await conn.execute(
-        text(
-            "INSERT INTO ingest_watermarks (job, key, value, updated_at) VALUES (:job, :key, :value, now()) "
-            "ON CONFLICT (job, key) DO UPDATE SET value = excluded.value, updated_at = now()"
-        ),
-        {"job": JOB_NAME, "key": key, "value": value},
+    await write_watermark(
+        conn, JOB_NAME, _ACCEPTED + symbol, json.dumps([day.isoformat() for day in all_accepted])
     )
-
-
-async def _delete_watermark(conn: AsyncConnection, key: str) -> None:
-    await conn.execute(
-        text("DELETE FROM ingest_watermarks WHERE job = :job AND key = :key"), {"job": JOB_NAME, "key": key}
-    )
+    await delete_watermarks(conn, JOB_NAME, [_ATTEMPTS + symbol])

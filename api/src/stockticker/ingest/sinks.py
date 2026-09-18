@@ -103,6 +103,23 @@ async def upsert_quotes(conn: AsyncConnection, quotes: Sequence[ProviderQuote]) 
     return JobResult(rows_written=written, failed_items=failed)
 
 
+def _bar_check_violation(bar: ProviderBar) -> str | None:
+    """Mirrors `daily_bars`' own `CHECK` constraint (migration
+    0001_initial_schema) so a bad row is caught here, in Python, before the
+    batch reaches Postgres -- a violation caught by the constraint itself
+    would fail the whole `unnest`-based statement, not just that row (round
+    2 FIX-LATER, issue #32)."""
+    if bar.low <= 0:
+        return "low must be > 0"
+    if bar.low > min(bar.open, bar.close):
+        return "low must be <= least(open, close)"
+    if bar.high < max(bar.open, bar.close):
+        return "high must be >= greatest(open, close)"
+    if bar.volume < 0:
+        return "volume must be >= 0"
+    return None
+
+
 async def upsert_bars(conn: AsyncConnection, bars: Sequence[ProviderBar]) -> JobResult:
     """Upsert each bar. `daily_bars.trade_date` also references
     `trading_days`, so a date outside the calendar (`calendar_sync` hasn't
@@ -113,8 +130,17 @@ async def upsert_bars(conn: AsyncConnection, bars: Sequence[ProviderBar]) -> Job
         return JobResult()
 
     known = await _known_symbols(conn, [b.symbol for b in bars])
-    valid = [b for b in bars if b.symbol in known]
-    unknown = [b for b in bars if b.symbol not in known]
+    valid: list[ProviderBar] = []
+    failed: list[FailedItem] = []
+    for b in bars:
+        if b.symbol not in known:
+            failed.append(FailedItem(key=f"{b.symbol}:{b.trade_date}", error="unknown symbol"))
+            continue
+        violation = _bar_check_violation(b)
+        if violation is not None:
+            failed.append(FailedItem(key=f"{b.symbol}:{b.trade_date}", error=violation))
+            continue
+        valid.append(b)
 
     written = 0
     if valid:
@@ -149,7 +175,6 @@ async def upsert_bars(conn: AsyncConnection, bars: Sequence[ProviderBar]) -> Job
         )
         written = result.rowcount or 0
 
-    failed = [FailedItem(key=f"{b.symbol}:{b.trade_date}", error="unknown symbol") for b in unknown]
     return JobResult(rows_written=written, failed_items=failed)
 
 

@@ -1,0 +1,17 @@
+node_modules/
+.next/
+out/
+build/
+dist/
+coverage/
+next-env.d.ts
+pnpm-lock.yaml
+*.min.js
+*.min.css
+
+# Written and re-verified byte-for-byte by `next dev` itself
+# (node_modules/next/dist/server/lib/generate-agent-files.js). Reformatting
+# the block here would make it stop matching on every dev server start,
+# which makes next dev rewrite it right back.
+web/AGENTS.md
+web/CLAUDE.md

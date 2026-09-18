@@ -4,6 +4,8 @@
   "private": true,
   "packageManager": "pnpm@9.15.0",
   "scripts": {
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "prepare": "husky",
     "commit": "cz"
   },
@@ -13,7 +15,10 @@
     "commitizen": "^4.3.1",
     "cz-conventional-changelog": "^3.3.0",
     "husky": "^9.1.7",
-    "lint-staged": "^15.3.0"
+    "lint-staged": "^15.3.0",
+    "prettier": "^3.4.2",
+    "prettier-config-standard": "^7.0.0",
+    "prettier-plugin-tailwindcss": "^0.6.9"
   },
   "config": {
     "commitizen": {

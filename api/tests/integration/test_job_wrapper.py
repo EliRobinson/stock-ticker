@@ -460,7 +460,9 @@ async def test_run_job_with_engine_quotes_fits_in_the_real_quotes_pool_size() ->
         return JobResult(rows_written=1)
 
     try:
-        outcome = await run_job(_spec(job_name, fn, engine="quotes"), engine=quotes_engine, quotes_engine=quotes_engine)
+        outcome = await run_job(
+            _spec(job_name, fn, engine="quotes"), engine=quotes_engine, quotes_engine=quotes_engine
+        )
         assert outcome.status == "succeeded"
     finally:
         await quotes_engine.dispose()

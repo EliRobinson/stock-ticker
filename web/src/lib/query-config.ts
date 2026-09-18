@@ -46,3 +46,13 @@ export const STALE_THRESHOLD_MS = 2 * 60 * 1000
  * the server is telling us the request itself is wrong, and retrying
  * unchanged input just repeats the same rejection). */
 export const RETRY_COUNT = 2
+
+/** The cursor-pagination half of useInfiniteQuery's options, shared by
+ * useEvents and useNotes - both page through a `{next_cursor}` response
+ * the same way, so there's exactly one place that decides how a page
+ * turns into the next one's pageParam. */
+export const cursorPaging = {
+  initialPageParam: undefined as string | undefined,
+  getNextPageParam: (lastPage: { next_cursor?: string | null }) =>
+    lastPage.next_cursor ?? undefined
+}

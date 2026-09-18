@@ -8,10 +8,11 @@ import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
+from provider_bars import provider_bar
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-from stockticker.ingest.providers import ProviderBar, ProviderQuote
+from stockticker.ingest.providers import ProviderQuote
 from stockticker.ingest.sinks import EventRow, upsert_bars, upsert_events, upsert_quotes
 
 
@@ -22,6 +23,20 @@ async def _seed_company_and_listing(conn: AsyncConnection, cik: str, symbol: str
     await conn.execute(
         text("INSERT INTO listings (symbol, cik, is_primary, is_active) VALUES (:symbol, :cik, true, true)"),
         {"symbol": symbol, "cik": cik},
+    )
+
+
+async def _seed_trading_day(conn: AsyncConnection, trade_date: date) -> None:
+    await conn.execute(
+        text(
+            "INSERT INTO trading_days (trade_date, open_at, close_at) "
+            "VALUES (:d, :open_at, :close_at) ON CONFLICT DO NOTHING"
+        ),
+        {
+            "d": trade_date,
+            "open_at": datetime(trade_date.year, trade_date.month, trade_date.day, 14, 30, tzinfo=UTC),
+            "close_at": datetime(trade_date.year, trade_date.month, trade_date.day, 21, 0, tzinfo=UTC),
+        },
     )
 
 
@@ -125,31 +140,10 @@ async def test_upsert_bars_writes_joined_ohlcv_adj_close_and_source(app_writer_e
 
     async with app_writer_engine.connect() as conn:
         await _seed_company_and_listing(conn, cik, symbol)
-        await conn.execute(
-            text(
-                "INSERT INTO trading_days (trade_date, open_at, close_at) "
-                "VALUES (:d, :open_at, :close_at) ON CONFLICT DO NOTHING"
-            ),
-            {
-                "d": trade_date,
-                "open_at": datetime(2024, 1, 2, 14, 30, tzinfo=UTC),
-                "close_at": datetime(2024, 1, 2, 21, 0, tzinfo=UTC),
-            },
-        )
+        await _seed_trading_day(conn, trade_date)
         await conn.commit()
 
-        bar = ProviderBar(
-            symbol=symbol,
-            trade_date=trade_date,
-            open=Decimal("10.00"),
-            high=Decimal("11.00"),
-            low=Decimal("9.50"),
-            close=Decimal("10.50"),
-            volume=1_000,
-            adj_close=Decimal("10.40"),
-            source="alpaca",
-        )
-        result = await upsert_bars(conn, [bar])
+        result = await upsert_bars(conn, [provider_bar(symbol=symbol, trade_date=trade_date)])
         await conn.commit()
         assert result.rows_written == 1
         assert result.failed_items == []
@@ -183,42 +177,18 @@ async def test_upsert_bars_one_bad_row_in_a_good_batch_is_a_failed_item_not_a_lo
     async with app_writer_engine.connect() as conn:
         await _seed_company_and_listing(conn, cik_good, symbol_good)
         await _seed_company_and_listing(conn, cik_bad, symbol_bad)
-        await conn.execute(
-            text(
-                "INSERT INTO trading_days (trade_date, open_at, close_at) "
-                "VALUES (:d, :open_at, :close_at) ON CONFLICT DO NOTHING"
-            ),
-            {
-                "d": trade_date,
-                "open_at": datetime(2024, 1, 2, 14, 30, tzinfo=UTC),
-                "close_at": datetime(2024, 1, 2, 21, 0, tzinfo=UTC),
-            },
-        )
+        await _seed_trading_day(conn, trade_date)
         await conn.commit()
 
-        good_bar = ProviderBar(
-            symbol=symbol_good,
-            trade_date=trade_date,
-            open=Decimal("10.00"),
-            high=Decimal("11.00"),
-            low=Decimal("9.50"),
-            close=Decimal("10.50"),
-            volume=1_000,
-            adj_close=Decimal("10.40"),
-            source="alpaca",
-        )
+        good_bar = provider_bar(symbol=symbol_good, trade_date=trade_date)
         # high (10.50) is below close (11.00) -- violates
         # `high >= greatest(open, close)`.
-        bad_bar = ProviderBar(
+        bad_bar = provider_bar(
             symbol=symbol_bad,
             trade_date=trade_date,
-            open=Decimal("10.00"),
             high=Decimal("10.50"),
-            low=Decimal("9.50"),
             close=Decimal("11.00"),
-            volume=1_000,
             adj_close=Decimal("10.90"),
-            source="alpaca",
         )
 
         result = await upsert_bars(conn, [good_bar, bad_bar])
@@ -297,33 +267,10 @@ async def test_upsert_bars_two_item_batch_reports_the_real_row_count(app_writer_
     async with app_writer_engine.connect() as conn:
         await _seed_company_and_listing(conn, cik_a, symbol_a)
         await _seed_company_and_listing(conn, cik_b, symbol_b)
-        await conn.execute(
-            text(
-                "INSERT INTO trading_days (trade_date, open_at, close_at) "
-                "VALUES (:d, :open_at, :close_at) ON CONFLICT DO NOTHING"
-            ),
-            {
-                "d": trade_date,
-                "open_at": datetime(2024, 1, 2, 14, 30, tzinfo=UTC),
-                "close_at": datetime(2024, 1, 2, 21, 0, tzinfo=UTC),
-            },
-        )
+        await _seed_trading_day(conn, trade_date)
         await conn.commit()
 
-        bars = [
-            ProviderBar(
-                symbol=symbol,
-                trade_date=trade_date,
-                open=Decimal("10.00"),
-                high=Decimal("11.00"),
-                low=Decimal("9.50"),
-                close=Decimal("10.50"),
-                volume=1_000,
-                adj_close=Decimal("10.40"),
-                source="alpaca",
-            )
-            for symbol in (symbol_a, symbol_b)
-        ]
+        bars = [provider_bar(symbol=symbol, trade_date=trade_date) for symbol in (symbol_a, symbol_b)]
         result = await upsert_bars(conn, bars)
         await conn.commit()
         assert result.rows_written == 2

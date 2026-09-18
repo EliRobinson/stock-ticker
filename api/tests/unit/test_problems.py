@@ -27,6 +27,7 @@ from stockticker.db import get_app_writer_connection
 
 client = TestClient(app, base_url="http://127.0.0.1")
 _NOTE_URL = f"/api/v1/notes/{uuid.uuid4()}"
+ORIGIN = "http://127.0.0.1:3000"
 
 
 async def _fake_connection() -> AsyncIterator[Any]:
@@ -113,7 +114,7 @@ def _standalone_app() -> FastAPI:
     register_problem_handlers(standalone)
     standalone.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://127.0.0.1:3000"],
+        allow_origins=[ORIGIN],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -131,26 +132,12 @@ def _standalone_app() -> FastAPI:
     return standalone
 
 
-def test_500_keeps_request_id_and_cors_headers() -> None:
-    standalone_client = TestClient(
+@pytest.fixture
+def standalone_client() -> Iterator[TestClient]:
+    with TestClient(
         _standalone_app(), base_url="http://127.0.0.1", raise_server_exceptions=False
-    )
-    response = standalone_client.get("/boom", headers={"origin": "http://127.0.0.1:3000"})
-    assert response.status_code == 500
-    assert response.headers["content-type"] == "application/problem+json"
-    assert response.headers.get("x-request-id")
-    assert response.headers.get("access-control-allow-origin") == "http://127.0.0.1:3000"
-
-
-def test_domain_problem_exception_uses_its_own_slug() -> None:
-    standalone_client = TestClient(
-        _standalone_app(), base_url="http://127.0.0.1", raise_server_exceptions=False
-    )
-    response = standalone_client.get("/domain-error")
-    assert response.status_code == 422
-    body = response.json()
-    assert body["type"] == "https://stockticker.local/problems/unknown-cik"
-    assert body["detail"] == "no company with that CIK"
+    ) as c:
+        yield c
 
 
 def _assert_exactly_one_cors_header_pair(response: Any) -> None:
@@ -158,40 +145,46 @@ def _assert_exactly_one_cors_header_pair(response: Any) -> None:
     browsers (round 2 FIX-LATER, issue #32) -- `.headers.get(...)` would
     hide a duplicate by only returning one value, so this reads the raw,
     possibly-repeated header list instead."""
-    assert response.headers.get_list("access-control-allow-origin") == ["http://127.0.0.1:3000"]
+    assert response.headers.get_list("access-control-allow-origin") == [ORIGIN]
     assert response.headers.get_list("vary") == ["Origin"]
 
 
-def test_404_carries_exactly_one_cors_header_pair() -> None:
-    standalone_client = TestClient(
-        _standalone_app(), base_url="http://127.0.0.1", raise_server_exceptions=False
-    )
-    response = standalone_client.get("/nope", headers={"origin": "http://127.0.0.1:3000"})
-    assert response.status_code == 404
+def test_500_keeps_request_id_and_cors_headers(standalone_client: TestClient) -> None:
+    response = standalone_client.get("/boom", headers={"origin": ORIGIN})
+    assert response.status_code == 500
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.headers.get("x-request-id")
+    assert response.headers.get("access-control-allow-origin") == ORIGIN
+
+
+def test_domain_problem_exception_uses_its_own_slug(standalone_client: TestClient) -> None:
+    response = standalone_client.get("/domain-error")
+    assert response.status_code == 422
+    body = response.json()
+    assert body["type"] == "https://stockticker.local/problems/unknown-cik"
+    assert body["detail"] == "no company with that CIK"
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        {"path": "/nope", "status": 404},
+        {"path": "/domain-error", "status": 422},
+        {"path": "/boom", "status": 500},
+    ],
+    ids=["404", "domain-problem", "500"],
+)
+def test_standalone_carries_exactly_one_cors_header_pair(
+    standalone_client: TestClient, case: dict[str, object]
+) -> None:
+    response = standalone_client.get(str(case["path"]), headers={"origin": ORIGIN})
+    assert response.status_code == case["status"]
     _assert_exactly_one_cors_header_pair(response)
 
 
 def test_422_carries_exactly_one_cors_header_pair(db_free: None) -> None:
-    response = client.put(_NOTE_URL, json={}, headers={"origin": "http://127.0.0.1:3000"})
+    response = client.put(_NOTE_URL, json={}, headers={"origin": ORIGIN})
     assert response.status_code == 422
-    _assert_exactly_one_cors_header_pair(response)
-
-
-def test_domain_problem_carries_exactly_one_cors_header_pair() -> None:
-    standalone_client = TestClient(
-        _standalone_app(), base_url="http://127.0.0.1", raise_server_exceptions=False
-    )
-    response = standalone_client.get("/domain-error", headers={"origin": "http://127.0.0.1:3000"})
-    assert response.status_code == 422
-    _assert_exactly_one_cors_header_pair(response)
-
-
-def test_500_carries_exactly_one_cors_header_pair() -> None:
-    standalone_client = TestClient(
-        _standalone_app(), base_url="http://127.0.0.1", raise_server_exceptions=False
-    )
-    response = standalone_client.get("/boom", headers={"origin": "http://127.0.0.1:3000"})
-    assert response.status_code == 500
     _assert_exactly_one_cors_header_pair(response)
 
 
@@ -202,7 +195,7 @@ def test_415_carries_exactly_one_cors_header_pair() -> None:
     response = client.put(
         _NOTE_URL,
         content=b"{}",
-        headers={"content-type": "text/plain", "origin": "http://127.0.0.1:3000"},
+        headers={"content-type": "text/plain", "origin": ORIGIN},
     )
     assert response.status_code == 415
     _assert_exactly_one_cors_header_pair(response)

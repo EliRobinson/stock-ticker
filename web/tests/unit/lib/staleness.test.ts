@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import {
-  STALE_THRESHOLD_MS,
   getMarketStatus,
   getQuoteAgeMs,
   getQuoteStaleness,
@@ -8,6 +7,12 @@ import {
   pollIntervalMs,
   type MarketClockLike
 } from '@/lib/staleness'
+import {
+  CLOSED_POLL_MS,
+  MIN_POLL_MS,
+  OPEN_POLL_MS,
+  STALE_THRESHOLD_MS
+} from '@/lib/query-config'
 
 const SERVER_TIME = '2024-06-03T15:00:00.000Z'
 
@@ -104,16 +109,16 @@ describe('getMarketStatus', () => {
 })
 
 describe('pollIntervalMs', () => {
-  it('polls every 10s with no clock', () => {
-    expect(pollIntervalMs(null, SERVER_TIME)).toBe(10 * 1000)
+  it('polls at OPEN_POLL_MS with no clock', () => {
+    expect(pollIntervalMs(null, SERVER_TIME)).toBe(OPEN_POLL_MS)
   })
 
-  it('polls every 10s while open, with plenty of time before close', () => {
+  it('polls at OPEN_POLL_MS while open, with plenty of time before close', () => {
     const c = clock({
       is_open: true,
       next_close: '2024-06-03T20:00:00.000Z'
     })
-    expect(pollIntervalMs(c, SERVER_TIME)).toBe(10 * 1000)
+    expect(pollIntervalMs(c, SERVER_TIME)).toBe(OPEN_POLL_MS)
   })
 
   it('caps the open interval at the time remaining before close', () => {
@@ -124,20 +129,20 @@ describe('pollIntervalMs', () => {
     expect(pollIntervalMs(c, SERVER_TIME)).toBe(4000)
   })
 
-  it('floors the open interval at 1s when close has already passed', () => {
+  it('floors the open interval at MIN_POLL_MS when close has already passed', () => {
     const c = clock({
       is_open: true,
       next_close: '2024-06-03T14:59:00.000Z'
     })
-    expect(pollIntervalMs(c, SERVER_TIME)).toBe(1000)
+    expect(pollIntervalMs(c, SERVER_TIME)).toBe(MIN_POLL_MS)
   })
 
-  it('polls every 5min while closed, with plenty of time before open', () => {
+  it('polls at CLOSED_POLL_MS while closed, with plenty of time before open', () => {
     const c = clock({
       is_open: false,
       next_open: '2024-06-04T13:30:00.000Z'
     })
-    expect(pollIntervalMs(c, SERVER_TIME)).toBe(5 * 60 * 1000)
+    expect(pollIntervalMs(c, SERVER_TIME)).toBe(CLOSED_POLL_MS)
   })
 
   it('caps the closed interval at the time remaining before open', () => {
@@ -148,11 +153,11 @@ describe('pollIntervalMs', () => {
     expect(pollIntervalMs(c, SERVER_TIME)).toBe(30 * 1000)
   })
 
-  it('floors the closed interval at 1s when open has already passed', () => {
+  it('floors the closed interval at MIN_POLL_MS when open has already passed', () => {
     const c = clock({
       is_open: false,
       next_open: '2024-06-03T14:59:00.000Z'
     })
-    expect(pollIntervalMs(c, SERVER_TIME)).toBe(1000)
+    expect(pollIntervalMs(c, SERVER_TIME)).toBe(MIN_POLL_MS)
   })
 })

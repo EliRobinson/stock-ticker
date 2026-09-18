@@ -4,6 +4,7 @@ import {
   type QueryClient
 } from '@tanstack/react-query'
 import { DEFAULT_BARS_TIMEFRAME, getBars, type GetBarsParams } from '@/lib/api'
+import { HISTORY_STALE_TIME_MS } from '@/lib/query-config'
 
 function normalizeBarsParams(params: GetBarsParams): Required<GetBarsParams> {
   return {
@@ -24,10 +25,6 @@ export const barsKeys = {
     [...barsKeys.symbol(symbol), normalizeBarsParams(params)] as const
 }
 
-/** History rarely changes once ingested; invalidated after `bars_daily`
- * updates land, not on a timer. */
-const STALE_TIME_MS = 60 * 60 * 1000
-
 export function useBars(
   symbol: string | undefined,
   params: GetBarsParams = {}
@@ -35,7 +32,7 @@ export function useBars(
   return useQuery({
     queryKey: barsKeys.list(symbol, params),
     queryFn: () => getBars(symbol as string, params),
-    staleTime: STALE_TIME_MS,
+    staleTime: HISTORY_STALE_TIME_MS,
     placeholderData: keepPreviousData,
     enabled: symbol !== undefined
   })
@@ -49,6 +46,6 @@ export function prefetchBars(
   return queryClient.prefetchQuery({
     queryKey: barsKeys.list(symbol, params),
     queryFn: () => getBars(symbol, params),
-    staleTime: STALE_TIME_MS
+    staleTime: HISTORY_STALE_TIME_MS
   })
 }

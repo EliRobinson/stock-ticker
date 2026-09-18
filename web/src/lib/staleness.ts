@@ -5,7 +5,14 @@
  * sync with each other (see #8 review round 2: "never combine two cached
  * queries for this").
  */
-export const STALE_THRESHOLD_MS = 2 * 60 * 1000
+import {
+  CLOSED_POLL_MS,
+  MIN_POLL_MS,
+  OPEN_POLL_MS,
+  STALE_THRESHOLD_MS
+} from './query-config'
+
+export { STALE_THRESHOLD_MS }
 
 function toEpochMs(value: string): number {
   return new Date(value).getTime()
@@ -77,10 +84,6 @@ export function getMarketStatus(clock: MarketClockLike | null): MarketStatus {
   if (clock === null) return 'unknown'
   return clock.is_open ? 'open' : 'closed'
 }
-
-const OPEN_POLL_MS = 10 * 1000
-const CLOSED_POLL_MS = 5 * 60 * 1000
-const MIN_POLL_MS = 1000
 
 /**
  * One poll-interval rule, shared by useMarket and useStatus so the two

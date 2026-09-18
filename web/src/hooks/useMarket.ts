@@ -1,15 +1,14 @@
 import { useQuery } from '@tanstack/react-query'
 import { getMarket, type MarketResponse } from '@/lib/api'
 import { pollIntervalMs } from '@/lib/staleness'
+import { OPEN_POLL_MS } from '@/lib/query-config'
 
 export const marketKeys = {
   all: ['market'] as const
 }
 
-const DEFAULT_POLL_MS = 10 * 1000
-
 function nextPollIntervalMs(data: MarketResponse | undefined): number {
-  if (!data) return DEFAULT_POLL_MS
+  if (!data) return OPEN_POLL_MS
   return pollIntervalMs(data.market_clock, data.server_time)
 }
 

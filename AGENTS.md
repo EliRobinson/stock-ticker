@@ -314,6 +314,16 @@ Copy `.env.example` (repo root) to `.env` (repo root, git-ignored) for local dev
 
 Python 3.12, managed with `uv`. FastAPI for the REST + chat-stream service, Alembic for migrations, pytest for tests, ruff for lint/format. Full layout, the worker, and `docker-compose.yml` land with the API foundation PR (#3) - this section grows once that merges.
 
+### Rotating `app_writer`/`ai_reader` passwords
+
+`api/alembic/versions/0001_initial_schema.py` only sets `app_writer`'s and `ai_reader`'s passwords at role creation time (`CREATE ROLE ... PASSWORD ... IF NOT EXISTS`) - re-running the migration against a database that already has the roles leaves an existing password alone. Changing `POSTGRES_APP_WRITER_PASSWORD` / `POSTGRES_AI_READER_PASSWORD` in `.env` does **not** rotate the role's actual password; the migration has nothing left to do on a rerun. To rotate a password:
+
+1. Update the value in `.env` (repo root).
+2. Connect as the bootstrap superuser and run `ALTER ROLE app_writer PASSWORD '<new password>';` (or `ai_reader`) by hand - this migration never runs that statement itself, so nothing else does it for you.
+3. Restart `api`/`worker` (and anything else holding a pooled connection under the old password) so they pick up the new value from `.env` on their next connect.
+
+A password containing `$$` is rejected at migration time with a clear error, not a silently-broken `DO $$ ... $$;` block - see the comment on `_required_password` in `0001_initial_schema.py`.
+
 ---
 
 ## Do Not

@@ -24,23 +24,39 @@ creates the superuser + database".
 
 from __future__ import annotations
 
-import os
+from pydantic import SecretStr
 
 from alembic import op
+from stockticker.config import get_settings
 
 revision = "0001_initial_schema"
 down_revision = None
 branch_labels = None
 depends_on = None
 
-DATABASE_NAME = "stockticker"
 
-
-def _required_env(name: str) -> str:
-    value = os.environ.get(name)
-    if not value:
-        raise RuntimeError(f"{name} must be set in the environment running Alembic (see root .env.example).")
-    return value
+def _required_password(env_var: str, value: SecretStr | None) -> str:
+    """Read and validate a role password already loaded onto `Settings`
+    (env-sourced -- see root `.env.example`), rather than reading
+    `os.environ` directly, so it's derived the same way every other
+    setting in this codebase is. `env_var` is used only for the error
+    message (e.g. `POSTGRES_APP_WRITER_PASSWORD`)."""
+    unwrapped = value.get_secret_value() if value is not None else None
+    if not unwrapped:
+        raise RuntimeError(
+            f"{env_var} must be set in the environment running Alembic (see root .env.example)."
+        )
+    # This literal is interpolated into a `DO $$ ... $$;` block below (an
+    # f-string, since CREATE ROLE ... PASSWORD takes no bind parameter) --
+    # Postgres's dollar-quoting has no concept of "inside a nested single
+    # quote"; it ends the block at the *first* occurrence of `$$` it scans,
+    # full stop. A password containing `$$` would silently truncate the
+    # block there and run whatever follows as ordinary SQL. `_pg_literal`
+    # only escapes single quotes, which doesn't defend against this at all
+    # -- reject the password outright instead of trying to out-escape it.
+    if "$$" in unwrapped:
+        raise RuntimeError(f"{env_var} must not contain '$$' (breaks this migration's dollar-quoted blocks).")
+    return unwrapped
 
 
 def _pg_literal(value: str) -> str:
@@ -50,9 +66,24 @@ def _pg_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
+def _pg_ident(value: str) -> str:
+    """Escape a trusted (settings-sourced, not user-controlled) string as a
+    SQL identifier (e.g. a database name interpolated into `GRANT ... ON
+    DATABASE <name>`, which takes no bind parameter either)."""
+    return '"' + value.replace('"', '""') + '"'
+
+
 def upgrade() -> None:
-    app_writer_password = _pg_literal(_required_env("POSTGRES_APP_WRITER_PASSWORD"))
-    ai_reader_password = _pg_literal(_required_env("POSTGRES_AI_READER_PASSWORD"))
+    settings = get_settings()
+    # Derived from Settings.postgres_db (the same source `Settings.app_writer_dsn`
+    # etc. use), not hardcoded -- see round 1 FIX-LATER, issue #32.
+    database_name = _pg_ident(settings.postgres_db)
+    app_writer_password = _pg_literal(
+        _required_password("POSTGRES_APP_WRITER_PASSWORD", settings.postgres_app_writer_password)
+    )
+    ai_reader_password = _pg_literal(
+        _required_password("POSTGRES_AI_READER_PASSWORD", settings.postgres_ai_reader_password)
+    )
 
     # --- Roles, as the bootstrap superuser ------------------------------
     op.execute(
@@ -94,15 +125,15 @@ def upgrade() -> None:
     # --- Ownership and hardening, as the bootstrap superuser ------------
     op.execute("ALTER SCHEMA public OWNER TO app_owner;")
     op.execute("REVOKE ALL ON SCHEMA public FROM PUBLIC;")
-    op.execute(f"GRANT CREATE ON DATABASE {DATABASE_NAME} TO app_owner;")
+    op.execute(f"GRANT CREATE ON DATABASE {database_name} TO app_owner;")
     # PostgreSQL grants TEMP on every database to PUBLIC by default -- close
     # that, and hand it back only to the roles that legitimately need scratch
     # tables (app_owner for migrations, app_writer for ingest jobs).
     # ai_reader never gets it: it cannot create a temp table to shadow a
     # permanent one, even before the SQL guard (a later issue) rejects
     # anything but a single SELECT.
-    op.execute(f"REVOKE TEMP ON DATABASE {DATABASE_NAME} FROM PUBLIC;")
-    op.execute(f"GRANT TEMP ON DATABASE {DATABASE_NAME} TO app_owner, app_writer;")
+    op.execute(f"REVOKE TEMP ON DATABASE {database_name} FROM PUBLIC;")
+    op.execute(f"GRANT TEMP ON DATABASE {database_name} TO app_owner, app_writer;")
     _revoke_dangerous_functions_from_public()
     # app_writer needs these to run the job wrapper's advisory lock
     # (system design §4); nobody else gets them back.

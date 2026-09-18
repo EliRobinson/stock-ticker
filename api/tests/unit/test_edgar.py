@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-import json
 from collections.abc import Iterator
 from datetime import date
-from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
 import respx
+from edgar_support import load_fixture as _fixture
 
 from stockticker.ingest.edgar.parse import (
     DEI_SHARES,
@@ -27,16 +26,10 @@ from stockticker.ingest.edgar.sync import (
 )
 from stockticker.ingest.http import reset_rate_budgets
 
-FIXTURES = Path(__file__).parent.parent / "fixtures" / "edgar"
 AAPL_CIK = "0000320193"
 GOOGL_CIK = "0001652044"
 GOOGL_PAGE = "CIK0001652044-submissions-001.json"
 USER_AGENT = "Jane Doe jane@example.com"
-
-
-def _fixture(name: str) -> dict[str, Any]:
-    data: dict[str, Any] = json.loads((FIXTURES / name).read_text())
-    return data
 
 
 @pytest.fixture(autouse=True)

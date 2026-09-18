@@ -47,7 +47,9 @@ packages = ["src/stockticker"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-pythonpath = ["tests/unit"]
+# `tests/edgar_support.py` is shared by unit/integration (no tests/__init__.py).
+# `tests/unit` stays on the path so ProviderBar imports keep working after #45.
+pythonpath = ["tests", "tests/unit"]
 
 [tool.ruff]
 line-length = 110

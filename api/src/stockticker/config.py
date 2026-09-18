@@ -9,7 +9,10 @@ to surface it in `/api/v1/status`.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+from enum import StrEnum
 from functools import lru_cache
+from typing import ClassVar
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -19,6 +22,16 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 APP_OWNER_ROLE = "app_owner"
 APP_WRITER_ROLE = "app_writer"
 AI_READER_ROLE = "ai_reader"
+
+
+class RequiredKey(StrEnum):
+    """A `JobSpec.requires_keys` entry (`ingest/registry.py`). Values match
+    the env var name exactly."""
+
+    ALPACA_KEY_ID = "ALPACA_KEY_ID"
+    ALPACA_SECRET_KEY = "ALPACA_SECRET_KEY"
+    SEC_USER_AGENT = "SEC_USER_AGENT"
+    ANTHROPIC_API_KEY = "ANTHROPIC_API_KEY"
 
 
 class Settings(BaseSettings):
@@ -86,19 +99,23 @@ class Settings(BaseSettings):
         )
         return self._dsn(self.postgres_superuser, password, driver="postgresql+psycopg")
 
-    def missing_keys(self) -> list[str]:
-        """Names of unset external-provider keys, for `/api/v1/status` and
-        for `worker.JobSpec.requires_keys` (the names must match exactly)."""
-        missing = []
-        if not self.alpaca_key_id:
-            missing.append("ALPACA_KEY_ID")
-        if not self.alpaca_secret_key:
-            missing.append("ALPACA_SECRET_KEY")
-        if not self.sec_user_agent:
-            missing.append("SEC_USER_AGENT")
-        if not self.anthropic_api_key:
-            missing.append("ANTHROPIC_API_KEY")
-        return missing
+    _KEY_FIELDS: ClassVar[dict[RequiredKey, str]] = {
+        RequiredKey.ALPACA_KEY_ID: "alpaca_key_id",
+        RequiredKey.ALPACA_SECRET_KEY: "alpaca_secret_key",
+        RequiredKey.SEC_USER_AGENT: "sec_user_agent",
+        RequiredKey.ANTHROPIC_API_KEY: "anthropic_api_key",
+    }
+
+    def is_missing(self, key: RequiredKey) -> bool:
+        return not getattr(self, self._KEY_FIELDS[key])
+
+    def missing_keys(self, required: Iterable[RequiredKey] | None = None) -> list[str]:
+        """Names of unset keys among `required` (default: every `RequiredKey`).
+        `/api/v1/status` calls this with the union of `requires_keys` across
+        `ingest.registry.JOBS`, so it reports only what's actually gating a
+        registered job."""
+        keys = required if required is not None else tuple(RequiredKey)
+        return [key.value for key in keys if self.is_missing(key)]
 
 
 @lru_cache

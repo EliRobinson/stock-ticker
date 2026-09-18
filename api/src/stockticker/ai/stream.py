@@ -16,6 +16,10 @@ import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, Literal
 
+import anyio
+from starlette.responses import StreamingResponse
+from starlette.types import Message, Receive
+
 from stockticker.ai import errors
 from stockticker.ai.serialize import compact_json
 from stockticker.logging import get_logger
@@ -177,17 +181,18 @@ _CRASH_EVENTS = [
 ]
 
 
-async def until_disconnected(
-    producer: Producer,
-    is_disconnected: Callable[[], Awaitable[bool]],
-    *,
-    poll_seconds: float = 0.25,
-) -> AsyncIterator[str]:
+async def until_disconnected(producer: Producer, receive: Receive) -> AsyncIterator[str]:
     """Runs `producer` in its own task and relays what it emits until the
     client disconnects.
 
+    `receive` is the request's ASGI `receive`, and this is its only reader
+    once the body has been read: one task waits on it for `http.disconnect`
+    and races the producer's queue. Serve the result with
+    `ui_message_stream_response`, which keeps Starlette's own disconnect
+    listener off `receive`.
+
     Because the producer runs apart from the response, a disconnect is noticed
-    while the loop waits on the model or on Postgres, not only between chunks.
+    the moment it arrives, while the loop waits on the model or on Postgres.
     On disconnect the task is cancelled (which closes the Anthropic stream and
     cancels the running query) and nothing more is yielded."""
     queue: asyncio.Queue[object] = asyncio.Queue(maxsize=64)
@@ -211,22 +216,58 @@ async def until_disconnected(
     task = asyncio.create_task(run())
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
+    disconnect = asyncio.create_task(_wait_for_disconnect(receive))
     try:
         while True:
             getter = asyncio.ensure_future(queue.get())
             try:
-                while not getter.done():
-                    await asyncio.wait({getter}, timeout=poll_seconds)
-                    if not getter.done() and await is_disconnected():
-                        return
+                await asyncio.wait({getter, disconnect}, return_when=asyncio.FIRST_COMPLETED)
             finally:
                 getter.cancel()
+            # Checked first: when both are ready, the client is already gone.
+            if disconnect.done():
+                return
             item = getter.result()
             if item is _END:
-                return
-            if await is_disconnected():
                 return
             assert isinstance(item, str)
             yield item
     finally:
         task.cancel()
+        disconnect.cancel()
+
+
+async def never_disconnects() -> Message:
+    """A `receive` for a caller that reads the stream to the end."""
+    forever: asyncio.Future[Message] = asyncio.get_running_loop().create_future()
+    return await forever
+
+
+async def _wait_for_disconnect(receive: Receive) -> None:
+    try:
+        while (await receive())["type"] != "http.disconnect":
+            pass
+    except Exception:
+        # A receive that fails has no client left to answer.
+        _logger.exception("ai_stream_receive_failed")
+
+
+class _SoleReceiverStreamingResponse(StreamingResponse):
+    """A `StreamingResponse` that never reads `receive` itself.
+
+    Under ASGI < 2.4 (uvicorn's HTTP scopes are 2.3) Starlette runs
+    `listen_for_disconnect` next to the body, a second loop on `receive`.
+    `until_disconnected` already owns `receive`, and ASGI does not promise
+    that two readers both see `http.disconnect`, so this listener only waits
+    to be cancelled when the body ends."""
+
+    async def listen_for_disconnect(self, receive: Receive) -> None:
+        await anyio.sleep_forever()
+
+
+def ui_message_stream_response(producer: Producer, receive: Receive) -> StreamingResponse:
+    return _SoleReceiverStreamingResponse(
+        until_disconnected(producer, receive),
+        media_type=SSE_MEDIA_TYPE,
+        headers=UI_MESSAGE_STREAM_HEADERS,
+    )

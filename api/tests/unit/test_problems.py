@@ -134,9 +134,7 @@ def _standalone_app() -> FastAPI:
 
 @pytest.fixture
 def standalone_client() -> Iterator[TestClient]:
-    with TestClient(
-        _standalone_app(), base_url="http://127.0.0.1", raise_server_exceptions=False
-    ) as c:
+    with TestClient(_standalone_app(), base_url="http://127.0.0.1", raise_server_exceptions=False) as c:
         yield c
 
 

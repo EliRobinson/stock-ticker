@@ -33,6 +33,10 @@ const csp = [
 ].join('; ')
 
 const nextConfig: NextConfig = {
+  allowedDevOrigins: [
+    '127.0.0.1',
+    ...(process.env.PUBLIC_WEB_HOST ? [process.env.PUBLIC_WEB_HOST] : [])
+  ],
   reactStrictMode: true,
   poweredByHeader: false,
   typedRoutes: true,

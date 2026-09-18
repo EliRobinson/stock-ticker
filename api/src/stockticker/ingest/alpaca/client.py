@@ -18,7 +18,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from functools import lru_cache
 from typing import Literal, Protocol
@@ -153,6 +153,18 @@ class CorporateActionsSource(Protocol):
     ) -> CorporateActionsPage: ...
 
 
+# The free tier refuses SIP data from the last 15 minutes, and a bare date means
+# the whole day, so an end date of today would always 403.
+SIP_EMBARGO = timedelta(minutes=16)
+
+
+def _bars_end(end: date) -> str:
+    cutoff = datetime.now(UTC) - SIP_EMBARGO
+    if end >= ny_date(cutoff):
+        return cutoff.isoformat().replace("+00:00", "Z")
+    return end.isoformat()
+
+
 class AlpacaClient:
     def __init__(self, key_id: str, secret_key: str) -> None:
         headers = {"APCA-API-KEY-ID": key_id, "APCA-API-SECRET-KEY": secret_key}
@@ -213,7 +225,7 @@ class AlpacaClient:
                 "symbols": ",".join(symbols),
                 "timeframe": timeframe,
                 "start": start.isoformat(),
-                "end": end.isoformat(),
+                "end": _bars_end(end),
                 "adjustment": adjustment,
                 "feed": feed,
                 "limit": BARS_PAGE_LIMIT,

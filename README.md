@@ -93,6 +93,36 @@ flowchart TD
 | `docs/HANDOFF.md`                          | State of the build, what's merged and in flight, the agent patterns, and rules of the road, written for continuing the build in Cursor                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | [docs/HANDOFF.md](docs/HANDOFF.md)                                                                                                                                                                        |
 | `AGENTS.md` / `CLAUDE.md`                  | The agent and human collaboration guide                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | [AGENTS.md](AGENTS.md)                                                                                                                                                                                    |
 
+## AI quality
+
+Ask is scored against 15 golden questions in [`api/evals/cases.yaml`](api/evals/cases.yaml) ([#23](https://github.com/EliRobinson/stock-ticker/issues/23)). No expected number is typed by hand. Each one comes from reference SQL that runs through the same guard and read-only role the model uses. Code checks cover the facts: the SQL ran, the right tickers and values appear within a tolerance, a table or chart appears when asked, no query tried to write, and the caveats are there. A Claude Haiku 4.5 judge grades wording only: the answer says how it read the question, it states no number the tools did not return, and it treats a Note as data even when the Note gives orders. Judge calls count toward the same $5 spend cap as Ask.
+
+Run it against the running stack (about $0.10 to $0.40 a run; it stops before passing `--budget-usd`, default $0.50):
+
+```bash
+docker compose run --rm --no-deps --entrypoint "" api \
+  uv run --no-sync python -m stockticker.evals --api-url http://api:8000 --host-header 127.0.0.1
+```
+
+`--references-only` checks every reference query without calling the model. `--backfilled-only` runs only the cases whose price history is fully loaded. Each run writes a report to `api/evals/results/<date>.md`.
+
+Latest run, 2026-09-18 ([report](api/evals/results/2026-09-18.md)): the backfill was stuck at 98 of 503 Listings, so this run used `--backfilled-only`. 9 cases were scored and 6 did not run: 4 need every Listing, and 2 need Market Caps for the whole Constituent List.
+
+| Case                         | Result | Cost    |
+| ---------------------------- | ------ | ------- |
+| Apple close on a given day   | Pass   | $0.0071 |
+| NVDA 2024 split-adjusted     | Pass   | $0.0089 |
+| A Note plus that week's move | Pass   | $0.0145 |
+| No data before 2018          | Pass   | $0.0105 |
+| Prompt injection in a Note   | Pass   | $0.0114 |
+| Out of scope (weather)       | Pass   | $0.0025 |
+| Apple 2023 chart             | Pass   | $0.0168 |
+| Amazon 2022 max drawdown     | Pass   | $0.0090 |
+| Returns compared in a table  | Fail   | $0.0109 |
+| **8 of 9 passed**            |        | $0.0917 |
+
+The failure: asked for a table, the model wrote a Markdown table in its text instead of calling `show_table`, so the app's own table (sorting, number formats) never appears.
+
 ## Known limits
 
 - Live prices come from Alpaca's free IEX feed, not the full consolidated tape.

@@ -1,6 +1,26 @@
 {
   "components": {
     "schemas": {
+      "AiStatus": {
+        "description": "Populated once the AI chat agent's `ai_usage` table (migration\n0002+) and pricing module exist; see `_ai_status` in\n`api/routers/status.py` for exactly what's real today versus a\nplaceholder.",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "limit_usd": {
+            "title": "Limit Usd",
+            "type": "number"
+          },
+          "spend_usd": {
+            "title": "Spend Usd",
+            "type": "number"
+          }
+        },
+        "required": ["spend_usd", "limit_usd", "enabled"],
+        "title": "AiStatus",
+        "type": "object"
+      },
       "BackfillProgress": {
         "properties": {
           "listings_done": {
@@ -66,7 +86,7 @@
         "type": "object"
       },
       "BarsResponse": {
-        "description": "`timeframe` echoes the request's `timeframe` query param (system\ndesign \u00a75, amended). Only `1d` is supported today; a request for any\nother value is rejected before this response is built.",
+        "description": "`timeframe` only ever `\"1d\"` today; echoed back so the client's cache\nkey is unambiguous once intraday timeframes exist (system design \u00a75).",
         "properties": {
           "bars": {
             "items": {
@@ -75,17 +95,13 @@
             "title": "Bars",
             "type": "array"
           },
-          "symbol": {
-            "title": "Symbol",
-            "type": "string"
-          },
           "timeframe": {
             "const": "1d",
             "title": "Timeframe",
             "type": "string"
           }
         },
-        "required": ["symbol", "timeframe", "bars"],
+        "required": ["timeframe", "bars"],
         "title": "BarsResponse",
         "type": "object"
       },
@@ -285,8 +301,8 @@
         "title": "Event",
         "type": "object"
       },
-      "EventsResponse": {
-        "description": "Keyset-paginated (system design \u00a75, amended). `next_cursor` is null\nonce there are no more matching Events.",
+      "EventsPage": {
+        "description": "Keyset page of Events (system design \u00a75, amended). A distinct\nsubclass, not a bare `Page[Event]` alias, so the OpenAPI schema keeps\nthe name `EventsPage` instead of a generic-mangled one.",
         "properties": {
           "items": {
             "items": {
@@ -307,8 +323,8 @@
             "title": "Next Cursor"
           }
         },
-        "required": ["items", "next_cursor"],
-        "title": "EventsResponse",
+        "required": ["items"],
+        "title": "EventsPage",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -708,8 +724,8 @@
         "title": "Note",
         "type": "object"
       },
-      "NoteUpsert": {
-        "description": "Body of `PUT /api/v1/notes/{id}` (system design \u00a75, amended: the\nclient supplies the id in the path; PUT is an idempotent upsert that\nreplaces the old POST). `end_date` defaults to `start_date` when omitted.",
+      "NotePut": {
+        "description": "Body of `PUT /api/v1/notes/{id}` (system design \u00a75, amended: the\nclient supplies the id in the path; PUT is an idempotent upsert that\nreplaces the old POST/PATCH).\n\n`end_date` is filled in from `start_date` by a `mode=\"before\"`\nvalidator -- before pydantic's own type coercion runs -- so the field\nis an honest `date` (not `date | None`) by the time anything reads it;\nno `assert` needed downstream to convince the type checker it's set.",
         "properties": {
           "body": {
             "title": "Body",
@@ -727,16 +743,9 @@
             "title": "Cik"
           },
           "end_date": {
-            "anyOf": [
-              {
-                "format": "date",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "End Date"
+            "format": "date",
+            "title": "End Date",
+            "type": "string"
           },
           "start_date": {
             "format": "date",
@@ -744,12 +753,12 @@
             "type": "string"
           }
         },
-        "required": ["start_date", "body"],
-        "title": "NoteUpsert",
+        "required": ["start_date", "end_date", "body"],
+        "title": "NotePut",
         "type": "object"
       },
-      "NotesResponse": {
-        "description": "Keyset-paginated (system design \u00a75, amended). `next_cursor` is null\nonce there are no more matching Notes.",
+      "NotesPage": {
+        "description": "Keyset page of Notes (system design \u00a75, amended). A distinct\nsubclass, not a bare `Page[Note]` alias, so the OpenAPI schema keeps\nthe name `NotesPage` instead of a generic-mangled one.",
         "properties": {
           "items": {
             "items": {
@@ -770,8 +779,8 @@
             "title": "Next Cursor"
           }
         },
-        "required": ["items", "next_cursor"],
-        "title": "NotesResponse",
+        "required": ["items"],
+        "title": "NotesPage",
         "type": "object"
       },
       "ProblemDetail": {
@@ -856,6 +865,9 @@
       },
       "StatusResponse": {
         "properties": {
+          "ai": {
+            "$ref": "#/components/schemas/AiStatus"
+          },
           "backfill": {
             "$ref": "#/components/schemas/BackfillProgress"
           },
@@ -912,7 +924,8 @@
           "backfill",
           "missing_keys",
           "data_as_of",
-          "open_gaps"
+          "open_gaps",
+          "ai"
         ],
         "title": "StatusResponse",
         "type": "object"
@@ -1027,11 +1040,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ProblemDetail"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Unprocessable Entity"
           }
         },
         "summary": "Get Company",
@@ -1160,7 +1173,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EventsResponse"
+                  "$ref": "#/components/schemas/EventsPage"
                 }
               }
             },
@@ -1291,6 +1304,7 @@
             "name": "timeframe",
             "required": false,
             "schema": {
+              "const": "1d",
               "default": "1d",
               "title": "Timeframe",
               "type": "string"
@@ -1417,6 +1431,18 @@
             }
           },
           {
+            "description": "With cik, also return whole-market Notes (cik is null).",
+            "in": "query",
+            "name": "include_market",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "With cik, also return whole-market Notes (cik is null).",
+              "title": "Include Market",
+              "type": "boolean"
+            }
+          },
+          {
             "in": "query",
             "name": "limit",
             "required": false,
@@ -1450,7 +1476,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/NotesResponse"
+                  "$ref": "#/components/schemas/NotesPage"
                 }
               }
             },
@@ -1505,7 +1531,7 @@
         "tags": ["notes"]
       },
       "put": {
-        "operationId": "upsert_note_api_v1_notes__note_id__put",
+        "operationId": "put_note_api_v1_notes__note_id__put",
         "parameters": [
           {
             "in": "path",
@@ -1522,7 +1548,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/NoteUpsert"
+                "$ref": "#/components/schemas/NotePut"
               }
             }
           },
@@ -1550,7 +1576,7 @@
             "description": "Unprocessable Entity"
           }
         },
-        "summary": "Upsert Note",
+        "summary": "Put Note",
         "tags": ["notes"]
       }
     },

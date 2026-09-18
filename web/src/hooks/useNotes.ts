@@ -13,7 +13,7 @@ import {
   type GetNotesParams,
   type Note,
   type NotesResponse,
-  type NoteUpsert
+  type PutNoteBody
 } from '@/lib/api'
 
 export const notesKeys = {
@@ -45,21 +45,25 @@ type NotesCacheEntry = [QueryKey, NotesInfiniteData | undefined]
 type NotesListParams = Omit<GetNotesParams, 'cursor'>
 
 /**
- * The same predicate the API applies (system-design.md §5): with
- * `market_only`, cik is ignored and only cik === null matches; otherwise a
- * `cik` filter requires an exact match; `from`/`to` is a range overlap
- * against the Note's own [start_date, end_date]. `include_market` (a
- * combined "this Company's notes plus market-wide notes" view) is not a
- * query param GET /notes accepts today - confirmed against feat/api-read's
- * committed api/openapi.json - so it isn't modeled here; add it once the
- * API actually supports it instead of guessing the semantics.
+ * The same predicate the API applies (system-design.md §5, amended by the
+ * #8 review): with `market_only`, cik is ignored and only cik === null
+ * matches. A `cik` filter requires an exact match, unless `include_market`
+ * is also set - the route's own rule (api-read, confirmed against its
+ * committed api/openapi.json) - in which case a whole-market Note
+ * (cik === null) matches too, alongside that cik's own Notes. `cik` and
+ * `market_only` together is a route-level 422 (conflicting filters); this
+ * assumes the params it's given are valid, same as the route does.
+ * `from`/`to` is a range overlap against the Note's own
+ * [start_date, end_date].
  */
 export function noteMatchesList(params: NotesListParams, note: Note): boolean {
   if (params.market_only) {
     return note.cik === null
   }
-  if (params.cik !== undefined && note.cik !== params.cik) {
-    return false
+  if (params.cik !== undefined) {
+    const matchesCik = note.cik === params.cik
+    const matchesMarket = params.include_market && note.cik === null
+    if (!matchesCik && !matchesMarket) return false
   }
   if (params.from !== undefined && note.end_date < params.from) {
     return false
@@ -121,7 +125,7 @@ function paramsOf(queryKey: QueryKey): NotesListParams | undefined {
     : undefined
 }
 
-export interface PutNoteVariables extends NoteUpsert {
+export interface PutNoteVariables extends PutNoteBody {
   id: string
 }
 

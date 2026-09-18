@@ -54,7 +54,7 @@ describe('api client', () => {
     expect(request.method).toBe('GET')
   })
 
-  it('sends a PUT with a JSON content-type for putNote', async () => {
+  it('sends a PUT with a JSON content-type for putNote, defaulting cik and end_date', async () => {
     const fetchMock = vi.mocked(fetch)
     const note: Note = {
       id: 'note-1',
@@ -73,8 +73,49 @@ describe('api client', () => {
     expect(request.url).toBe('http://127.0.0.1:8000/api/v1/notes/note-1')
     expect(request.method).toBe('PUT')
     expect(request.headers.get('Content-Type')).toBe('application/json')
+    // end_date defaults to start_date and cik defaults to null client-side -
+    // the generated NotePut type requires both, even though api-read's own
+    // docs say a `mode="before"` validator fills end_date in server-side
+    // too if it's omitted.
     await expect(request.text()).resolves.toBe(
-      JSON.stringify({ start_date: '2024-06-03', body: 'hello' })
+      JSON.stringify({
+        cik: null,
+        start_date: '2024-06-03',
+        end_date: '2024-06-03',
+        body: 'hello'
+      })
+    )
+  })
+
+  it('passes through an explicit end_date instead of defaulting it', async () => {
+    const fetchMock = vi.mocked(fetch)
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        id: 'note-1',
+        cik: '0000320193',
+        start_date: '2024-06-01',
+        end_date: '2024-06-10',
+        body: 'range note',
+        created_at: '2024-06-03T00:00:00.000Z',
+        updated_at: '2024-06-03T00:00:00.000Z'
+      })
+    )
+
+    await putNote('note-1', {
+      cik: '0000320193',
+      start_date: '2024-06-01',
+      end_date: '2024-06-10',
+      body: 'range note'
+    })
+
+    const request = requestFrom(fetchMock)
+    await expect(request.text()).resolves.toBe(
+      JSON.stringify({
+        cik: '0000320193',
+        start_date: '2024-06-01',
+        end_date: '2024-06-10',
+        body: 'range note'
+      })
     )
   })
 
@@ -98,6 +139,20 @@ describe('api client', () => {
     const request = requestFrom(fetchMock)
     expect(request.url).toBe(
       'http://127.0.0.1:8000/api/v1/notes?cik=0000320193&limit=20'
+    )
+  })
+
+  it('sends include_market alongside cik', async () => {
+    const fetchMock = vi.mocked(fetch)
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ items: [], next_cursor: null })
+    )
+
+    await getNotes({ cik: '0000320193', include_market: true })
+
+    const request = requestFrom(fetchMock)
+    expect(request.url).toBe(
+      'http://127.0.0.1:8000/api/v1/notes?cik=0000320193&include_market=true'
     )
   })
 

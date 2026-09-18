@@ -1,5 +1,6 @@
 import {
   keepPreviousData,
+  queryOptions,
   useQuery,
   type QueryClient
 } from '@tanstack/react-query'
@@ -25,14 +26,26 @@ export const barsKeys = {
     [...barsKeys.symbol(symbol), normalizeBarsParams(params)] as const
 }
 
+/** The one query definition useBars and prefetchBars both build on - a
+ * query and its prefetch must never define the queryKey/queryFn pair
+ * twice, or they can silently drift into two different cache entries. */
+export function barsQueryOptions(
+  symbol: string | undefined,
+  params: GetBarsParams = {}
+) {
+  return queryOptions({
+    queryKey: barsKeys.list(symbol, params),
+    queryFn: () => getBars(symbol as string, params),
+    staleTime: HISTORY_STALE_TIME_MS
+  })
+}
+
 export function useBars(
   symbol: string | undefined,
   params: GetBarsParams = {}
 ) {
   return useQuery({
-    queryKey: barsKeys.list(symbol, params),
-    queryFn: () => getBars(symbol as string, params),
-    staleTime: HISTORY_STALE_TIME_MS,
+    ...barsQueryOptions(symbol, params),
     placeholderData: keepPreviousData,
     enabled: symbol !== undefined
   })
@@ -43,9 +56,5 @@ export function prefetchBars(
   symbol: string,
   params: GetBarsParams = {}
 ): Promise<void> {
-  return queryClient.prefetchQuery({
-    queryKey: barsKeys.list(symbol, params),
-    queryFn: () => getBars(symbol, params),
-    staleTime: HISTORY_STALE_TIME_MS
-  })
+  return queryClient.prefetchQuery(barsQueryOptions(symbol, params))
 }

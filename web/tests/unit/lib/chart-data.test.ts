@@ -149,17 +149,15 @@ describe('mapNotesToMarkers', () => {
 
   it('places a single-date note anchored to a loaded bar', () => {
     const note = makeNote({ start_date: '2024-06-03', end_date: '2024-06-03' })
-    const { markers, ranges, outsideRange } = mapNotesToMarkers([note], bars)
-    expect(ranges).toEqual([])
+    const { markers, outsideRange } = mapNotesToMarkers([note], bars)
     expect(outsideRange).toEqual([])
     expect(markers).toEqual([
       {
         id: 'note-1',
         kind: 'note',
-        time: '2024-06-03',
-        position: 'belowBar',
-        shape: 'circle',
-        text: 'Looks cheap here.'
+        barDate: '2024-06-03',
+        start: '2024-06-03',
+        end: '2024-06-03'
       }
     ])
   })
@@ -168,7 +166,7 @@ describe('mapNotesToMarkers', () => {
     // 06-05 falls in the gap between the 06-04 and 06-06 bars.
     const note = makeNote({ start_date: '2024-06-05', end_date: '2024-06-05' })
     const { markers } = mapNotesToMarkers([note], bars)
-    expect(markers[0]?.time).toBe('2024-06-06')
+    expect(markers[0]?.barDate).toBe('2024-06-06')
   })
 
   it('lists a note with no overlap with the loaded range separately', () => {
@@ -177,36 +175,53 @@ describe('mapNotesToMarkers', () => {
       start_date: '2020-01-01',
       end_date: '2020-01-02'
     })
-    const { markers, ranges, outsideRange } = mapNotesToMarkers([note], bars)
+    const { markers, outsideRange } = mapNotesToMarkers([note], bars)
     expect(markers).toEqual([])
-    expect(ranges).toEqual([])
     expect(outsideRange).toEqual([note])
   })
 
   it('draws a range note fully inside the loaded range, snapped inward', () => {
     const note = makeNote({ start_date: '2024-06-03', end_date: '2024-06-06' })
-    const { ranges, outsideRange } = mapNotesToMarkers([note], bars)
+    const { markers, outsideRange } = mapNotesToMarkers([note], bars)
     expect(outsideRange).toEqual([])
-    expect(ranges).toEqual([
-      { id: 'note-1', from: '2024-06-03', to: '2024-06-06' }
+    expect(markers).toEqual([
+      {
+        id: 'note-1',
+        kind: 'note',
+        barDate: '2024-06-03',
+        start: '2024-06-03',
+        end: '2024-06-06'
+      }
     ])
   })
 
   it('draws a range note that starts before the loaded range but overlaps it, clamped', () => {
     const note = makeNote({ start_date: '2020-01-01', end_date: '2024-06-04' })
-    const { ranges, outsideRange } = mapNotesToMarkers([note], bars)
+    const { markers, outsideRange } = mapNotesToMarkers([note], bars)
     expect(outsideRange).toEqual([])
-    expect(ranges).toEqual([
-      { id: 'note-1', from: '2024-06-03', to: '2024-06-04' }
+    expect(markers).toEqual([
+      {
+        id: 'note-1',
+        kind: 'note',
+        barDate: '2024-06-03',
+        start: '2024-06-03',
+        end: '2024-06-04'
+      }
     ])
   })
 
   it('draws a range note that ends after the loaded range but overlaps it, clamped', () => {
     const note = makeNote({ start_date: '2024-06-04', end_date: '2030-01-01' })
-    const { ranges, outsideRange } = mapNotesToMarkers([note], bars)
+    const { markers, outsideRange } = mapNotesToMarkers([note], bars)
     expect(outsideRange).toEqual([])
-    expect(ranges).toEqual([
-      { id: 'note-1', from: '2024-06-04', to: '2024-06-06' }
+    expect(markers).toEqual([
+      {
+        id: 'note-1',
+        kind: 'note',
+        barDate: '2024-06-04',
+        start: '2024-06-04',
+        end: '2024-06-06'
+      }
     ])
   })
 })
@@ -223,12 +238,11 @@ describe('mapEventsToMarkers', () => {
     expect(outsideRange).toEqual([])
     expect(markers).toEqual([
       {
-        id: '1',
+        id: 'event-1',
         kind: 'event',
-        time: '2024-06-04',
-        position: 'aboveBar',
-        shape: 'square',
-        text: '4-for-1 split'
+        barDate: '2024-06-04',
+        start: '2024-06-04',
+        end: '2024-06-04'
       }
     ])
   })
@@ -240,7 +254,7 @@ describe('mapEventsToMarkers', () => {
     ]
     const gapEvent = makeEvent({ event_date: '2024-06-04' })
     const { markers } = mapEventsToMarkers([gapEvent], gapBars)
-    expect(markers[0]?.time).toBe('2024-06-06')
+    expect(markers[0]?.barDate).toBe('2024-06-06')
   })
 
   it('lists an event outside the loaded range separately', () => {

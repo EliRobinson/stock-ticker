@@ -1,16 +1,6 @@
-import type {
-  CandlestickData,
-  HistogramData,
-  SeriesMarkerPosition,
-  SeriesMarkerShape,
-  Time
-} from 'lightweight-charts'
+import type { CandlestickData, HistogramData, Time } from 'lightweight-charts'
 import { directionOf, toNumber, type Direction } from './format'
 import type { Bar, MarketEvent, Note } from './api'
-
-/** A marker's tooltip text is a preview, not the full Note/Event - both
- * mapNotesToMarkers and mapEventsToMarkers truncate to this length. */
-const MARKER_TEXT_MAX_CHARS = 40
 
 /** Bars with no usable close (0, missing, or unparseable) can't produce an
  * adjustment factor - skip them rather than dividing by zero or drawing a
@@ -104,26 +94,17 @@ export function snapBackward(dateStr: string, dates: string[]): string | null {
 }
 
 /**
- * `color` is left to the caller: this module is pure and unit-tested with
- * no DOM, and marker color is a design-token decision that belongs to the
- * component that reads CSS custom properties, not to this data mapping.
- * `kind` tells the caller which token to use.
+ * A Note or Event placed on the loaded bars: `barDate` is the bar the marker
+ * sits on, and `start`/`end` is the span to shade (both real bar dates; equal
+ * for a single date or an Event). Color and shape are the component's call,
+ * from `kind` and the theme tokens, so this module stays DOM-free.
  */
-export interface ChartMarker {
+export interface PlacedMarker {
   id: string
   kind: 'note' | 'event'
-  time: string
-  position: SeriesMarkerPosition
-  shape: SeriesMarkerShape
-  text: string
-}
-
-/** A Note range clipped to the loaded bars and snapped inward at both
- * ends - `from`/`to` are always real bar dates, ready to shade. */
-export interface NoteRange {
-  id: string
-  from: string
-  to: string
+  barDate: string
+  start: string
+  end: string
 }
 
 interface ItemSpan {
@@ -132,8 +113,7 @@ interface ItemSpan {
 }
 
 interface MapToMarkersResult<T> {
-  markers: ChartMarker[]
-  ranges: NoteRange[]
+  markers: PlacedMarker[]
   outsideRange: T[]
 }
 
@@ -146,22 +126,20 @@ interface MapToMarkersResult<T> {
  *   Monday that follows it, not the Friday before).
  * - A real range that overlaps the loaded range (even partially, starting
  *   before it or ending after) -> clamped to the loaded range and each end
- *   snapped inward (start forward, end backward), via `toRange`. Events
- *   have no `toRange` - they're never ranged, so this path is unreachable
- *   for them.
+ *   snapped inward (start forward, end backward); the marker sits on its
+ *   first bar. Events always have start === end.
  */
 function mapToMarkers<T>(
   items: T[],
   bars: Bar[],
   dateOf: (item: T) => ItemSpan,
-  toMarker: (item: T, snappedDate: string) => ChartMarker,
-  toRange?: (item: T, from: string, to: string) => NoteRange
+  idOf: (item: T) => string,
+  kind: PlacedMarker['kind']
 ): MapToMarkersResult<T> {
   const dates = sortedBarDates(bars)
   const rangeStart = dates[0]
   const rangeEnd = dates[dates.length - 1]
-  const markers: ChartMarker[] = []
-  const ranges: NoteRange[] = []
+  const markers: PlacedMarker[] = []
   const outsideRange: T[] = []
 
   for (const item of items) {
@@ -183,12 +161,13 @@ function mapToMarkers<T>(
         outsideRange.push(item)
         continue
       }
-      markers.push(toMarker(item, snapped))
-      continue
-    }
-
-    if (!toRange) {
-      outsideRange.push(item)
+      markers.push({
+        id: idOf(item),
+        kind,
+        barDate: snapped,
+        start: snapped,
+        end: snapped
+      })
       continue
     }
 
@@ -200,15 +179,14 @@ function mapToMarkers<T>(
       outsideRange.push(item)
       continue
     }
-    ranges.push(toRange(item, from, to))
+    markers.push({ id: idOf(item), kind, barDate: from, start: from, end: to })
   }
 
-  return { markers, ranges, outsideRange }
+  return { markers, outsideRange }
 }
 
 export interface MappedNotes {
-  markers: ChartMarker[]
-  ranges: NoteRange[]
+  markers: PlacedMarker[]
   outsideRange: Note[]
 }
 
@@ -217,39 +195,30 @@ export function mapNotesToMarkers(notes: Note[], bars: Bar[]): MappedNotes {
     notes,
     bars,
     (note) => ({ start: note.start_date, end: note.end_date }),
-    (note, time) => ({
-      id: note.id,
-      kind: 'note',
-      time,
-      position: 'belowBar',
-      shape: 'circle',
-      text: note.body.slice(0, MARKER_TEXT_MAX_CHARS)
-    }),
-    (note, from, to) => ({ id: note.id, from, to })
+    (note) => note.id,
+    'note'
   )
 }
 
 export interface MappedEvents {
-  markers: ChartMarker[]
+  markers: PlacedMarker[]
   outsideRange: MarketEvent[]
+}
+
+/** Event ids are prefixed so they never collide with a Note's id. */
+export function eventMarkerId(event: Pick<MarketEvent, 'id'>): string {
+  return `event-${event.id}`
 }
 
 export function mapEventsToMarkers(
   events: MarketEvent[],
   bars: Bar[]
 ): MappedEvents {
-  const { markers, outsideRange } = mapToMarkers(
+  return mapToMarkers(
     events,
     bars,
     (event) => ({ start: event.event_date, end: event.event_date }),
-    (event, time) => ({
-      id: String(event.id),
-      kind: 'event',
-      time,
-      position: 'aboveBar',
-      shape: 'square',
-      text: event.title.slice(0, MARKER_TEXT_MAX_CHARS)
-    })
+    eventMarkerId,
+    'event'
   )
-  return { markers, outsideRange }
 }

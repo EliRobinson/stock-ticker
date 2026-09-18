@@ -56,3 +56,8 @@ export const cursorPaging = {
   getNextPageParam: (lastPage: { next_cursor?: string | null }) =>
     lastPage.next_cursor ?? undefined
 }
+
+/** Page size for lists the screens need whole (a Company's Notes and
+ * Events, the Notes screen): the API's maximum, so one request usually
+ * covers it and useAllPages fetches the rest. */
+export const LIST_PAGE_LIMIT = 1000

@@ -16,20 +16,31 @@ import {
   type NotesResponse,
   type PutNoteBody
 } from '@/lib/api'
-import { NOTES_STALE_TIME_MS, cursorPaging } from '@/lib/query-config'
+import {
+  LIST_PAGE_LIMIT,
+  NOTES_STALE_TIME_MS,
+  cursorPaging
+} from '@/lib/query-config'
+
+import { flattenPages, useAllPages } from './useAllPages'
 
 export const notesKeys = {
   all: ['notes'] as const,
   list: (params: NotesListParams) => [...notesKeys.all, params] as const
 }
 
+/** Every Note matching `params`, all pages, flattened. */
 export function useNotes(params: NotesListParams = {}) {
-  return useInfiniteQuery({
+  const query = useInfiniteQuery({
     queryKey: notesKeys.list(params),
-    queryFn: ({ pageParam }) => getNotes({ ...params, cursor: pageParam }),
+    queryFn: ({ pageParam }) =>
+      getNotes({ limit: LIST_PAGE_LIMIT, ...params, cursor: pageParam }),
     ...cursorPaging,
-    staleTime: NOTES_STALE_TIME_MS
+    staleTime: NOTES_STALE_TIME_MS,
+    select: flattenPages
   })
+  useAllPages(query)
+  return query
 }
 
 /** The client, not the server, owns note identity - a PUT with a fresh id
@@ -232,4 +243,19 @@ export function useDeleteNote() {
       restoreNotes(queryClient, context?.previous),
     onSettled: () => invalidateNotesWhenIdle(queryClient)
   })
+}
+
+export interface NoteDraft extends PutNoteBody {
+  id?: string
+}
+
+/** Saves a new or edited Note and resolves with the stored Note, so a form
+ * can stay open (with its text) until the save succeeds. */
+export function useSaveNote() {
+  const putNote = usePutNote()
+  return {
+    ...putNote,
+    save: (draft: NoteDraft) =>
+      putNote.mutateAsync({ ...draft, id: draft.id ?? createNoteId() })
+  }
 }

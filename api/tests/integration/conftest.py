@@ -73,14 +73,11 @@ async def ai_reader_engine() -> AsyncIterator[AsyncEngine]:
     await engine.dispose()
 
 
-@pytest_asyncio.fixture
-async def superuser_engine() -> AsyncIterator[AsyncEngine]:
-    """The bootstrap superuser (system design §3) -- only for tests that
-    need privileges no app role has (e.g. probing what a role *can't* do
-    from outside it). Prefer app_writer_engine/ai_reader_engine otherwise."""
-    engine = await _connectable(get_settings().superuser_dsn)
-    if engine is None:
-        _unreachable("superuser")
-        return
-    yield engine
-    await engine.dispose()
+# No superuser_engine fixture: the compose `api` service (where the
+# pre-push gate's REQUIRE_DB=1 suite actually runs) has no
+# POSTGRES_SUPERUSER_PASSWORD -- only `migrate` does, deliberately, so the
+# app service never holds superuser credentials. A fixture here would
+# `pytest.fail` under REQUIRE_DB=1 for anyone who added a test using it.
+# Prefer app_writer_engine/ai_reader_engine; if a test genuinely needs
+# superuser (e.g. probing what a role *can't* do from outside it), it
+# needs a different, deliberate wiring, not a drop-in fixture.

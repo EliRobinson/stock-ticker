@@ -216,6 +216,26 @@ Use `pnpm commit` for the interactive Commitizen prompt. Direct `git commit` wil
 
 Every PR updates `README.md`: the brief-to-status table, and the "How this was built" artifacts table if the PR adds a process artifact (ADR, design doc, prompt, diagram).
 
+### Review gate (before a PR is opened)
+
+Three reviewers run in parallel on the branch diff. None of them edits code.
+
+1. **Thermonuclear code-quality review** (Opus, the `code-quality-review` skill). Covers maintainability, abstractions, and file size.
+2. **Correctness critic** (Opus). Covers edge cases, error paths, concurrency, data correctness, and whether the tests would catch a regression.
+3. **Spec and security critic** (Sonnet). Checks conformance with `docs/design/system-design.md` and `CONTEXT.md`, the security rules (roles, SQL guard, secrets, XSS), and the UI copy rules.
+
+The author checks each finding against the code and fixes the valid ones. Findings the author disagrees with are answered with evidence in the PR body, never dropped silently. The PR body gets a **Review** section that marks each finding as fixed, declined (and why), or filed (with an issue link). Anything that needs a human decision gets the `needs-eli` label.
+
+## Working with other agents
+
+Several agents build in parallel, each in its own worktree and branch, and each owns the files named in its GitHub issue.
+
+- **Talk to your peers directly.** Use `SendMessage` to ask the owner of a contract before you guess at its shape. Tell dependent agents when you push an interface change. The first line of a message must stand on its own.
+- **Do not duplicate work.** Before building a helper, check the other branches (`git fetch origin` then `git show origin/<branch>:<path>`) and the issues (`gh issue list`). If someone else owns it, ask them for it.
+- **Stay in your lane.** Never edit files another agent owns. Ask the owner, or leave a note on their issue.
+- **Record decisions on the issue.** Messages are not saved anywhere lasting, so a contract or scope decision also goes into a comment on the relevant GitHub issue.
+- **Never bypass hooks.** If a hook fails on a file you do not own, stop and tell the owner and the coordinator.
+
 ---
 
 ## Visual Verification

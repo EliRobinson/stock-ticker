@@ -30,12 +30,7 @@
             "type": "numeric"
           }
         ],
-        "rows": [
-          [
-            "Apple Inc.",
-            3123460000000
-          ]
-        ],
+        "rows": [["Apple Inc.", 3123460000000]],
         "row_count": 1,
         "row_count_is_capped": false,
         "truncated": false

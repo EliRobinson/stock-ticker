@@ -12,11 +12,15 @@ or, without a running `api` container:
     docker compose run --rm api uv run pytest tests/integration
 
 Each fixture skips (rather than fails) if the role can't connect, so
-`uv run pytest` from the host still runs the unit suite cleanly.
+`uv run pytest` from the host still runs the unit suite cleanly -- unless
+`REQUIRE_DB=1` is set (the pre-push hook's api step sets it), in which case
+an unreachable DB fails the test instead of skipping it: a push must not
+silently pass its integration suite because the compose db wasn't up.
 """
 
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator
 
 import pytest
@@ -25,6 +29,10 @@ from sqlalchemy import URL, text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from stockticker.config import get_settings
+
+
+def _require_db() -> bool:
+    return os.environ.get("REQUIRE_DB") == "1"
 
 
 async def _connectable(dsn: URL) -> AsyncEngine | None:
@@ -38,11 +46,19 @@ async def _connectable(dsn: URL) -> AsyncEngine | None:
     return engine
 
 
+def _unreachable(role: str) -> None:
+    message = f"Postgres not reachable as {role} -- see tests/integration/conftest.py."
+    if _require_db():
+        pytest.fail(f"{message} REQUIRE_DB=1 is set: run `docker compose up -d db` first.")
+    pytest.skip(message)
+
+
 @pytest_asyncio.fixture
 async def app_writer_engine() -> AsyncIterator[AsyncEngine]:
     engine = await _connectable(get_settings().app_writer_dsn)
     if engine is None:
-        pytest.skip("Postgres not reachable as app_writer -- see tests/integration/conftest.py.")
+        _unreachable("app_writer")
+        return
     yield engine
     await engine.dispose()
 
@@ -51,6 +67,7 @@ async def app_writer_engine() -> AsyncIterator[AsyncEngine]:
 async def ai_reader_engine() -> AsyncIterator[AsyncEngine]:
     engine = await _connectable(get_settings().ai_reader_dsn)
     if engine is None:
-        pytest.skip("Postgres not reachable as ai_reader -- see tests/integration/conftest.py.")
+        _unreachable("ai_reader")
+        return
     yield engine
     await engine.dispose()

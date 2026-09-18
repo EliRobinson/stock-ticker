@@ -3,8 +3,6 @@ requires `cik` or `symbol`, keyset-paginated)."""
 
 from __future__ import annotations
 
-import base64
-import json
 from collections.abc import AsyncIterator
 from datetime import date
 
@@ -19,11 +17,6 @@ CIK_OTHER = "9000000302"
 SYMBOL_OTHER = "ZTEO"
 CIK_SAME_DATE = "9000000303"
 SYMBOL_SAME_DATE = "ZTESD"
-
-
-def _encode_cursor(payload: dict[str, object]) -> str:
-    raw = json.dumps(payload).encode()
-    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
 @pytest_asyncio.fixture
@@ -181,21 +174,21 @@ def test_events_empty_result_for_cik_with_no_events(events_fixture: None, api_cl
 
 
 def test_events_cursor_with_null_id_is_422(events_fixture: None, api_client: TestClient) -> None:
-    cursor = _encode_cursor({"event_date": "2024-01-01", "id": None})
+    cursor = seed.encode_cursor({"event_date": "2024-01-01", "id": None})
     response = api_client.get("/api/v1/events", params={"cik": CIK, "cursor": cursor})
     assert response.status_code == 422
     assert response.json()["type"] == "https://stockticker.local/problems/invalid-cursor"
 
 
 def test_events_cursor_with_list_id_is_422(events_fixture: None, api_client: TestClient) -> None:
-    cursor = _encode_cursor({"event_date": "2024-01-01", "id": [1, 2]})
+    cursor = seed.encode_cursor({"event_date": "2024-01-01", "id": [1, 2]})
     response = api_client.get("/api/v1/events", params={"cik": CIK, "cursor": cursor})
     assert response.status_code == 422
     assert response.json()["type"] == "https://stockticker.local/problems/invalid-cursor"
 
 
 def test_events_cursor_with_out_of_range_id_is_422(events_fixture: None, api_client: TestClient) -> None:
-    cursor = _encode_cursor({"event_date": "2024-01-01", "id": 10**30})
+    cursor = seed.encode_cursor({"event_date": "2024-01-01", "id": 10**30})
     response = api_client.get("/api/v1/events", params={"cik": CIK, "cursor": cursor})
     assert response.status_code == 422
     assert response.json()["type"] == "https://stockticker.local/problems/invalid-cursor"

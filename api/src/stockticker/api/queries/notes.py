@@ -32,13 +32,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-_CIK_EXISTS_QUERY = text("SELECT 1 FROM companies WHERE cik = :cik")
-
 _NOTE_FIELDS = "id, cik, start_date, end_date, body, created_at, updated_at"
-
-
-async def cik_exists(conn: AsyncConnection, *, cik: str) -> bool:
-    return (await conn.scalar(_CIK_EXISTS_QUERY, {"cik": cik})) is not None
 
 
 async def fetch_note_rows(

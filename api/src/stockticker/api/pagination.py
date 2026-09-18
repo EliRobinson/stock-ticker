@@ -22,7 +22,9 @@ import base64
 import binascii
 import json
 from collections.abc import Callable, Sequence
+from datetime import date
 from typing import Any
+from uuid import UUID
 
 from stockticker.api.problems import Problem
 from stockticker.models.pagination import Page
@@ -44,11 +46,20 @@ __all__ = [
     "MAX_PAGE_LIMIT",
     "Page",
     "cursor_bigint",
-    "cursor_str",
+    "cursor_date",
+    "cursor_uuid",
     "decode_cursor",
     "encode_cursor",
     "paginate",
 ]
+
+
+def _bad_cursor() -> Problem:
+    """`raise _bad_cursor()` or `raise _bad_cursor() from exc` -- every
+    invalid-cursor case (a decode failure, a missing key, a wrong-typed or
+    out-of-range value) is the same client-facing 422, so every call site
+    shares this one message instead of retyping it."""
+    return Problem("invalid-cursor", 422, "cursor is not a valid page token")
 
 
 def paginate[T](
@@ -74,9 +85,9 @@ def decode_cursor(cursor: str) -> dict[str, Any]:
         raw = base64.urlsafe_b64decode(cursor + padding)
         decoded = json.loads(raw)
     except (binascii.Error, json.JSONDecodeError, ValueError, UnicodeDecodeError) as exc:
-        raise Problem("invalid-cursor", 422, "cursor is not a valid page token") from exc
+        raise _bad_cursor() from exc
     if not isinstance(decoded, dict):
-        raise Problem("invalid-cursor", 422, "cursor is not a valid page token")
+        raise _bad_cursor()
     return decoded
 
 
@@ -88,10 +99,30 @@ def cursor_bigint(decoded: dict[str, Any], key: str) -> int:
     before it ever reaches asyncpg."""
     value = decoded.get(key)
     if not isinstance(value, int) or isinstance(value, bool):
-        raise Problem("invalid-cursor", 422, "cursor is not a valid page token")
+        raise _bad_cursor()
     if not (BIGINT_MIN <= value <= BIGINT_MAX):
-        raise Problem("invalid-cursor", 422, "cursor is not a valid page token")
+        raise _bad_cursor()
     return value
+
+
+def cursor_date(decoded: dict[str, Any], key: str) -> date:
+    value = decoded.get(key)
+    if not isinstance(value, str):
+        raise _bad_cursor()
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise _bad_cursor() from exc
+
+
+def cursor_uuid(decoded: dict[str, Any], key: str) -> UUID:
+    value = decoded.get(key)
+    if not isinstance(value, str):
+        raise _bad_cursor()
+    try:
+        return UUID(value)
+    except ValueError as exc:
+        raise _bad_cursor() from exc
 
 
 def cursor_str(decoded: dict[str, Any], key: str) -> str:

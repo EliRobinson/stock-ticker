@@ -5,8 +5,6 @@ keyset-paginated)."""
 
 from __future__ import annotations
 
-import base64
-import json
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -21,11 +19,6 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from stockticker.timeutil import today_ny
 
 CIK = "9000000401"
-
-
-def _encode_cursor(payload: dict[str, object]) -> str:
-    raw = json.dumps(payload).encode()
-    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
 @pytest_asyncio.fixture
@@ -204,14 +197,14 @@ def test_get_notes_invalid_cursor_is_422(api_client: TestClient) -> None:
 
 
 def test_get_notes_cursor_with_null_id_is_422(api_client: TestClient) -> None:
-    cursor = _encode_cursor({"start_date": "2024-01-01", "id": None})
+    cursor = seed.encode_cursor({"start_date": "2024-01-01", "id": None})
     response = api_client.get("/api/v1/notes", params={"cursor": cursor})
     assert response.status_code == 422
     assert response.json()["type"] == "https://stockticker.local/problems/invalid-cursor"
 
 
 def test_get_notes_cursor_with_list_id_is_422(api_client: TestClient) -> None:
-    cursor = _encode_cursor({"start_date": "2024-01-01", "id": [1, 2]})
+    cursor = seed.encode_cursor({"start_date": "2024-01-01", "id": [1, 2]})
     response = api_client.get("/api/v1/notes", params={"cursor": cursor})
     assert response.status_code == 422
     assert response.json()["type"] == "https://stockticker.local/problems/invalid-cursor"

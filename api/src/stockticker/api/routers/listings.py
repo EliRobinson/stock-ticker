@@ -10,8 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from stockticker.api.problems import Problem
 from stockticker.api.queries.bars import fetch_bar_rows, listing_exists
+from stockticker.api.validation import check_date_range, parse_symbol
 from stockticker.db import get_app_writer_connection
-from stockticker.ingest.symbols import normalize_symbol
 from stockticker.models.bars import Bar, BarsResponse, Timeframe
 from stockticker.models.problem import ProblemDetail
 from stockticker.timeutil import today_ny
@@ -33,11 +33,13 @@ async def list_bars(
     timeframe: Timeframe = Query(default="1d"),
     conn: AsyncConnection = Depends(get_app_writer_connection),
 ) -> BarsResponse:
-    symbol = normalize_symbol(symbol)
+    normalized = parse_symbol(symbol)
+    assert normalized is not None  # a path param can't be empty -- routing rejects that first
+    symbol = normalized
+
     from_date = from_ or DEFAULT_FROM_DATE
     to_date = to or today_ny()
-    if from_date > to_date:
-        raise Problem("invalid-range", 422, "from must not be after to")
+    check_date_range(from_date, to_date)
 
     if not await listing_exists(conn, symbol=symbol):
         raise Problem("unknown-symbol", 404, f"no listing with symbol {symbol}")

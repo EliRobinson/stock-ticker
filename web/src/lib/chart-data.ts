@@ -5,89 +5,98 @@ import type {
   SeriesMarkerShape,
   Time
 } from 'lightweight-charts'
-import type { Bar, Event, Note } from './api'
+import { directionOf, toNumber, type Direction } from './format'
+import type { Bar, MarketEvent, Note } from './api'
 
+/** Bars with no usable close (0, missing, or unparseable) can't produce an
+ * adjustment factor - skip them rather than dividing by zero or drawing a
+ * bogus candle. */
 export function mapBarsToCandlestickSeries(
   bars: Bar[]
 ): CandlestickData<Time>[] {
-  return bars.map((bar) => {
-    const close = Number(bar.close)
-    const adjClose = Number(bar.adj_close)
-    const factor = close === 0 ? 1 : adjClose / close
-    return {
+  const series: CandlestickData<Time>[] = []
+  for (const bar of bars) {
+    const close = toNumber(bar.close)
+    const adjClose = toNumber(bar.adj_close)
+    if (close === null || close === 0 || adjClose === null) continue
+    const factor = adjClose / close
+    series.push({
       time: bar.trade_date,
       open: Number(bar.open) * factor,
       high: Number(bar.high) * factor,
       low: Number(bar.low) * factor,
       close: adjClose
-    }
-  })
+    })
+  }
+  return series
 }
 
 export interface VolumeBar extends HistogramData<Time> {
-  direction: 'up' | 'down' | 'flat'
+  direction: Direction
 }
 
+/** Direction compares adj_close, not the raw close - a split or dividend
+ * moves the raw close without the Company's value actually changing, and
+ * would otherwise paint a false down (or up) day. */
 export function mapBarsToVolumeSeries(bars: Bar[]): VolumeBar[] {
   return bars.map((bar, i) => {
-    const close = Number(bar.close)
+    const adjClose = toNumber(bar.adj_close)
     const prevBar = i > 0 ? bars[i - 1] : undefined
-    const prevClose = prevBar ? Number(prevBar.close) : null
-    const direction: VolumeBar['direction'] =
-      prevClose === null || close === prevClose
+    const prevAdjClose = prevBar ? toNumber(prevBar.adj_close) : null
+    const direction: Direction =
+      adjClose === null || prevAdjClose === null
         ? 'flat'
-        : close > prevClose
-          ? 'up'
-          : 'down'
+        : directionOf(adjClose - prevAdjClose)
     return { time: bar.trade_date, value: bar.volume, direction }
   })
 }
 
+const sortedDatesCache = new WeakMap<Bar[], string[]>()
+
+/** Memoized on the `bars` array identity - React Query hands back a stable
+ * reference until the data actually changes, so re-sorting on every render
+ * that reuses the same bars is wasted work. */
 function sortedBarDates(bars: Bar[]): string[] {
-  return bars.map((bar) => bar.trade_date).sort()
+  const cached = sortedDatesCache.get(bars)
+  if (cached) return cached
+  const sorted = bars.map((bar) => bar.trade_date).sort()
+  sortedDatesCache.set(bars, sorted)
+  return sorted
 }
 
-/**
- * Snaps a date to the nearest date that has a loaded bar, never inventing a
- * date the chart has no data for (docs/design/system-design.md §7: markers
- * "snap to a bar that actually exists in the loaded series, never to a
- * synthesized date"). Returns null when the date falls outside the loaded
- * range entirely - the caller lists it as "Outside chart range" instead of
- * drawing it.
- */
-export function snapToLoadedBar(
-  dateStr: string,
-  dates: string[]
-): string | null {
-  const first = dates[0]
-  const last = dates[dates.length - 1]
-  if (first === undefined || last === undefined) return null
-  if (dateStr < first || dateStr > last) return null
-
+/** First loaded bar date >= dateStr, or null past the end of the series. */
+export function snapForward(dateStr: string, dates: string[]): string | null {
   let lo = 0
-  let hi = dates.length - 1
+  let hi = dates.length
   while (lo < hi) {
-    const mid = Math.floor((lo + hi) / 2)
-    const midDate = dates[mid]
-    if (midDate !== undefined && midDate < dateStr) {
+    const mid = (lo + hi) >>> 1
+    const d = dates[mid]
+    if (d !== undefined && d < dateStr) {
       lo = mid + 1
     } else {
       hi = mid
     }
   }
+  const found = dates[lo]
+  return found === undefined ? null : found
+}
 
-  const after = dates[lo]
-  if (after === undefined) return null
-  if (after === dateStr) return after
-  const before = lo > 0 ? dates[lo - 1] : undefined
-  if (before === undefined) return after
-  const msAfter = Math.abs(
-    new Date(after).getTime() - new Date(dateStr).getTime()
-  )
-  const msBefore = Math.abs(
-    new Date(dateStr).getTime() - new Date(before).getTime()
-  )
-  return msBefore <= msAfter ? before : after
+/** Last loaded bar date <= dateStr, or null before the start of the series. */
+export function snapBackward(dateStr: string, dates: string[]): string | null {
+  let lo = 0
+  let hi = dates.length
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1
+    const d = dates[mid]
+    if (d !== undefined && d <= dateStr) {
+      lo = mid + 1
+    } else {
+      hi = mid
+    }
+  }
+  const idx = lo - 1
+  const found = idx >= 0 ? dates[idx] : undefined
+  return found === undefined ? null : found
 }
 
 /**
@@ -105,60 +114,138 @@ export interface ChartMarker {
   text: string
 }
 
+/** A Note range clipped to the loaded bars and snapped inward at both
+ * ends - `from`/`to` are always real bar dates, ready to shade. */
+export interface NoteRange {
+  id: string
+  from: string
+  to: string
+}
+
+interface ItemSpan {
+  start: string
+  end: string
+}
+
+interface MapToMarkersResult<T> {
+  markers: ChartMarker[]
+  ranges: NoteRange[]
+  outsideRange: T[]
+}
+
+/**
+ * One mapper for both Notes and Events, since both are "a date or a date
+ * range, drawn on the chart or listed as outside it":
+ * - No overlap at all with the loaded range -> outsideRange.
+ * - A single date (start === end) -> a marker snapped FORWARD to the next
+ *   existing bar (never back - a Note logged on a Sunday belongs to the
+ *   Monday that follows it, not the Friday before).
+ * - A real range that overlaps the loaded range (even partially, starting
+ *   before it or ending after) -> clamped to the loaded range and each end
+ *   snapped inward (start forward, end backward), via `toRange`. Events
+ *   have no `toRange` - they're never ranged, so this path is unreachable
+ *   for them.
+ */
+function mapToMarkers<T>(
+  items: T[],
+  bars: Bar[],
+  dateOf: (item: T) => ItemSpan,
+  toMarker: (item: T, snappedDate: string) => ChartMarker,
+  toRange?: (item: T, from: string, to: string) => NoteRange
+): MapToMarkersResult<T> {
+  const dates = sortedBarDates(bars)
+  const rangeStart = dates[0]
+  const rangeEnd = dates[dates.length - 1]
+  const markers: ChartMarker[] = []
+  const ranges: NoteRange[] = []
+  const outsideRange: T[] = []
+
+  for (const item of items) {
+    if (rangeStart === undefined || rangeEnd === undefined) {
+      outsideRange.push(item)
+      continue
+    }
+
+    const { start, end } = dateOf(item)
+    const overlaps = start <= rangeEnd && end >= rangeStart
+    if (!overlaps) {
+      outsideRange.push(item)
+      continue
+    }
+
+    if (start === end) {
+      const snapped = snapForward(start, dates)
+      if (snapped === null) {
+        outsideRange.push(item)
+        continue
+      }
+      markers.push(toMarker(item, snapped))
+      continue
+    }
+
+    if (!toRange) {
+      outsideRange.push(item)
+      continue
+    }
+
+    const clampedStart = start < rangeStart ? rangeStart : start
+    const clampedEnd = end > rangeEnd ? rangeEnd : end
+    const from = snapForward(clampedStart, dates)
+    const to = snapBackward(clampedEnd, dates)
+    if (from === null || to === null) {
+      outsideRange.push(item)
+      continue
+    }
+    ranges.push(toRange(item, from, to))
+  }
+
+  return { markers, ranges, outsideRange }
+}
+
 export interface MappedNotes {
   markers: ChartMarker[]
+  ranges: NoteRange[]
   outsideRange: Note[]
 }
 
 export function mapNotesToMarkers(notes: Note[], bars: Bar[]): MappedNotes {
-  const dates = sortedBarDates(bars)
-  const markers: ChartMarker[] = []
-  const outsideRange: Note[] = []
-
-  for (const note of notes) {
-    const snapped = snapToLoadedBar(note.start_date, dates)
-    if (snapped === null) {
-      outsideRange.push(note)
-      continue
-    }
-    markers.push({
+  return mapToMarkers(
+    notes,
+    bars,
+    (note) => ({ start: note.start_date, end: note.end_date }),
+    (note, time) => ({
       id: note.id,
       kind: 'note',
-      time: snapped,
+      time,
       position: 'belowBar',
       shape: 'circle',
       text: note.body.slice(0, 40)
-    })
-  }
-
-  return { markers, outsideRange }
+    }),
+    (note, from, to) => ({ id: note.id, from, to })
+  )
 }
 
 export interface MappedEvents {
   markers: ChartMarker[]
-  outsideRange: Event[]
+  outsideRange: MarketEvent[]
 }
 
-export function mapEventsToMarkers(events: Event[], bars: Bar[]): MappedEvents {
-  const dates = sortedBarDates(bars)
-  const markers: ChartMarker[] = []
-  const outsideRange: Event[] = []
-
-  for (const event of events) {
-    const snapped = snapToLoadedBar(event.event_date, dates)
-    if (snapped === null) {
-      outsideRange.push(event)
-      continue
-    }
-    markers.push({
+export function mapEventsToMarkers(
+  events: MarketEvent[],
+  bars: Bar[]
+): MappedEvents {
+  const { markers, outsideRange } = mapToMarkers(
+    events,
+    bars,
+    (event) => ({ start: event.event_date, end: event.event_date }),
+    (event, time) => ({
       id: String(event.id),
       kind: 'event',
-      time: snapped,
+      time,
       position: 'aboveBar',
       shape: 'square',
       text: event.title.slice(0, 40)
     })
-  }
-
+  )
   return { markers, outsideRange }
 }

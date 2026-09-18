@@ -6,6 +6,7 @@ tests/integration/conftest.py for how to run these."""
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import re
 from collections.abc import AsyncIterator
 
@@ -261,6 +262,49 @@ async def test_ai_reader_cannot_read_base_tables_even_through_views_it_cannot_se
     async with ai_reader_engine.connect() as conn:
         with pytest.raises(DBAPIError):
             await conn.execute(text("SELECT * FROM public.notes"))
+
+
+async def test_a_result_over_the_byte_cap_is_a_tool_error_not_an_out_of_memory(
+    executor: AiReaderExecutor,
+) -> None:
+    # 20 rows of 1 MB each: over the 8 MB cap, so the cursor stops early.
+    # (repeat() is off the guard's allow-list; this goes straight to the executor.)
+    with pytest.raises(ToolError, match="larger than 8 MB"):
+        await executor.execute("SELECT repeat('x', 1048576) AS big FROM generate_series(1, 20)")
+
+
+@pytest.mark.parametrize(
+    "attempt",
+    [
+        "SELECT set_config('statement_timeout', '0', true) AS s, sum(x) "
+        "FROM (SELECT generate_series(1, 10000000000) AS x) q",
+        "SELECT sum(x) FROM (SELECT generate_series(1, 10000000000) AS x) q "
+        "WHERE set_config('statement_timeout', '0', true) IS NOT NULL",
+    ],
+)
+async def test_a_query_cannot_raise_its_own_statement_timeout(
+    executor: AiReaderExecutor, attempt: str
+) -> None:
+    with pytest.raises(ToolError, match="longer than 5s"):
+        await executor.execute(attempt)
+
+
+async def test_a_raised_setting_does_not_outlive_its_query(executor: AiReaderExecutor) -> None:
+    for attempt in (
+        "SET statement_timeout = 0",
+        "SET work_mem = '2GB'",
+        "SET default_transaction_read_only = off",
+    ):
+        with contextlib.suppress(ToolError):
+            await executor.execute(attempt)
+    result = await executor.execute(
+        "SELECT name, setting FROM pg_settings WHERE name IN "
+        "('statement_timeout', 'work_mem', 'transaction_read_only') ORDER BY name"
+    )
+    settings = dict(result.rows)
+    assert settings["statement_timeout"] == "5000"
+    assert settings["transaction_read_only"] == "on"
+    assert settings["work_mem"] != str(2 * 1024 * 1024)
 
 
 PROMPT_EXAMPLES = re.findall(r"```sql\n(.*?)```", _INSTRUCTIONS, flags=re.DOTALL)

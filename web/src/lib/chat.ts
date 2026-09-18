@@ -4,6 +4,13 @@ import type { UIMessage, UIMessagePart } from 'ai'
 import { z } from 'zod'
 import { env } from '@/env'
 
+/** Created once, not per render/per hook call - a fresh transport instance
+ * on every render is wasted work and has no reason to differ between
+ * callers, since every chat surface hits the same endpoint. */
+const chatTransport = new DefaultChatTransport({
+  api: `${env.NEXT_PUBLIC_API_URL}/api/v1/chat`
+})
+
 /**
  * The stub `/api/v1/chat` route in web/openapi/openapi.json documents no
  * response body yet, so `ViewSpec` isn't in the generated api-types.ts. This
@@ -56,10 +63,45 @@ const timeseriesViewSpecSchema = z.object({
   rows: z.array(z.record(z.string(), z.unknown()))
 })
 
-export const viewSpecSchema = z.discriminatedUnion('kind', [
-  tableViewSpecSchema,
-  timeseriesViewSpecSchema
-])
+/** Catches a spec whose columns/series reference a key no row actually
+ * has (a model or server bug, not a shape violation Zod's structural check
+ * alone would catch) - checked against the first row only, since every row
+ * in a `ViewSpec` shares one column set. */
+function checkKeysExistInRows(
+  keys: string[],
+  rows: Record<string, unknown>[],
+  ctx: z.RefinementCtx
+): void {
+  const firstRow = rows[0]
+  if (firstRow === undefined) return
+  for (const key of keys) {
+    if (!(key in firstRow)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `"${key}" is not a key of any row`,
+        path: ['rows', 0, key]
+      })
+    }
+  }
+}
+
+export const viewSpecSchema = z
+  .discriminatedUnion('kind', [tableViewSpecSchema, timeseriesViewSpecSchema])
+  .superRefine((spec, ctx) => {
+    if (spec.kind === 'table') {
+      checkKeysExistInRows(
+        spec.columns.map((column) => column.key),
+        spec.rows,
+        ctx
+      )
+    } else {
+      checkKeysExistInRows(
+        [spec.x, ...spec.series.map((series) => series.key)],
+        spec.rows,
+        ctx
+      )
+    }
+  })
 
 export type TableViewSpec = z.infer<typeof tableViewSpecSchema>
 export type TimeseriesViewSpec = z.infer<typeof timeseriesViewSpecSchema>
@@ -95,9 +137,5 @@ export function parseViewSpec(data: unknown): ParsedViewSpec | InvalidViewSpec {
 }
 
 export function useStockTickerChat() {
-  return useChat<ChatUIMessage>({
-    transport: new DefaultChatTransport({
-      api: `${env.NEXT_PUBLIC_API_URL}/api/v1/chat`
-    })
-  })
+  return useChat<ChatUIMessage>({ transport: chatTransport })
 }

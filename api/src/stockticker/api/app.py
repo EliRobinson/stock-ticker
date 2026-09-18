@@ -8,9 +8,12 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
-from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from stockticker.api.middleware import RequestIDMiddleware, enforce_json_content_type
+from stockticker.api.middleware import (
+    ProblemJSONTrustedHostMiddleware,
+    RequestIDMiddleware,
+    enforce_json_content_type,
+)
 from stockticker.api.problems import register_problem_handlers
 from stockticker.api.routers import chat, companies, events, health, listings, market, notes, status
 from stockticker.config import get_settings
@@ -34,7 +37,7 @@ def create_app() -> FastAPI:
 
     register_problem_handlers(app)
 
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts)
+    app.add_middleware(ProblemJSONTrustedHostMiddleware, allowed_hosts=settings.allowed_hosts)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[settings.web_origin],

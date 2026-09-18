@@ -302,9 +302,7 @@ def test_a_streaming_tool_call_without_input_becomes_an_empty_tool_use() -> None
 def test_a_malformed_known_part_is_dropped(part: dict[str, Any]) -> None:
     message = ui_message("assistant", part, {"type": "text", "text": "kept"})
     assert [type(p) for p in message.parts] == [TextPart]
-    assert to_anthropic_messages(
-        [user("q"), message, user("next")], tool_names=TOOL_NAMES
-    ) == [
+    assert to_anthropic_messages([user("q"), message, user("next")], tool_names=TOOL_NAMES) == [
         {"role": "user", "content": [{"type": "text", "text": "q"}]},
         {"role": "assistant", "content": [{"type": "text", "text": "kept"}]},
         {"role": "user", "content": [{"type": "text", "text": "next"}]},

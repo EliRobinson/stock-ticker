@@ -11,7 +11,7 @@ compression is installed.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.exceptions import RequestValidationError
@@ -22,7 +22,7 @@ from stockticker.ai.context import build_chat_deps
 from stockticker.ai.convert import ChatRequest
 from stockticker.ai.loop import answer_producer, new_message_id
 from stockticker.ai.serialize import inline_schema_refs
-from stockticker.ai.stream import SSE_MEDIA_TYPE, UI_MESSAGE_STREAM_HEADERS, until_disconnected
+from stockticker.ai.stream import SSE_MEDIA_TYPE, ui_message_stream_response
 from stockticker.api.problems import Problem
 from stockticker.config import Settings, get_settings
 from stockticker.models.problem import ProblemDetail
@@ -95,7 +95,4 @@ async def chat(request: Request, settings: Settings = Depends(get_settings)) -> 
     if not any(message.role == "user" for message in body.messages):
         raise Problem("invalid-chat-request", 422, "The conversation has no user message.")
     deps = build_chat_deps(settings)
-    events: Any = until_disconnected(
-        answer_producer(deps, body.messages, new_message_id()), request.is_disconnected
-    )
-    return StreamingResponse(events, media_type=SSE_MEDIA_TYPE, headers=UI_MESSAGE_STREAM_HEADERS)
+    return ui_message_stream_response(answer_producer(deps, body.messages, new_message_id()), request.receive)

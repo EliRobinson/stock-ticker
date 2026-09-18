@@ -3,16 +3,28 @@ and problem+json for a body that is not a conversation."""
 
 from __future__ import annotations
 
+import asyncio
+import json
 from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 import pytest
 import pytest_asyncio
-from ai_fakes import parse_sse
+from ai_fakes import (
+    ScriptedAnthropic,
+    make_deps,
+    message_end,
+    message_start,
+    parse_sse,
+    part_types,
+    text_block,
+)
 from fastapi import FastAPI
 from starlette.middleware.gzip import GZipMiddleware
 
 from stockticker.api.app import create_app
+from stockticker.api.routers import chat as chat_router
 from stockticker.config import get_settings
 
 BODY = {
@@ -109,3 +121,83 @@ async def test_an_overlong_text_part_is_a_422_problem(app: FastAPI) -> None:
     response = await post(app, body)
     assert response.status_code == 422
     assert response.headers["content-type"] == "application/problem+json"
+
+
+class AsgiClient:
+    """Drives the app at the ASGI level: sends the body, then holds every
+    later `receive` until `leave()`, counting how many wait at once."""
+
+    def __init__(self, body: bytes) -> None:
+        self.body = body
+        self.sent_body = False
+        self.gone = asyncio.Event()
+        self.waiting = 0
+        self.most_waiting = 0
+        self.sent: list[dict[str, Any]] = []
+        self.chunk_arrived = asyncio.Event()
+
+    def leave(self) -> None:
+        self.gone.set()
+
+    async def receive(self) -> dict[str, Any]:
+        if not self.sent_body:
+            self.sent_body = True
+            return {"type": "http.request", "body": self.body, "more_body": False}
+        self.waiting += 1
+        self.most_waiting = max(self.most_waiting, self.waiting)
+        try:
+            await self.gone.wait()
+        finally:
+            self.waiting -= 1
+        return {"type": "http.disconnect"}
+
+    async def send(self, message: dict[str, Any]) -> None:
+        self.sent.append(message)
+        self.chunk_arrived.set()
+
+    def body_text(self) -> str:
+        return "".join(m.get("body", b"").decode() for m in self.sent if m["type"] == "http.response.body")
+
+
+@pytest.mark.parametrize("spec_version", ["2.3", "2.4"])
+async def test_one_reader_waits_for_the_disconnect_and_it_cancels_the_answer(
+    app: FastAPI, monkeypatch: pytest.MonkeyPatch, spec_version: str
+) -> None:
+    # uvicorn's HTTP scopes say 2.3, where Starlette's StreamingResponse would
+    # add its own receive loop; under 2.4 it would add none.
+    anthropic = ScriptedAnthropic(
+        message_start() + text_block(0, "a", "b") + message_end("end_turn"), stall_after_first_chunk=True
+    )
+    monkeypatch.setattr(chat_router, "build_chat_deps", lambda settings: make_deps(anthropic))
+    body = json.dumps(BODY).encode()
+    client = AsgiClient(body)
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": spec_version},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/api/v1/chat",
+        "raw_path": b"/api/v1/chat",
+        "root_path": "",
+        "query_string": b"",
+        "headers": [
+            (b"host", b"127.0.0.1"),
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(body)).encode()),
+        ],
+        "client": ("127.0.0.1", 50000),
+        "server": ("127.0.0.1", 8000),
+    }
+    served = asyncio.create_task(app(scope, client.receive, client.send))  # type: ignore[arg-type]
+    while "text-start" not in part_types(client.body_text()):
+        client.chunk_arrived.clear()
+        await asyncio.wait_for(client.chunk_arrived.wait(), timeout=2)
+    await asyncio.sleep(0.05)
+    assert client.most_waiting == 1
+
+    client.leave()
+    await asyncio.wait_for(served, timeout=2)
+    await asyncio.wait_for(anthropic.stream_closed.wait(), timeout=2)
+    assert part_types(client.body_text()) == ["start", "start-step", "text-start"]
+    assert client.most_waiting == 1

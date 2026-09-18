@@ -108,12 +108,26 @@ def upgrade() -> None:
     # (system design §4); nobody else gets them back.
     op.execute("GRANT EXECUTE ON FUNCTION pg_catalog.pg_try_advisory_lock(bigint) TO app_writer;")
     op.execute("GRANT EXECUTE ON FUNCTION pg_catalog.pg_advisory_unlock(bigint) TO app_writer;")
-    # set_config() lets a session change its own default_transaction_read_only
-    # (among other GUCs); revoking it from PUBLIC closes that specific
-    # function-call vector. It does NOT block the plain `SET` statement --
-    # see the ai_reader-read-only-escape test and its comment for why that
-    # doesn't matter in practice (ai_reader has no DML grant to escape to).
+    # set_config() IS revoked from PUBLIC, but granted back explicitly to
+    # app_writer and ai_reader: asyncpg calls it internally
+    # (Connection._introspect_types runs `set_config('jit', ...)` ahead of
+    # its own type-introspection query) on any array-typed bind parameter
+    # or result -- revoking it outright broke that for every asyncpg role,
+    # app_writer included, with "permission denied for function set_config"
+    # (found during review by the EDGAR/market-cap agent, reproduced on
+    # PG17). For ai_reader specifically, the defense against it flipping
+    # its own read-only default stays three deep regardless of this grant:
+    # the future SQL guard's function allow-list rejects set_config,
+    # current_setting, and SET/RESET outright; the executor wraps every
+    # query in BEGIN READ ONLY plus SET LOCAL limits; and DISCARD ALL runs
+    # before the connection goes back to the pool. Plain `SET` was never
+    # blocked by revoking this function anyway (see the
+    # ai_reader-read-only-escape test), and ai_reader has no DML grant to
+    # escape to regardless.
     op.execute("REVOKE EXECUTE ON FUNCTION pg_catalog.set_config(text, text, boolean) FROM PUBLIC;")
+    op.execute(
+        "GRANT EXECUTE ON FUNCTION pg_catalog.set_config(text, text, boolean) TO app_writer, ai_reader;"
+    )
 
     # --- Schema objects, owned by app_owner ------------------------------
     op.execute("SET ROLE app_owner;")
@@ -394,6 +408,10 @@ def _create_tables() -> None:
           attempts int NOT NULL DEFAULT 0,
           last_error text,
           requested_at timestamptz NOT NULL DEFAULT now(),
+          -- Set by gap_check when a gap is accepted after 3 attempts
+          -- (still leaves the row in place, for /api/v1/status and history,
+          -- rather than deleting it outright).
+          accepted_at timestamptz,
           PRIMARY KEY (symbol, reason)
         );
         """

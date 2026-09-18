@@ -1,6 +1,5 @@
 from sqlalchemy.pool import QueuePool
 
-from stockticker.config import get_settings
 from stockticker.db import (
     dispose_engines,
     get_ai_reader_engine,
@@ -8,6 +7,7 @@ from stockticker.db import (
     get_quotes_engine,
     get_worker_app_writer_engine,
 )
+from stockticker.settings import get_settings
 
 
 def test_each_purpose_gets_its_own_engine_with_the_right_pool_size() -> None:
@@ -26,7 +26,9 @@ def test_each_purpose_gets_its_own_engine_with_the_right_pool_size() -> None:
     assert api_engine.pool.size() == 5
     assert worker_engine.pool.size() == 6
     assert quotes_engine.pool.size() == 1
-    # Dev DB keeps pool_size=3 (role CONNECTION LIMIT); pytest DB uses 1 (#38).
+    # App DB keeps ai_reader at the migration's server-side cap of 3; the
+    # pytest DB drops to 1 so integration fixtures can open short-lived
+    # engines without TooManyConnectionsError (#38).
     expected_ai_pool = 1 if get_settings().postgres_db.endswith("_test") else 3
     assert ai_engine.pool.size() == expected_ai_pool
 

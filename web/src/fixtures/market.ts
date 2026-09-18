@@ -715,7 +715,7 @@ export function buildMarketRows(now = FIXTURE_NOW): MarketRow[] {
         market_cap_is_approx:
           symbol === 'GOOGL' || symbol === 'GOOG' || symbol === 'BRK.B',
         first_bar_date: firstBarDate,
-        backfill_completed_at: firstBarDate,
+        backfill_completed_at: `${firstBarDate}T20:00:00Z`,
         is_primary: symbol !== 'GOOG'
       }
     }
@@ -771,6 +771,7 @@ export const marketBackfill: MarketResponse = {
       : {
           ...r,
           first_bar_date: null,
+          backfill_completed_at: null,
           prev_close: null,
           change: null,
           change_pct: null,

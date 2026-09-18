@@ -3,7 +3,12 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { toRowViews } from '@/components/market/market-rows'
 import { ChangeCell, QuoteCell } from '@/components/shared/cells'
-import { marketClosed, marketOpen, marketStale } from '@/fixtures/market'
+import {
+  marketBackfill,
+  marketClosed,
+  marketOpen,
+  marketStale
+} from '@/fixtures/market'
 
 describe('Stale Quote rendering', () => {
   afterEach(cleanup)
@@ -39,5 +44,15 @@ describe('Stale Quote rendering', () => {
     expect(toRowViews(marketStale).every((r) => r.stale)).toBe(true)
     expect(toRowViews(marketClosed).some((r) => r.stale)).toBe(false)
     expect(toRowViews(marketClosed)[0]!.ageLabel).toBe('11h 12m')
+  })
+
+  it('marks marketBackfill rows without a completed backfill as pending', () => {
+    const views = toRowViews(marketBackfill)
+    expect(views.some((r) => r.backfillPending)).toBe(true)
+    expect(
+      views
+        .filter((r) => r.backfillPending)
+        .every((r) => r.backfill_completed_at == null)
+    ).toBe(true)
   })
 })

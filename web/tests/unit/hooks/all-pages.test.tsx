@@ -73,7 +73,9 @@ describe('list hooks fetch every page', () => {
 describe('useSaveNote', () => {
   it('mints an id for a new Note and resolves with the saved Note', async () => {
     const saved = makeNote({ id: 'server' })
-    const fetchMock = vi.fn(async () => jsonResponse(saved))
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL) =>
+      jsonResponse(saved)
+    )
     vi.stubGlobal('fetch', fetchMock)
     const { result } = renderHook(() => useSaveNote(), { wrapper: wrapper() })
     await expect(
@@ -83,7 +85,7 @@ describe('useSaveNote', () => {
         body: 'x'
       })
     ).resolves.toEqual(saved)
-    const request = fetchMock.mock.calls[0]![0] as unknown as Request | string
+    const request = fetchMock.mock.calls[0]![0]
     const url = request instanceof Request ? request.url : String(request)
     expect(url).toMatch(/\/api\/v1\/notes\/[0-9a-f-]{36}$/)
   })

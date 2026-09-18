@@ -13,6 +13,7 @@ class MarketRow(BaseModel):
     cik: str
     name: str
     sector: str
+    is_primary: bool
     price: Decimal | None
     observed_at: datetime | None
     prev_close: Decimal | None

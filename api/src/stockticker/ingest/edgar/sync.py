@@ -120,10 +120,10 @@ async def run_edgar_sync(
                 FailedItem(key=f"{cik}:{key}", error=reason) for key, reason in documents.rejected
             )
             async with engine.connect() as conn:
-                result.rows_written += await store_edgar_company(
-                    conn, cik, symbol, documents.shares, documents.filings
-                )
+                stored = await store_edgar_company(conn, cik, symbol, documents.shares, documents.filings)
                 await conn.commit()
+            result.rows_written += stored.rows_written
+            result.failed_items.extend(stored.failed_items)
             logger.debug(
                 "edgar_sync.company", cik=cik, shares=len(documents.shares), filings=len(documents.filings)
             )
@@ -151,7 +151,7 @@ async def store_edgar_company(
     symbol: str | None,
     shares: Sequence[SharesFact],
     filings: Sequence[FilingEvent],
-) -> int:
+) -> JobResult:
     """Upsert one Company's shares and filing Events. Does not commit."""
     written = 0
     if shares:
@@ -178,7 +178,7 @@ async def store_edgar_company(
             },
         )
         written += result.rowcount or 0
-    written += await upsert_events(
+    events = await upsert_events(
         conn,
         [
             EventRow(
@@ -194,4 +194,4 @@ async def store_edgar_company(
             for event in filings
         ],
     )
-    return written
+    return JobResult(rows_written=written + events.rows_written, failed_items=events.failed_items)

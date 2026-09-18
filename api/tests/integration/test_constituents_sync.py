@@ -121,9 +121,12 @@ async def test_index_added_events_one_per_company_date(conn: AsyncConnection) ->
     )
     assert list(fox.scalars()) == ["FOXA"]
     assert summary.events_written > 0
+    count_sql = text("SELECT count(*) FROM events WHERE source = 'wikipedia'")
+    before = await conn.scalar(count_sql)
 
-    again = await apply_constituents(conn, ROWS)
-    assert again.events_written == 0
+    await apply_constituents(conn, ROWS)
+
+    assert await conn.scalar(count_sql) == before
 
 
 def day(n: int) -> date:

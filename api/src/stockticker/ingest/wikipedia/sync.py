@@ -256,7 +256,7 @@ async def _write_index_added_events(
     # Primary rows last: upsert_events keeps the last of a duplicate
     # (cik, date), so a shared event names the primary symbol.
     ordered = sorted(rows, key=lambda row: primaries[row.cik] == row.symbol)
-    return await upsert_events(
+    result = await upsert_events(
         conn,
         [
             EventRow(
@@ -273,6 +273,8 @@ async def _write_index_added_events(
             if row.date_added is not None
         ],
     )
+    # Every Company was upserted just above, so no Event can have an unknown CIK.
+    return result.rows_written
 
 
 async def _deactivate(conn: AsyncConnection, table: str, key_column: str, keys: Sequence[str]) -> int:

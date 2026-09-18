@@ -19,6 +19,7 @@ from ai_fakes import (
     error_texts,
     make_deps,
     part_types,
+    start_event,
     text_answer,
     ui_message,
     user,
@@ -27,7 +28,7 @@ from ai_fakes import (
 from stockticker.ai.convert import UIMessage
 from stockticker.ai.loop import ChatDeps, Limits, PromptContext
 from stockticker.ai.pricing import PRICES, TokenUsage, cost_usd
-from stockticker.ai.stream import never_disconnects, until_disconnected
+from stockticker.ai.stream import until_disconnected
 
 
 async def run(deps: ChatDeps, messages: list[UIMessage] | None = None) -> str:
@@ -131,10 +132,10 @@ async def test_the_wall_clock_covers_opening_the_model_stream() -> None:
 
 async def test_a_crashing_producer_still_sends_error_finish_and_done() -> None:
     async def producer(emit: Any) -> None:
-        await emit('data: {"type":"start","messageId":"m"}\n\n')
+        await emit(start_event())
         raise RuntimeError("bug")
 
-    out = "".join([c async for c in until_disconnected(producer, never_disconnects)])
+    out = "".join([c async for c in until_disconnected(producer)])
     assert part_types(out) == ["start", "error", "finish", "[DONE]"]
 
 

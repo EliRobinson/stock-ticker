@@ -22,7 +22,6 @@ from ai_fakes import (
     unwrap_untrusted,
     user,
 )
-from pydantic import ValidationError
 
 from stockticker.ai.convert import (
     MAX_TEXT_PART_CHARS,
@@ -312,13 +311,16 @@ def test_a_malformed_known_part_is_dropped(part: dict[str, Any]) -> None:
     ]
 
 
-def test_an_overlong_text_part_is_rejected() -> None:
-    with pytest.raises(ValidationError):
-        ui_message(
-            "user",
-            {"type": "text", "text": "x" * (MAX_TEXT_PART_CHARS + 1)},
-            {"type": "text", "text": "kept"},
-        )
+def test_an_overlong_text_part_is_dropped() -> None:
+    message = ui_message(
+        "user",
+        {"type": "text", "text": "x" * (MAX_TEXT_PART_CHARS + 1)},
+        {"type": "text", "text": "kept"},
+    )
+    assert [type(p) for p in message.parts] == [TextPart]
+    assert to_anthropic_messages([message], tool_names=TOOL_NAMES) == [
+        {"role": "user", "content": [{"type": "text", "text": "kept"}]}
+    ]
 
 
 def test_a_tool_part_with_non_object_input_converts_with_empty_input() -> None:

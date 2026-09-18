@@ -81,3 +81,12 @@ Icon?
 *.pem
 .vercel
 .turbo/
+
+# ---- Python (api/) ----
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+api/.venv/

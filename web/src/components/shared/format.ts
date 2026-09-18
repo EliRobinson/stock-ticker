@@ -1,84 +1,50 @@
-// Display formatting the design needs that `@/lib/format` (#8) doesn't produce yet:
-// bare prices with separators, U+2212 minus, ↑/↓ arrows, 1-decimal Market Cap,
-// and "11:42:07 AM ET" / "17 Sep 2024" styles (design frame S7).
-// TODO(#8): drop each shim once #8 ships the matching formatter (requested).
+// The screens' display formatting. Numbers, times and ages come from #8's
+// `@/lib/format`; the few shapes it doesn't cover yet are kept here.
 
-import { directionOf, formatQuoteAge, formatVolume } from '@/lib/format'
+import {
+  directionOf,
+  formatChange,
+  formatMarketCap,
+  formatPercent,
+  formatPrice as formatPriceWithCurrency,
+  formatQuoteAge,
+  formatTimeET as formatTimeETLib,
+  formatVolume,
+  toNumber
+} from '@/lib/format'
 import type { Direction, NumericInput } from '@/lib/format'
 
-export { formatQuoteAge as formatAge, formatVolume }
 export type { Direction, NumericInput }
-
-export function toNumber(value: NumericInput): number | null {
-  if (value === null || value === undefined || value === '') return null
-  const n = typeof value === 'number' ? value : Number(value)
-  return Number.isFinite(n) ? n : null
+export {
+  formatChange as formatSignedMoney,
+  formatMarketCap,
+  formatPercent as formatSignedPercent,
+  formatQuoteAge as formatAge,
+  formatVolume,
+  toNumber
 }
 
 export const direction = directionOf
 
-const NY = 'America/New_York'
-const MINUS = '−'
-
-export function formatPrice(input: NumericInput): string {
-  const value = toNumber(input)
-  if (value == null) return '—'
-  return value.toLocaleString('en-US', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  })
-}
-
-export function formatSignedPercent(input: NumericInput): string {
-  const value = toNumber(input)
-  if (value == null) return '—'
-  const sign = value > 0 ? '+' : value < 0 ? MINUS : ''
-  return `${sign}${Math.abs(value).toFixed(2)}%`
-}
-
-export function formatSignedMoney(input: NumericInput): string {
-  const value = toNumber(input)
-  if (value == null) return '—'
-  const sign = value > 0 ? '+' : value < 0 ? MINUS : ''
-  return `${sign}$${Math.abs(value).toFixed(2)}`
-}
-
-function compact(value: number): string {
-  const units: [number, string][] = [
-    [1e12, 'T'],
-    [1e9, 'B'],
-    [1e6, 'M'],
-    [1e3, 'K']
-  ]
-  for (const [size, unit] of units) {
-    if (Math.abs(value) >= size) {
-      return `${(value / size).toFixed(unit === 'T' ? 2 : 1)}${unit}`
-    }
-  }
-  return value.toFixed(0)
-}
-
-export function formatMarketCap(input: NumericInput): string {
-  const value = toNumber(input)
-  if (value == null) return '—'
-  return `$${compact(value)}`
+// Prices in tables and stat rows are bare and tabular ("227.52", "8,214.30").
+export function formatPrice(value: NumericInput): string {
+  return formatPriceWithCurrency(value, { currency: false })
 }
 
 export function formatTimeET(iso: string, withSeconds = false): string {
-  const t = new Date(iso).toLocaleTimeString('en-US', {
-    timeZone: NY,
-    hour: withSeconds ? '2-digit' : 'numeric',
-    minute: '2-digit',
-    second: withSeconds ? '2-digit' : undefined,
-    hour12: true
-  })
-  return `${t} ET`
+  return formatTimeETLib(iso, { seconds: withSeconds })
 }
 
+const NY = 'America/New_York'
+
+// TODO(#8): `formatDateShort` reads a bare "YYYY-MM-DD" (a Trading Day) as
+// UTC midnight and shifts it a day back in New York; use it here once it
+// treats date-only strings as calendar dates.
 function dateParts(iso: string) {
-  const d = iso.length === 10 ? new Date(`${iso}T12:00:00Z`) : new Date(iso)
+  const dateOnly = iso.length === 10
+  const d = dateOnly ? new Date(`${iso}T12:00:00Z`) : new Date(iso)
   const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: iso.length === 10 ? 'UTC' : NY,
+    timeZone: dateOnly ? 'UTC' : NY,
     day: 'numeric',
     month: 'short',
     year: 'numeric'
@@ -100,9 +66,7 @@ export function formatShortDate(iso: string): string {
 
 export function formatDateRange(start: string, end: string): string {
   if (start === end) return formatDate(start)
-  const sy = start.slice(0, 4)
-  const ey = end.slice(0, 4)
-  return sy === ey
+  return start.slice(0, 4) === end.slice(0, 4)
     ? `${formatShortDate(start)} – ${formatDate(end)}`
     : `${formatDate(start)} – ${formatDate(end)}`
 }
@@ -111,6 +75,7 @@ export function formatUsd(value: number): string {
   return `$${value.toFixed(2)}`
 }
 
+// "11:42:02", the ingest pill's last-run clock (design G1).
 export function formatClock(iso: string): string {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: NY,

@@ -4,7 +4,7 @@ import { useState } from 'react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import type { Event, Note } from '@/lib/api'
+import type { MarketEvent, Note } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 import { EmptyState } from '../shared/feedback'
@@ -65,7 +65,7 @@ export function NotesEventsPanel({
 }: {
   companyName: string
   notes: Note[]
-  events: Event[]
+  events: MarketEvent[]
   outsideNoteIds: Set<string>
   visibleRange: { from: string; to: string } | null
   highlightedId: string | null

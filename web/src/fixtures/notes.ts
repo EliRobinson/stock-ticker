@@ -1,4 +1,4 @@
-import type { Note, Paginated } from '@/lib/api'
+import type { Note, NotesResponse } from '@/lib/api'
 
 const AAPL = '0000320193'
 const TSM = '0001046179'
@@ -71,8 +71,8 @@ export const notes: Note[] = [
   )
 ]
 
-export const notesResponse: Paginated<Note> = {
+export const notesResponse: NotesResponse = {
   items: notes,
   next_cursor: null
 }
-export const notesEmpty: Paginated<Note> = { items: [], next_cursor: null }
+export const notesEmpty: NotesResponse = { items: [], next_cursor: null }

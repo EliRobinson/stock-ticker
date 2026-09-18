@@ -39,7 +39,7 @@ export function CompanyContainer({ cik }: { cik: string }) {
     ''
   const [picked, setPicked] = useState<string | null>(null)
   const symbol = picked ?? primary
-  const bars = useBars(symbol)
+  const bars = useBars(symbol || undefined)
   const events = useEvents({ cik })
   const notes = useNotes({ cik })
   const putNote = usePutNote()

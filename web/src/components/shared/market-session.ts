@@ -64,9 +64,6 @@ export function quoteState(
   serverTime: string,
   isOpen: boolean
 ) {
-  const { ageMs, isStale } = getQuoteStaleness(observedAt, serverTime)
-  return {
-    ageMs: observedAt ? ageMs : null,
-    stale: isOpen && observedAt != null && isStale
-  }
+  const { ageMs, isStale } = getQuoteStaleness(observedAt, serverTime, isOpen)
+  return { ageMs, stale: isStale }
 }

@@ -71,3 +71,16 @@ async def ai_reader_engine() -> AsyncIterator[AsyncEngine]:
         return
     yield engine
     await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def superuser_engine() -> AsyncIterator[AsyncEngine]:
+    """The bootstrap superuser (system design §3) -- only for tests that
+    need privileges no app role has (e.g. probing what a role *can't* do
+    from outside it). Prefer app_writer_engine/ai_reader_engine otherwise."""
+    engine = await _connectable(get_settings().superuser_dsn)
+    if engine is None:
+        _unreachable("superuser")
+        return
+    yield engine
+    await engine.dispose()

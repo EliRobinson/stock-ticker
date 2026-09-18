@@ -16,19 +16,10 @@ export interface MarketRowView extends MarketRow {
   capNote: string | null
 }
 
-// A Listing's history is still loading until the API marks its backfill
-// done. Until `backfill_completed_at` is in the generated types, a Listing
-// with no first bar yet stands in for it.
 export function isBackfillPending(
-  row: Pick<MarketRow, 'first_bar_date'>
+  row: Pick<MarketRow, 'backfill_completed_at'>
 ): boolean {
-  if ('backfill_completed_at' in row) {
-    return (
-      (row as { backfill_completed_at: string | null }).backfill_completed_at ==
-      null
-    )
-  }
-  return row.first_bar_date == null
+  return row.backfill_completed_at == null
 }
 
 export function toRowViews(

@@ -23,24 +23,26 @@ done
 [ -n "${WEB_URL:-}" ] && [ -n "${API_URL:-}" ] || { echo "Tunnels did not start. Logs: $LOGS"; kill $WEB_PID $API_PID; exit 1; }
 
 WEB_HOST=${WEB_URL#https://}
+SHARE_PASSWORD=${SHARE_PASSWORD:-$(openssl rand -base64 12 | tr -d "/+=")}
 API_HOST=${API_URL#https://}
 
 restore() {
   echo; echo "Stopping tunnels and restoring local-only settings..."
   kill $WEB_PID $API_PID 2>/dev/null || true
-  env -u PUBLIC_API_URL -u PUBLIC_WEB_HOST -u WEB_ORIGIN -u ALLOWED_HOSTS docker compose up -d api web >/dev/null
+  env -u PUBLIC_API_URL -u PUBLIC_WEB_HOST -u SHARE_PASSWORD -u WEB_ORIGIN -u ALLOWED_HOSTS docker compose up -d api web >/dev/null
 }
 trap restore EXIT
 
-PUBLIC_API_URL="$API_URL" PUBLIC_WEB_HOST="$WEB_HOST" WEB_ORIGIN="$WEB_URL" \
+PUBLIC_API_URL="$API_URL" PUBLIC_WEB_HOST="$WEB_HOST" SHARE_PASSWORD="$SHARE_PASSWORD" WEB_ORIGIN="$WEB_URL" \
   ALLOWED_HOSTS="[\"127.0.0.1\",\"localhost\",\"$API_HOST\"]" \
   docker compose up -d api web >/dev/null
 
 echo "Waiting for the web app to restart..."
-until curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/ | grep -q 200; do sleep 3; done
+until curl -s -o /dev/null -w '%{http_code}' -u "share:$SHARE_PASSWORD" http://127.0.0.1:3000/ | grep -q 200; do sleep 3; done
 
 echo
 echo "Share this link: $WEB_URL"
+echo "Username: share   Password: $SHARE_PASSWORD"
 echo "API (used by the page): $API_URL"
 echo "AI spend is capped at \$5. Press Ctrl+C to stop sharing."
 wait

@@ -1,0 +1,163 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Type-check, lint, format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      # `pnpm config set`, not an echo into ~/.npmrc, so this keeps working after a
+      # pnpm major. pnpm 11 keeps its own credential store and sends tokens only
+      # from there: a token in ~/.npmrc is still listed back in pnpm's own
+      # "authorization settings were found" output while never reaching the
+      # request, which surfaces as a 401 saying no authorization header was set.
+      # `pnpm config set` writes wherever the running pnpm actually reads.
+      #
+      # The guard is here because an empty secret produces that same 401, and the
+      # error names neither the secret nor the repo. Failing on the length turns a
+      # confusing registry error into an actionable one.
+      - name: Authenticate to GitHub Packages
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::error::NODE_AUTH_TOKEN is empty. Set it with:" \
+                 "gh secret set NODE_AUTH_TOKEN --repo ${{ github.repository }}" \
+                 "(a GitHub token with read:packages)."
+            exit 1
+          fi
+          pnpm config set //npm.pkg.github.com/:_authToken "$NODE_AUTH_TOKEN"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type check
+        run: pnpm type-check
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Format check
+        run: pnpm format:check
+
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      # `pnpm config set`, not an echo into ~/.npmrc, so this keeps working after a
+      # pnpm major. pnpm 11 keeps its own credential store and sends tokens only
+      # from there: a token in ~/.npmrc is still listed back in pnpm's own
+      # "authorization settings were found" output while never reaching the
+      # request, which surfaces as a 401 saying no authorization header was set.
+      # `pnpm config set` writes wherever the running pnpm actually reads.
+      #
+      # The guard is here because an empty secret produces that same 401, and the
+      # error names neither the secret nor the repo. Failing on the length turns a
+      # confusing registry error into an actionable one.
+      - name: Authenticate to GitHub Packages
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::error::NODE_AUTH_TOKEN is empty. Set it with:" \
+                 "gh secret set NODE_AUTH_TOKEN --repo ${{ github.repository }}" \
+                 "(a GitHub token with read:packages)."
+            exit 1
+          fi
+          pnpm config set //npm.pkg.github.com/:_authToken "$NODE_AUTH_TOKEN"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run tests
+        run: pnpm test:coverage
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage/
+          retention-days: 7
+
+  e2e:
+    name: E2E tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      # `pnpm config set`, not an echo into ~/.npmrc, so this keeps working after a
+      # pnpm major. pnpm 11 keeps its own credential store and sends tokens only
+      # from there: a token in ~/.npmrc is still listed back in pnpm's own
+      # "authorization settings were found" output while never reaching the
+      # request, which surfaces as a 401 saying no authorization header was set.
+      # `pnpm config set` writes wherever the running pnpm actually reads.
+      #
+      # The guard is here because an empty secret produces that same 401, and the
+      # error names neither the secret nor the repo. Failing on the length turns a
+      # confusing registry error into an actionable one.
+      - name: Authenticate to GitHub Packages
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::error::NODE_AUTH_TOKEN is empty. Set it with:" \
+                 "gh secret set NODE_AUTH_TOKEN --repo ${{ github.repository }}" \
+                 "(a GitHub token with read:packages)."
+            exit 1
+          fi
+          pnpm config set //npm.pkg.github.com/:_authToken "$NODE_AUTH_TOKEN"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: pnpm playwright install --with-deps chromium
+
+      - name: Build
+        run: pnpm build
+
+      - name: Run E2E tests
+        run: pnpm test:e2e --project=chromium
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7

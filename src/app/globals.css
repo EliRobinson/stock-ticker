@@ -1,0 +1,8 @@
+@import 'tailwindcss';
+@import '@elirobinson/tokens/tailwind.css';
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+}

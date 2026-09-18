@@ -1,6 +1,7 @@
 export type NumericInput = string | number | null | undefined
 
-const EMPTY = '—'
+/** What every formatter shows for a missing value. */
+export const EMPTY = '—'
 /** The Unicode minus sign (U+2212), not a hyphen - the brief and Claude
  * Design both use it for negative price/percent chrome. */
 const MINUS = '−'
@@ -8,7 +9,8 @@ const MINUS = '−'
 /** The market clock and every Trading Day are dated in New York time
  * (CONTEXT.md) - used everywhere a real timestamp (not a bare calendar
  * date - see calendarDateParts) needs to show in market time. */
-const MARKET_TIME_ZONE = 'America/New_York'
+export const NY_TZ = 'America/New_York'
+const MARKET_TIME_ZONE = NY_TZ
 
 /** The one parser for "a decimal-string-or-number-or-null from the API" -
  * shared with market-table.ts instead of a second copy there. */
@@ -356,4 +358,51 @@ export function formatSigned(
   const direction = directionOf(n, precision)
   const text = formatter(Math.abs(n))
   return { text, direction, arrow: ARROWS[direction] }
+}
+
+/** "1,183": a whole count with thousands separators. */
+export function formatInteger(value: NumericInput): string {
+  const n = toNumber(value)
+  if (n === null) return EMPTY
+  return Math.round(n).toLocaleString('en-US')
+}
+
+/** "$5.00": a dollar amount with cents, for spend readouts. */
+export function formatUsd(value: NumericInput): string {
+  const n = toNumber(value)
+  if (n === null) return EMPTY
+  return `$${n.toFixed(2)}`
+}
+
+/** "11:42:02": a New York wall-clock time with seconds and no AM/PM, for
+ * the ingest pill's "last run". */
+export function formatClock(value: string | null | undefined): string {
+  const date = parseInstant(value)
+  if (!date) return EMPTY
+  const parts = new Intl.DateTimeFormat('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+    timeZone: MARKET_TIME_ZONE
+  }).formatToParts(date)
+  return parts
+    .filter(
+      (p) => p.type === 'hour' || p.type === 'minute' || p.type === 'second'
+    )
+    .map((p) => p.value)
+    .join(':')
+}
+
+/** "5 Aug – 12 Sep 2024" for a same-year range, "19 Feb 2020 – 23 Mar 2021"
+ * across years, and one date when start and end match. Bare calendar dates
+ * (a Note's span, a chart range). */
+export function formatDateRange(start: string, end: string): string {
+  if (start === end) return formatDateShort(start)
+  const a = calendarDateParts(start)
+  const b = calendarDateParts(end)
+  if (a && b && a.year === b.year) {
+    return `${a.day} ${MONTH_ABBREVIATIONS[a.month - 1]} \u2013 ${formatDateShort(end)}`
+  }
+  return `${formatDateShort(start)} \u2013 ${formatDateShort(end)}`
 }

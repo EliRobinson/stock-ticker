@@ -2,12 +2,14 @@ import type { ColumnDef, FilterFn } from '@tanstack/react-table'
 import { toNumber } from './format'
 import type { MarketRow } from './api'
 
-export const searchFilterFn: FilterFn<MarketRow> = (
-  row,
-  _columnId,
-  filterValue: string
-) => {
-  const query = filterValue.trim().toLowerCase()
+/** Generic over any row that extends MarketRow, so a screen's own row view
+ * model (MarketRow plus display fields) uses these without a cast. */
+export function searchFilterFn<T extends MarketRow>(
+  ...[row, , filterValue]: Parameters<FilterFn<T>>
+): boolean {
+  const query = String(filterValue ?? '')
+    .trim()
+    .toLowerCase()
   if (query === '') return true
   const { symbol, name } = row.original
   return (
@@ -15,21 +17,21 @@ export const searchFilterFn: FilterFn<MarketRow> = (
   )
 }
 
-export const sectorFilterFn: FilterFn<MarketRow> = (
-  row,
-  _columnId,
-  filterValue: string | string[]
-) => {
-  const sectors = Array.isArray(filterValue) ? filterValue : [filterValue]
+export function sectorFilterFn<T extends MarketRow>(
+  ...[row, , filterValue]: Parameters<FilterFn<T>>
+): boolean {
+  const sectors: string[] = Array.isArray(filterValue)
+    ? filterValue
+    : [String(filterValue ?? '')]
   const active = sectors.filter((s) => s !== '')
   if (active.length === 0) return true
   return active.includes(row.original.sector)
 }
 
-function numericColumn(
+function numericColumn<T extends MarketRow>(
   id: keyof MarketRow,
   header: string
-): ColumnDef<MarketRow> {
+): ColumnDef<T> {
   return {
     id,
     // TanStack's `sortUndefined: 'last'` handles the null-before-Quote
@@ -46,40 +48,44 @@ function numericColumn(
   }
 }
 
-export const marketTableColumns: ColumnDef<MarketRow>[] = [
-  {
-    id: 'symbol',
-    accessorKey: 'symbol',
-    header: 'Ticker',
-    filterFn: searchFilterFn
-  },
-  {
-    id: 'name',
-    accessorKey: 'name',
-    header: 'Company',
-    filterFn: searchFilterFn
-  },
-  {
-    id: 'sector',
-    accessorKey: 'sector',
-    header: 'Sector',
-    filterFn: sectorFilterFn
-  },
-  numericColumn('price', 'Price'),
-  numericColumn('change', 'Change'),
-  numericColumn('change_pct', 'Change %'),
-  numericColumn('volume', 'Volume'),
-  {
-    id: 'observed_at',
-    // Sorts by recency; age itself depends on the parent /market
-    // response's server_time, which isn't on MarketRow, so it stays a
-    // sortable timestamp column rather than a synthesized "age" one.
-    accessorFn: (row) => row.observed_at ?? undefined,
-    header: 'Last Quote',
-    sortUndefined: 'last'
-  },
-  numericColumn('market_cap', 'Market Cap')
-]
+export function marketColumns<T extends MarketRow>(): ColumnDef<T>[] {
+  return [
+    {
+      id: 'symbol',
+      accessorKey: 'symbol',
+      header: 'Ticker',
+      filterFn: searchFilterFn<T>
+    },
+    {
+      id: 'name',
+      accessorKey: 'name',
+      header: 'Company',
+      filterFn: searchFilterFn<T>
+    },
+    {
+      id: 'sector',
+      accessorKey: 'sector',
+      header: 'Sector',
+      filterFn: sectorFilterFn<T>
+    },
+    numericColumn<T>('price', 'Price'),
+    numericColumn<T>('change', 'Change'),
+    numericColumn<T>('change_pct', 'Change %'),
+    numericColumn<T>('volume', 'Volume'),
+    {
+      id: 'observed_at',
+      // Sorts by recency; age itself depends on the parent /market
+      // response's server_time, which isn't on MarketRow, so it stays a
+      // sortable timestamp column rather than a synthesized "age" one.
+      accessorFn: (row) => row.observed_at ?? undefined,
+      header: 'Last Quote',
+      sortUndefined: 'last'
+    },
+    numericColumn<T>('market_cap', 'Market Cap')
+  ]
+}
+
+export const marketTableColumns: ColumnDef<MarketRow>[] = marketColumns()
 
 export const marketSortableColumnIds = new Set(
   marketTableColumns

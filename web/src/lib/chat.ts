@@ -1,4 +1,4 @@
-import { useChat } from '@ai-sdk/react'
+import { Chat, useChat } from '@ai-sdk/react'
 import { DefaultChatTransport } from 'ai'
 import type { UIMessage, UIMessagePart } from 'ai'
 import { z } from 'zod'
@@ -136,6 +136,13 @@ export function parseViewSpec(data: unknown): ParsedViewSpec | InvalidViewSpec {
   return { success: false, error: result.error.message }
 }
 
-export function useStockTickerChat() {
-  return useChat<ChatUIMessage>({ transport: chatTransport })
+/** One conversation, created by the app shell and held there, so it
+ * survives the Ask panel closing, or moving between the docked column and
+ * the full-screen sheet. */
+export function createStockTickerChat(): Chat<ChatUIMessage> {
+  return new Chat<ChatUIMessage>({ transport: chatTransport })
+}
+
+export function useStockTickerChat(chat: Chat<ChatUIMessage>) {
+  return useChat<ChatUIMessage>({ chat })
 }

@@ -60,3 +60,25 @@ describe('routes', () => {
     expect(ROUTES.notes).toBe('/notes')
   })
 })
+
+describe('companyOptionsFromMarket with is_primary', () => {
+  it('prefers the row the API marks primary over volume', () => {
+    const options = companyOptionsFromMarket([
+      {
+        cik: '9',
+        symbol: 'GOOG',
+        name: 'Alphabet C',
+        volume: 99,
+        is_primary: false
+      },
+      {
+        cik: '9',
+        symbol: 'GOOGL',
+        name: 'Alphabet A',
+        volume: 1,
+        is_primary: true
+      }
+    ] as never)
+    expect(options[0]?.label).toBe('GOOGL · Alphabet A')
+  })
+})

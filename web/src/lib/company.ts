@@ -30,22 +30,37 @@ export function companyOption(row: {
   return { cik: row.cik, label: `${row.symbol} · ${row.name}` }
 }
 
-/** One option per Company from Market rows. MarketRow has no is_primary
- * yet, so the row with the Company's highest volume stands in for it (the
- * primary class trades most for every multi-class issuer in the index). */
+type MarketListing = {
+  cik: string
+  symbol: string
+  name: string
+  volume: number | null
+}
+
+// MarketRow gains is_primary with api-read (PR #25). Until it is in the
+// generated types, read it when present and otherwise take the Company's
+// busiest Listing (the primary class trades most for every multi-class
+// issuer in the index).
+function isPrimary(row: MarketListing): boolean | undefined {
+  return 'is_primary' in row
+    ? Boolean((row as { is_primary: unknown }).is_primary)
+    : undefined
+}
+
+/** One option per Company from Market rows, labelled by its primary Listing. */
 export function companyOptionsFromMarket(
-  rows: readonly {
-    cik: string
-    symbol: string
-    name: string
-    volume: number | null
-  }[]
+  rows: readonly MarketListing[]
 ): CompanyOption[] {
-  const best = new Map<string, (typeof rows)[number]>()
+  const best = new Map<string, MarketListing>()
   for (const row of rows) {
     const current = best.get(row.cik)
-    if (!current || (row.volume ?? 0) > (current.volume ?? 0))
-      best.set(row.cik, row)
+    const primary = isPrimary(row)
+    const better =
+      !current ||
+      (primary !== undefined
+        ? primary
+        : (row.volume ?? 0) > (current.volume ?? 0))
+    if (better) best.set(row.cik, row)
   }
   return [...best.values()]
     .sort((a, b) => a.symbol.localeCompare(b.symbol))

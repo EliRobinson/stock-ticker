@@ -16,11 +16,17 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
 
+ValueFormat = Literal[
+    "text", "integer", "number", "currency", "compact_currency", "percent", "fraction_as_percent", "date",
+    "datetime",
+]  # fmt: skip
+NumberFormat = Literal["integer", "number", "currency", "compact_currency", "percent", "fraction_as_percent"]
+
 
 class TableColumn(BaseModel):
     key: str
     label: str
-    format: str | None = None
+    format: ValueFormat | None = None
 
 
 class TableSpec(BaseModel):
@@ -42,7 +48,7 @@ class TimeseriesChartSpec(BaseModel):
     title: str
     x: str
     series: list[ChartSeries]
-    y_format: str | None = None
+    y_format: NumberFormat | None = None
     rows: list[dict[str, Any]]
 
 

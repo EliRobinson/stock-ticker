@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 
 from anthropic.types import ToolParam
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -31,9 +31,11 @@ from stockticker.ai.serialize import (
 from stockticker.logging import get_logger
 from stockticker.models.views import (
     ChartSeries,
+    NumberFormat,
     TableColumn,
     TableSpec,
     TimeseriesChartSpec,
+    ValueFormat,
     ViewSpec,
 )
 
@@ -43,12 +45,6 @@ MAX_CHART_SERIES = 8
 
 DATE_TYPES = frozenset({"date", "timestamp", "timestamptz"})
 NUMERIC_TYPES = frozenset({"int2", "int4", "int8", "numeric", "float4", "float8"})
-
-ValueFormat = Literal[
-    "text", "integer", "number", "currency", "compact_currency", "percent", "fraction_as_percent", "date",
-    "datetime",
-]  # fmt: skip
-NumberFormat = Literal["integer", "number", "currency", "compact_currency", "percent", "fraction_as_percent"]
 
 _FORMAT_HELP = (
     "How the web app formats the value. `percent`: the value is already in percent (12.5 -> 12.5%). "

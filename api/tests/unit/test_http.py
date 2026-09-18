@@ -72,7 +72,7 @@ async def test_request_gives_up_after_max_attempts() -> None:
 
 @respx.mock
 async def test_request_with_attempts_one_does_not_retry_a_5xx() -> None:
-    """`attempts=1` (Alpaca `get_snapshots(retry=False)`, `get_clock`) makes
+    """`attempts=1` (Alpaca `get_snapshots(attempts=1)`, `get_clock`) makes
     exactly one try, even for a normally-retryable status."""
     route = respx.get("https://example.test/always-503").mock(return_value=httpx.Response(503))
     async with build_http_client(base_url="https://example.test") as client:

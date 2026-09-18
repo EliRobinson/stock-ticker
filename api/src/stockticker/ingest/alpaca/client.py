@@ -2,11 +2,11 @@
 
 Two hosts: the trading API (`/v2/clock`, `/v2/calendar`) and the market-data
 API (`/v2/stocks/...`, `/v1/corporate-actions`). Every call, including
-`get_snapshots(..., retry=False)` (`quotes_poll`) and `get_clock`, goes
+`get_snapshots(..., attempts=1)` (`quotes_poll`) and `get_clock`, goes
 through `stockticker.ingest.http.request` for the shared rate-budget policy;
-`retry=False` and the clock's own fetch both map to `request(...,
-attempts=1)` rather than bypassing it -- system design §4: "No retries,
-because the next tick is the retry."
+those single-attempt callers map to `request(..., attempts=1)` rather than
+bypassing it -- system design §4: "No retries, because the next tick is
+the retry."
 
 `get_bars` and `get_corporate_actions` exhaust pagination themselves,
 through the shared `_paged()` helper (loop on `next_page_token`), so a
@@ -171,7 +171,7 @@ class RawBarsSource(Protocol):
 
 class SnapshotsSource(Protocol):
     async def get_snapshots(
-        self, symbols: Sequence[str], *, feed: str = FEED_IEX, retry: bool = True
+        self, symbols: Sequence[str], *, feed: str = FEED_IEX, attempts: int = MAX_ATTEMPTS
     ) -> list[ProviderQuote]: ...
 
 
@@ -182,14 +182,27 @@ class CorporateActionsSource(Protocol):
 
 
 # The free tier refuses SIP data from the last 15 minutes, and a bare date means
-# the whole day, so an end date of today would always 403.
+# the whole day, so an end date of today would always 403. IEX / paid SIP do
+# not inherit this cap.
 SIP_EMBARGO = timedelta(minutes=16)
 
 
-def _bars_end(end: date) -> str:
-    cutoff = datetime.now(UTC) - SIP_EMBARGO
+def _format_utc_z(when: datetime) -> str:
+    """RFC3339 UTC with a literal `Z` suffix (Alpaca's preferred end form)."""
+    utc = when.astimezone(UTC)
+    return f"{utc:%Y-%m-%dT%H:%M:%S}.{utc.microsecond:06d}Z"
+
+
+def _bars_end(end: date, *, feed: str, now: datetime | None = None) -> str:
+    """Wire shape for the bars `end` query param. SIP free-tier only: when
+    `end` falls on/after the embargo cutoff's NY date, send a timestamp
+    below the 15-minute embargo instead of a bare date (which means
+    end-of-day and 403s). Other feeds pass the bare date through."""
+    if feed != FEED_SIP:
+        return end.isoformat()
+    cutoff = (now if now is not None else datetime.now(UTC)) - SIP_EMBARGO
     if end >= ny_date(cutoff):
-        return cutoff.isoformat().replace("+00:00", "Z")
+        return _format_utc_z(cutoff)
     return end.isoformat()
 
 
@@ -288,7 +301,7 @@ class AlpacaClient:
             "symbols": ",".join(symbols),
             "timeframe": timeframe,
             "start": start.isoformat(),
-            "end": _bars_end(end),
+            "end": _bars_end(end, feed=feed),
             "adjustment": adjustment,
             "feed": feed,
             "limit": BARS_PAGE_LIMIT,
@@ -313,11 +326,11 @@ class AlpacaClient:
         return results
 
     async def get_snapshots(
-        self, symbols: Sequence[str], *, feed: str = FEED_IEX, retry: bool = True
+        self, symbols: Sequence[str], *, feed: str = FEED_IEX, attempts: int = MAX_ATTEMPTS
     ) -> list[ProviderQuote]:
-        """`retry=False` (`quotes_poll`) still draws from the quotes budget
-        and still goes through `request()`, just with `attempts=1` -- the
-        next 15s tick is the retry (system design §4)."""
+        """`attempts=1` (`quotes_poll`) still draws from the quotes budget
+        and still goes through `request()` -- the next 15s tick is the
+        retry (system design §4)."""
         params = {"symbols": ",".join(symbols), "feed": feed}
         response = await request(
             self._data,
@@ -325,7 +338,7 @@ class AlpacaClient:
             SNAPSHOTS_PATH,
             params=params,
             rate_budget=RateBudgetName.ALPACA_QUOTES,
-            attempts=MAX_ATTEMPTS if retry else 1,
+            attempts=attempts,
         )
         body = response.json()
         quotes: list[ProviderQuote] = []

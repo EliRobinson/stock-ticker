@@ -4,6 +4,57 @@
  */
 
 export interface paths {
+  '/api/v1/chat': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /** Chat */
+    post: operations['chat_api_v1_chat_post']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/companies/{cik}': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /** Get Company */
+    get: operations['get_company_api_v1_companies__cik__get']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/events': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /** List Events */
+    get: operations['list_events_api_v1_events_get']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/api/v1/health/live': {
     parameters: {
       query?: never
@@ -38,15 +89,15 @@ export interface paths {
     patch?: never
     trace?: never
   }
-  '/api/v1/status': {
+  '/api/v1/listings/{symbol}/bars': {
     parameters: {
       query?: never
       header?: never
       path?: never
       cookie?: never
     }
-    /** Status */
-    get: operations['status_api_v1_status_get']
+    /** List Bars */
+    get: operations['list_bars_api_v1_listings__symbol__bars_get']
     put?: never
     post?: never
     delete?: never
@@ -72,57 +123,6 @@ export interface paths {
     patch?: never
     trace?: never
   }
-  '/api/v1/companies/{cik}': {
-    parameters: {
-      query?: never
-      header?: never
-      path?: never
-      cookie?: never
-    }
-    /** Get Company */
-    get: operations['get_company_api_v1_companies__cik__get']
-    put?: never
-    post?: never
-    delete?: never
-    options?: never
-    head?: never
-    patch?: never
-    trace?: never
-  }
-  '/api/v1/listings/{symbol}/bars': {
-    parameters: {
-      query?: never
-      header?: never
-      path?: never
-      cookie?: never
-    }
-    /** List Bars */
-    get: operations['list_bars_api_v1_listings__symbol__bars_get']
-    put?: never
-    post?: never
-    delete?: never
-    options?: never
-    head?: never
-    patch?: never
-    trace?: never
-  }
-  '/api/v1/events': {
-    parameters: {
-      query?: never
-      header?: never
-      path?: never
-      cookie?: never
-    }
-    /** List Events */
-    get: operations['list_events_api_v1_events_get']
-    put?: never
-    post?: never
-    delete?: never
-    options?: never
-    head?: never
-    patch?: never
-    trace?: never
-  }
   '/api/v1/notes': {
     parameters: {
       query?: never
@@ -133,8 +133,7 @@ export interface paths {
     /** List Notes */
     get: operations['list_notes_api_v1_notes_get']
     put?: never
-    /** Create Note */
-    post: operations['create_note_api_v1_notes_post']
+    post?: never
     delete?: never
     options?: never
     head?: never
@@ -149,27 +148,27 @@ export interface paths {
       cookie?: never
     }
     get?: never
-    put?: never
+    /** Upsert Note */
+    put: operations['upsert_note_api_v1_notes__note_id__put']
     post?: never
-    /** Delete Note */
-    delete: operations['delete_note_api_v1_notes__note_id__delete']
+    /** Remove Note */
+    delete: operations['remove_note_api_v1_notes__note_id__delete']
     options?: never
     head?: never
-    /** Update Note */
-    patch: operations['update_note_api_v1_notes__note_id__patch']
+    patch?: never
     trace?: never
   }
-  '/api/v1/chat': {
+  '/api/v1/status': {
     parameters: {
       query?: never
       header?: never
       path?: never
       cookie?: never
     }
-    get?: never
+    /** Status */
+    get: operations['status_api_v1_status_get']
     put?: never
-    /** Chat */
-    post: operations['chat_api_v1_chat_post']
+    post?: never
     delete?: never
     options?: never
     head?: never
@@ -189,63 +188,82 @@ export interface components {
     }
     /** Bar */
     Bar: {
+      /** Adj Close */
+      adj_close: string
+      /** Close */
+      close: string
+      /** High */
+      high: string
+      /** Low */
+      low: string
+      /** Open */
+      open: string
       /**
        * Trade Date
        * Format: date
        */
       trade_date: string
-      /** Open */
-      open: string
-      /** High */
-      high: string
-      /** Low */
-      low: string
-      /** Close */
-      close: string
       /** Volume */
       volume: number
-      /** Adj Close */
-      adj_close: string
+    }
+    /**
+     * BarsResponse
+     * @description `timeframe` echoes the request's `timeframe` query param (system
+     *     design §5, amended). Only `1d` is supported today; a request for any
+     *     other value is rejected before this response is built.
+     */
+    BarsResponse: {
+      /** Bars */
+      bars: components['schemas']['Bar'][]
+      /** Symbol */
+      symbol: string
+      /**
+       * Timeframe
+       * @constant
+       */
+      timeframe: '1d'
     }
     /** CompanyDetail */
     CompanyDetail: {
       /** Cik */
       cik: string
+      /** Date Added */
+      date_added: string | null
+      /** First Bar Date */
+      first_bar_date: string | null
+      /** Headquarters */
+      headquarters: string | null
+      /** Is Active */
+      is_active: boolean
+      /** Listings */
+      listings: components['schemas']['ListingSummary'][]
+      market_cap: components['schemas']['MarketCapSummary'] | null
       /** Name */
       name: string
       /** Sector */
       sector: string
       /** Sub Industry */
       sub_industry: string | null
-      /** Headquarters */
-      headquarters: string | null
-      /** Date Added */
-      date_added: string | null
-      /** Is Active */
-      is_active: boolean
-      /** Listings */
-      listings: components['schemas']['ListingSummary'][]
-      market_cap: components['schemas']['MarketCapSummary'] | null
       /** Week 52 High */
       week_52_high: string | null
       /** Week 52 Low */
       week_52_low: string | null
-      /** First Bar Date */
-      first_bar_date: string | null
     }
     /** Event */
     Event: {
-      /** Id */
-      id: number
       /** Cik */
       cik: string
-      /** Symbol */
-      symbol: string | null
+      /** Details */
+      details: {
+        [key: string]: unknown
+      }
       /**
        * Event Date
        * Format: date
        */
       event_date: string
+      /** Id */
+      id: number
       /**
        * Kind
        * @enum {string}
@@ -260,16 +278,25 @@ export interface components {
         | 'filing_10q'
         | 'filing_8k'
         | 'index_added'
-      /** Title */
-      title: string
-      /** Details */
-      details: {
-        [key: string]: unknown
-      }
       /** Source */
       source: string
       /** Source Ref */
       source_ref: string
+      /** Symbol */
+      symbol: string | null
+      /** Title */
+      title: string
+    }
+    /**
+     * EventsResponse
+     * @description Keyset-paginated (system design §5, amended). `next_cursor` is null
+     *     once there are no more matching Events.
+     */
+    EventsResponse: {
+      /** Items */
+      items: components['schemas']['Event'][]
+      /** Next Cursor */
+      next_cursor: string | null
     }
     /** HTTPValidationError */
     HTTPValidationError: {
@@ -289,8 +316,16 @@ export interface components {
     }
     /** JobStatusEntry */
     JobStatusEntry: {
+      /** Consecutive Failures */
+      consecutive_failures: number
+      /** Error Summary */
+      error_summary: string | null
+      /** Finished At */
+      finished_at: string | null
       /** Job */
       job: string
+      /** Last Success At */
+      last_success_at: string | null
       /** Status */
       status:
         | (
@@ -302,28 +337,22 @@ export interface components {
             | 'skipped'
           )
         | null
-      /** Finished At */
-      finished_at: string | null
-      /** Last Success At */
-      last_success_at: string | null
-      /** Consecutive Failures */
-      consecutive_failures: number
-      /** Error Summary */
-      error_summary: string | null
     }
     /** ListingSummary */
     ListingSummary: {
-      /** Symbol */
-      symbol: string
-      /** Is Primary */
-      is_primary: boolean
-      /** Is Active */
-      is_active: boolean
       /** First Bar Date */
       first_bar_date: string | null
+      /** Is Active */
+      is_active: boolean
+      /** Is Primary */
+      is_primary: boolean
+      /** Symbol */
+      symbol: string
     }
     /** MarketCapSummary */
     MarketCapSummary: {
+      /** Is Approx */
+      is_approx: boolean
       /** Market Cap */
       market_cap: string
       /**
@@ -331,8 +360,6 @@ export interface components {
        * Format: date
        */
       shares_as_of: string
-      /** Is Approx */
-      is_approx: boolean
     }
     /**
      * MarketClock
@@ -342,15 +369,15 @@ export interface components {
       /** Is Open */
       is_open: boolean
       /**
-       * Next Open
-       * Format: date-time
-       */
-      next_open: string
-      /**
        * Next Close
        * Format: date-time
        */
       next_close: string
+      /**
+       * Next Open
+       * Format: date-time
+       */
+      next_open: string
     }
     /**
      * MarketResponse
@@ -359,121 +386,110 @@ export interface components {
      *     to answer "is the market open" next to the listings themselves.
      */
     MarketResponse: {
+      /** Listings */
+      listings: components['schemas']['MarketRow'][]
+      market_clock: components['schemas']['MarketClock'] | null
       /**
        * Server Time
        * Format: date-time
        */
       server_time: string
-      market_clock: components['schemas']['MarketClock'] | null
-      /** Listings */
-      listings: components['schemas']['MarketRow'][]
     }
     /** MarketRow */
     MarketRow: {
-      /** Symbol */
-      symbol: string
-      /** Cik */
-      cik: string
-      /** Name */
-      name: string
-      /** Sector */
-      sector: string
-      /** Price */
-      price: string | null
-      /** Observed At */
-      observed_at: string | null
-      /** Prev Close */
-      prev_close: string | null
       /** Change */
       change: string | null
       /** Change Pct */
       change_pct: string | null
-      /** Volume */
-      volume: number | null
+      /** Cik */
+      cik: string
+      /** First Bar Date */
+      first_bar_date: string | null
       /** Market Cap */
       market_cap: string | null
       /** Market Cap Is Approx */
       market_cap_is_approx: boolean
-      /** First Bar Date */
-      first_bar_date: string | null
+      /** Name */
+      name: string
+      /** Observed At */
+      observed_at: string | null
+      /** Prev Close */
+      prev_close: string | null
+      /** Price */
+      price: string | null
+      /** Sector */
+      sector: string
+      /** Symbol */
+      symbol: string
+      /** Volume */
+      volume: number | null
     }
     /** Note */
     Note: {
-      /**
-       * Id
-       * Format: uuid
-       */
-      id: string
-      /** Cik */
-      cik: string | null
-      /**
-       * Start Date
-       * Format: date
-       */
-      start_date: string
-      /**
-       * End Date
-       * Format: date
-       */
-      end_date: string
       /** Body */
       body: string
+      /** Cik */
+      cik: string | null
       /**
        * Created At
        * Format: date-time
        */
       created_at: string
       /**
-       * Updated At
-       * Format: date-time
+       * End Date
+       * Format: date
        */
-      updated_at: string
-    }
-    /** NoteCreate */
-    NoteCreate: {
-      /** Cik */
-      cik?: string | null
+      end_date: string
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string
       /**
        * Start Date
        * Format: date
        */
       start_date: string
-      /** End Date */
-      end_date?: string | null
-      /** Body */
-      body: string
+      /**
+       * Updated At
+       * Format: date-time
+       */
+      updated_at: string
     }
     /**
-     * NoteUpdate
-     * @description Partial update. A field omitted from the request body is left
-     *     unchanged; the router applies this with `model_dump(exclude_unset=True)`,
-     *     so an explicit `null` for `cik` clears it (market-wide note).
+     * NoteUpsert
+     * @description Body of `PUT /api/v1/notes/{id}` (system design §5, amended: the
+     *     client supplies the id in the path; PUT is an idempotent upsert that
+     *     replaces the old POST). `end_date` defaults to `start_date` when omitted.
      */
-    NoteUpdate: {
+    NoteUpsert: {
+      /** Body */
+      body: string
       /** Cik */
       cik?: string | null
-      /** Start Date */
-      start_date?: string | null
       /** End Date */
       end_date?: string | null
-      /** Body */
-      body?: string | null
+      /**
+       * Start Date
+       * Format: date
+       */
+      start_date: string
+    }
+    /**
+     * NotesResponse
+     * @description Keyset-paginated (system design §5, amended). `next_cursor` is null
+     *     once there are no more matching Notes.
+     */
+    NotesResponse: {
+      /** Items */
+      items: components['schemas']['Note'][]
+      /** Next Cursor */
+      next_cursor: string | null
     }
     /** ProblemDetail */
     ProblemDetail: {
-      /**
-       * Type
-       * @default about:blank
-       */
-      type: string
-      /** Title */
-      title: string
-      /** Status */
-      status: number
       /** Detail */
       detail?: string | null
-      /** Instance */
-      instance?: string | null
       /**
        * Errors
        * @description Per-field validation errors, present on 422 responses.
@@ -483,14 +499,20 @@ export interface components {
             [key: string]: unknown
           }[]
         | null
+      /** Instance */
+      instance?: string | null
+      /** Status */
+      status: number
+      /** Title */
+      title: string
+      /**
+       * Type
+       * @default about:blank
+       */
+      type: string
     }
     /** ReadyResponse */
     ReadyResponse: {
-      /**
-       * Status
-       * @constant
-       */
-      status: 'ok'
       /**
        * Database
        * @constant
@@ -501,37 +523,42 @@ export interface components {
        * @constant
        */
       migration: 'ok'
+      /**
+       * Status
+       * @constant
+       */
+      status: 'ok'
     }
     /** StatusResponse */
     StatusResponse: {
+      backfill: components['schemas']['BackfillProgress']
+      /** Data As Of */
+      data_as_of: string | null
+      /** Jobs */
+      jobs: components['schemas']['JobStatusEntry'][]
+      market_clock: components['schemas']['MarketClock'] | null
+      /** Missing Keys */
+      missing_keys: string[]
+      /** Open Gaps */
+      open_gaps: number
       /**
        * Server Time
        * Format: date-time
        */
       server_time: string
-      market_clock: components['schemas']['MarketClock'] | null
-      /** Jobs */
-      jobs: components['schemas']['JobStatusEntry'][]
-      backfill: components['schemas']['BackfillProgress']
-      /** Missing Keys */
-      missing_keys: string[]
-      /** Data As Of */
-      data_as_of: string | null
-      /** Open Gaps */
-      open_gaps: number
     }
     /** ValidationError */
     ValidationError: {
+      /** Context */
+      ctx?: Record<string, never>
+      /** Input */
+      input?: unknown
       /** Location */
       loc: (string | number)[]
       /** Message */
       msg: string
       /** Error Type */
       type: string
-      /** Input */
-      input?: unknown
-      /** Context */
-      ctx?: Record<string, never>
     }
   }
   responses: never
@@ -542,7 +569,7 @@ export interface components {
 }
 export type $defs = Record<string, never>
 export interface operations {
-  health_live_api_v1_health_live_get: {
+  chat_api_v1_chat_post: {
     parameters: {
       query?: never
       header?: never
@@ -557,76 +584,7 @@ export interface operations {
           [name: string]: unknown
         }
         content: {
-          'application/json': components['schemas']['HealthResponse']
-        }
-      }
-    }
-  }
-  health_ready_api_v1_health_ready_get: {
-    parameters: {
-      query?: never
-      header?: never
-      path?: never
-      cookie?: never
-    }
-    requestBody?: never
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': components['schemas']['ReadyResponse']
-        }
-      }
-      /** @description Service Unavailable */
-      503: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': components['schemas']['ProblemDetail']
-        }
-      }
-    }
-  }
-  status_api_v1_status_get: {
-    parameters: {
-      query?: never
-      header?: never
-      path?: never
-      cookie?: never
-    }
-    requestBody?: never
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': components['schemas']['StatusResponse']
-        }
-      }
-    }
-  }
-  list_market_api_v1_market_get: {
-    parameters: {
-      query?: never
-      header?: never
-      path?: never
-      cookie?: never
-    }
-    requestBody?: never
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': components['schemas']['MarketResponse']
+          'application/json': unknown
         }
       }
       /** @description Not Implemented */
@@ -678,8 +636,95 @@ export interface operations {
           'application/json': components['schemas']['HTTPValidationError']
         }
       }
-      /** @description Not Implemented */
-      501: {
+    }
+  }
+  list_events_api_v1_events_get: {
+    parameters: {
+      query?: {
+        cik?: string | null
+        symbol?: string | null
+        from?: string | null
+        to?: string | null
+        /** @description Comma-separated list of event kinds. */
+        kind?: string | null
+        limit?: number
+        cursor?: string | null
+      }
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['EventsResponse']
+        }
+      }
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ProblemDetail']
+        }
+      }
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ProblemDetail']
+        }
+      }
+    }
+  }
+  health_live_api_v1_health_live_get: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HealthResponse']
+        }
+      }
+    }
+  }
+  health_ready_api_v1_health_ready_get: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ReadyResponse']
+        }
+      }
+      /** @description Service Unavailable */
+      503: {
         headers: {
           [name: string]: unknown
         }
@@ -694,6 +739,7 @@ export interface operations {
       query?: {
         from?: string | null
         to?: string | null
+        timeframe?: string
       }
       header?: never
       path: {
@@ -709,7 +755,7 @@ export interface operations {
           [name: string]: unknown
         }
         content: {
-          'application/json': components['schemas']['Bar'][]
+          'application/json': components['schemas']['BarsResponse']
         }
       }
       /** @description Not Found */
@@ -721,17 +767,8 @@ export interface operations {
           'application/json': components['schemas']['ProblemDetail']
         }
       }
-      /** @description Validation Error */
+      /** @description Unprocessable Entity */
       422: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': components['schemas']['HTTPValidationError']
-        }
-      }
-      /** @description Not Implemented */
-      501: {
         headers: {
           [name: string]: unknown
         }
@@ -741,15 +778,9 @@ export interface operations {
       }
     }
   }
-  list_events_api_v1_events_get: {
+  list_market_api_v1_market_get: {
     parameters: {
-      query?: {
-        cik?: string | null
-        from?: string | null
-        to?: string | null
-        /** @description Comma-separated list of event kinds. */
-        kind?: string | null
-      }
+      query?: never
       header?: never
       path?: never
       cookie?: never
@@ -762,25 +793,7 @@ export interface operations {
           [name: string]: unknown
         }
         content: {
-          'application/json': components['schemas']['Event'][]
-        }
-      }
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': components['schemas']['HTTPValidationError']
-        }
-      }
-      /** @description Not Implemented */
-      501: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': components['schemas']['ProblemDetail']
+          'application/json': components['schemas']['MarketResponse']
         }
       }
     }
@@ -792,6 +805,8 @@ export interface operations {
         from?: string | null
         to?: string | null
         market_only?: boolean
+        limit?: number
+        cursor?: string | null
       }
       header?: never
       path?: never
@@ -805,20 +820,11 @@ export interface operations {
           [name: string]: unknown
         }
         content: {
-          'application/json': components['schemas']['Note'][]
+          'application/json': components['schemas']['NotesResponse']
         }
       }
-      /** @description Validation Error */
+      /** @description Unprocessable Entity */
       422: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': components['schemas']['HTTPValidationError']
-        }
-      }
-      /** @description Not Implemented */
-      501: {
         headers: {
           [name: string]: unknown
         }
@@ -828,21 +834,23 @@ export interface operations {
       }
     }
   }
-  create_note_api_v1_notes_post: {
+  upsert_note_api_v1_notes__note_id__put: {
     parameters: {
       query?: never
       header?: never
-      path?: never
+      path: {
+        note_id: string
+      }
       cookie?: never
     }
     requestBody: {
       content: {
-        'application/json': components['schemas']['NoteCreate']
+        'application/json': components['schemas']['NoteUpsert']
       }
     }
     responses: {
       /** @description Successful Response */
-      201: {
+      200: {
         headers: {
           [name: string]: unknown
         }
@@ -859,18 +867,9 @@ export interface operations {
           'application/json': components['schemas']['ProblemDetail']
         }
       }
-      /** @description Not Implemented */
-      501: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': components['schemas']['ProblemDetail']
-        }
-      }
     }
   }
-  delete_note_api_v1_notes__note_id__delete: {
+  remove_note_api_v1_notes__note_id__delete: {
     parameters: {
       query?: never
       header?: never
@@ -888,15 +887,6 @@ export interface operations {
         }
         content?: never
       }
-      /** @description Not Found */
-      404: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': components['schemas']['ProblemDetail']
-        }
-      }
       /** @description Validation Error */
       422: {
         headers: {
@@ -906,71 +896,9 @@ export interface operations {
           'application/json': components['schemas']['HTTPValidationError']
         }
       }
-      /** @description Not Implemented */
-      501: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': components['schemas']['ProblemDetail']
-        }
-      }
     }
   }
-  update_note_api_v1_notes__note_id__patch: {
-    parameters: {
-      query?: never
-      header?: never
-      path: {
-        note_id: string
-      }
-      cookie?: never
-    }
-    requestBody: {
-      content: {
-        'application/json': components['schemas']['NoteUpdate']
-      }
-    }
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': components['schemas']['Note']
-        }
-      }
-      /** @description Not Found */
-      404: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': components['schemas']['ProblemDetail']
-        }
-      }
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': components['schemas']['HTTPValidationError']
-        }
-      }
-      /** @description Not Implemented */
-      501: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': components['schemas']['ProblemDetail']
-        }
-      }
-    }
-  }
-  chat_api_v1_chat_post: {
+  status_api_v1_status_get: {
     parameters: {
       query?: never
       header?: never
@@ -985,16 +913,7 @@ export interface operations {
           [name: string]: unknown
         }
         content: {
-          'application/json': unknown
-        }
-      }
-      /** @description Not Implemented */
-      501: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          'application/json': components['schemas']['ProblemDetail']
+          'application/json': components['schemas']['StatusResponse']
         }
       }
     }

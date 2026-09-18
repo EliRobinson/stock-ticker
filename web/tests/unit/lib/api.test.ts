@@ -2,10 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   ApiError,
   deleteNote,
+  getBars,
   getEvents,
   getMarket,
   getNotes,
   putNote,
+  type Bar,
   type Note
 } from '@/lib/api'
 
@@ -89,6 +91,30 @@ describe('api client', () => {
     const [url] = fetchMock.mock.calls[0]!
     expect(url).toBe(
       'http://127.0.0.1:8000/api/v1/notes?cik=0000320193&limit=20'
+    )
+  })
+
+  it('unwraps BarsResponse to a plain Bar[]', async () => {
+    const fetchMock = vi.mocked(fetch)
+    const bar: Bar = {
+      trade_date: '2024-06-03',
+      open: '100',
+      high: '105',
+      low: '99',
+      close: '104',
+      volume: 1_000_000,
+      adj_close: '104'
+    }
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ symbol: 'AAPL', timeframe: '1d', bars: [bar] })
+    )
+
+    const bars = await getBars('AAPL', { from: '2024-01-01' })
+
+    expect(bars).toEqual([bar])
+    const [url] = fetchMock.mock.calls[0]!
+    expect(url).toBe(
+      'http://127.0.0.1:8000/api/v1/listings/AAPL/bars?from=2024-01-01&timeframe=1d'
     )
   })
 

@@ -10,27 +10,18 @@ export type Bar = components['schemas']['Bar']
 export type Event = components['schemas']['Event']
 export type Note = components['schemas']['Note']
 export type StatusResponse = components['schemas']['StatusResponse']
+export type PutNoteBody = components['schemas']['NoteUpsert']
 
 /**
- * The committed schema (web/openapi/openapi.json) still reflects the API's
- * stub routes: unwrapped arrays for notes/events and a create-only
- * POST /notes. The target contract - cursor pagination and an idempotent
- * PUT /notes/{id} - is fixed in issue #8's comments and
- * docs/design/system-design.md §5. These types and the request functions
- * below follow that target contract instead of the stub, so this file will
- * need no changes once `pnpm gen:api` picks up the real routes - only these
- * manual types can be deleted.
+ * `NotesResponse` and `EventsResponse` are two generated, non-generic types
+ * with the same {items, next_cursor} shape (confirmed with the api-read
+ * agent). This generic view over them is what the notes/events hooks and
+ * their infinite-query cache helpers are written against, so a third
+ * cursor-paginated resource needs no new cache-shape code.
  */
 export interface Paginated<T> {
   items: T[]
   next_cursor: string | null
-}
-
-export interface PutNoteBody {
-  cik?: string | null
-  start_date: string
-  end_date?: string
-  body: string
 }
 
 export class ApiError extends Error {
@@ -123,7 +114,13 @@ export interface GetBarsParams {
   timeframe?: '1d'
 }
 
-export function getBars(
+type BarsResponse = components['schemas']['BarsResponse']
+
+/** The route wraps bars in {symbol, timeframe, bars}, echoing the
+ * requested timeframe back so the cache key stays unambiguous once
+ * intraday timeframes exist (system-design.md §5) - unwrapped here so
+ * every caller keeps working with a plain Bar[]. */
+export async function getBars(
   symbol: string,
   params: GetBarsParams = {}
 ): Promise<Bar[]> {
@@ -132,9 +129,10 @@ export function getBars(
     to: params.to,
     timeframe: params.timeframe ?? '1d'
   })
-  return request<Bar[]>(
+  const response = await request<BarsResponse>(
     `/api/v1/listings/${encodeURIComponent(symbol)}/bars${qs}`
   )
+  return response.bars
 }
 
 export interface GetEventsParams {

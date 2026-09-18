@@ -84,6 +84,12 @@ async def test_the_stream_is_never_compressed(app: FastAPI) -> None:
         {"messages": [{"role": "assistant", "parts": [{"type": "text", "text": "hi"}]}]},
         {"messages": [{"role": "robot", "parts": []}]},
         {"id": "x"},
+        {
+            "messages": [
+                {"role": "user", "parts": [{"type": "text", "text": "q"}]},
+                {"role": "assistant", "parts": [{"type": "tool-run_sql", "state": "output-available"}]},
+            ]
+        },
     ],
 )
 async def test_a_body_that_is_not_a_conversation_is_a_422_problem(app: FastAPI, body: object) -> None:
@@ -91,6 +97,17 @@ async def test_a_body_that_is_not_a_conversation_is_a_422_problem(app: FastAPI, 
     assert response.status_code == 422
     assert response.headers["content-type"] == "application/problem+json"
     assert response.json()["status"] == 422
+
+
+async def test_a_part_type_this_server_does_not_know_still_streams_an_answer(app: FastAPI) -> None:
+    message = {
+        "id": "u1",
+        "role": "user",
+        "parts": [{"type": "hologram", "x": 1}, {"type": "text", "text": "q"}],
+    }
+    response = await post(app, {**BODY, "messages": [message]})
+    assert response.status_code == 200
+    assert part_types(response.text)[-1] == "[DONE]"
 
 
 def test_openapi_documents_the_data_view_part(app: FastAPI) -> None:

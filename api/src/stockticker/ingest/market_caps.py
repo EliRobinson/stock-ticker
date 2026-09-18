@@ -2,9 +2,10 @@
 
     market_cap(c, d) = close(price Listing, d) x shares(c, d)
 
-- **Price Listing.** `share_class_rules.price_symbol` when a rule exists and
-  that Listing is active, else the active primary Listing. Resolved once, in
-  `load_target`, and passed to SQL as `:price_symbol`.
+- **Price Listing.** `public.price_symbol(cik)` (the foundation's one copy
+  of the rule): the `share_class_rules.price_symbol` Listing if it is
+  active, else the active primary Listing. Read once, in `load_target`, and
+  passed to the rebuild as `:price_symbol`.
 - **Shares.** Point-in-time: the count from the latest filing with
   `filed_date <= d`; among counts filed the same day, the latest
   `as_of_date`, then `dei` before `us-gaap`. Multiplied by
@@ -284,16 +285,11 @@ async def load_target(conn: AsyncConnection, cik: str) -> PriceTarget:
                 """
                 SELECT COALESCE(r.shares_unit_ratio, 1) AS unit_ratio,
                        r.cik IS NOT NULL AS is_multi_class,
-                       p.symbol AS price_symbol,
-                       p.backfill_completed_at IS NOT NULL AS backfilled
+                       l.symbol AS price_symbol,
+                       l.backfill_completed_at IS NOT NULL AS backfilled
                 FROM companies c
                 LEFT JOIN share_class_rules r ON r.cik = c.cik
-                LEFT JOIN LATERAL (
-                  SELECT l.symbol, l.backfill_completed_at FROM listings l
-                  WHERE l.cik = c.cik AND l.is_active AND (l.symbol = r.price_symbol OR l.is_primary)
-                  ORDER BY (l.symbol = r.price_symbol) DESC NULLS LAST
-                  LIMIT 1
-                ) p ON true
+                LEFT JOIN listings l ON l.symbol = public.price_symbol(c.cik)
                 WHERE c.cik = :cik
                 """
             ),

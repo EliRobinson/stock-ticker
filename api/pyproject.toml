@@ -45,8 +45,6 @@ packages = ["src/stockticker"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-# `tests/support` holds shared test doubles (`from support.ai_fakes import ...`).
-pythonpath = ["tests"]
 
 [tool.ruff]
 line-length = 110

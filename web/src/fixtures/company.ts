@@ -1,4 +1,4 @@
-import type { Bar, CompanyDetail, Event, Paginated } from '@/lib/api'
+import type { Bar, CompanyDetail, EventsResponse, MarketEvent } from '@/lib/api'
 
 export const LAST_TRADING_DAY = '2024-09-17'
 
@@ -239,9 +239,9 @@ const ev = (
   cik: string,
   symbol: string,
   eventDate: string,
-  kind: Event['kind'],
+  kind: MarketEvent['kind'],
   title: string
-): Event => ({
+): MarketEvent => ({
   id,
   cik,
   symbol,
@@ -253,7 +253,7 @@ const ev = (
   source_ref: `${symbol}-${eventDate}-${kind}`
 })
 
-export const appleEvents: Paginated<Event> = {
+export const appleEvents: EventsResponse = {
   items: [
     ev(1, apple.cik, 'AAPL', '2020-08-31', 'split', '4-for-1 split'),
     ev(2, apple.cik, 'AAPL', '2022-04-28', 'filing_8k', '8-K · Q2 results'),
@@ -275,7 +275,7 @@ export const appleEvents: Paginated<Event> = {
   next_cursor: null
 }
 
-export const alphabetEvents: Paginated<Event> = {
+export const alphabetEvents: EventsResponse = {
   items: [
     ev(
       20,
@@ -315,4 +315,4 @@ export const alphabetEvents: Paginated<Event> = {
   next_cursor: null
 }
 
-export const noEvents: Paginated<Event> = { items: [], next_cursor: null }
+export const noEvents: EventsResponse = { items: [], next_cursor: null }

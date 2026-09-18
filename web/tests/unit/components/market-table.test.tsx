@@ -54,10 +54,13 @@ describe('Market table', () => {
     expect(firstSymbol()).toBe('XOM')
   })
 
-  it('sorts by day change when that header is clicked', async () => {
+  it('sorts numbers biggest first, then flips', async () => {
     const user = userEvent.setup()
     render(<Harness />)
     const header = screen.getByRole('columnheader', { name: /day change/i })
+    await user.click(within(header).getByRole('button'))
+    expect(header).toHaveAttribute('aria-sort', 'descending')
+    expect(firstSymbol()).toBe('AVGO')
     await user.click(within(header).getByRole('button'))
     expect(header).toHaveAttribute('aria-sort', 'ascending')
     expect(firstSymbol()).toBe('LLY')

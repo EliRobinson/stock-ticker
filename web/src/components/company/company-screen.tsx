@@ -24,7 +24,13 @@ import {
   TooltipContent,
   TooltipTrigger
 } from '@/components/ui/tooltip'
-import type { Bar, CompanyDetail, Event, MarketRow, Note } from '@/lib/api'
+import type {
+  Bar,
+  CompanyDetail,
+  MarketEvent,
+  MarketRow,
+  Note
+} from '@/lib/api'
 import {
   mapBarsToCandlestickSeries,
   mapBarsToVolumeSeries,
@@ -92,7 +98,7 @@ export interface CompanyScreenProps {
   bars: Bar[] | null
   backfill?: { loaded: number; expected: number } | null
   notes: Note[]
-  events: Event[]
+  events: MarketEvent[]
   today: string
   onSaveNote: (draft: NoteDraft) => void
   noteSaveError?: string | null
@@ -184,16 +190,17 @@ export function CompanyScreen({
       }
     const n = mapNotesToMarkers(notes, bars)
     const e = mapEventsToMarkers(shownEvents, bars)
-    const noteById = new Map(notes.map((x) => [x.id, x]))
+    // #8 clips each Note range to loaded bars; the marker sits at its start.
+    const rangeById = new Map(n.ranges.map((r) => [r.id, r]))
     const placed: PlacedMarker[] = [
       ...n.markers.map((m) => {
-        const note = noteById.get(m.id)
+        const range = rangeById.get(m.id)
         return {
           id: m.id,
           kind: 'note' as const,
           barDate: m.time,
-          start: note?.start_date ?? m.time,
-          end: note?.end_date ?? m.time
+          start: range?.from ?? m.time,
+          end: range?.to ?? m.time
         }
       }),
       ...e.markers.map((m) => ({

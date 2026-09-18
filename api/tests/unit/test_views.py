@@ -1,6 +1,7 @@
-from pydantic import TypeAdapter
+import pytest
+from pydantic import TypeAdapter, ValidationError
 
-from stockticker.models.views import ChartSpec, TableSpec, ViewSpec
+from stockticker.models.views import ChartSpec, TableColumn, TableSpec, ViewSpec
 
 
 def test_table_spec_kind_defaults_to_table() -> None:
@@ -21,3 +22,12 @@ def test_view_spec_discriminates_by_kind() -> None:
     )
     assert isinstance(table, TableSpec)
     assert isinstance(chart, ChartSpec)
+
+
+def test_the_schema_lists_the_value_formats_the_web_app_can_draw() -> None:
+    table_format = TableSpec.model_json_schema()["$defs"]["TableColumn"]["properties"]["format"]
+    assert "compact_currency" in table_format["anyOf"][0]["enum"]
+    y_format = ChartSpec.model_json_schema()["properties"]["y_format"]
+    assert "date" not in y_format["anyOf"][0]["enum"]
+    with pytest.raises(ValidationError):
+        TableColumn.model_validate({"key": "k", "label": "K", "format": "bogus"})

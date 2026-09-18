@@ -1030,6 +1030,17 @@
           "format": {
             "anyOf": [
               {
+                "enum": [
+                  "text",
+                  "integer",
+                  "number",
+                  "currency",
+                  "compact_currency",
+                  "percent",
+                  "fraction_as_percent",
+                  "date",
+                  "datetime"
+                ],
                 "type": "string"
               },
               {
@@ -1125,6 +1136,14 @@
           "y_format": {
             "anyOf": [
               {
+                "enum": [
+                  "integer",
+                  "number",
+                  "currency",
+                  "compact_currency",
+                  "percent",
+                  "fraction_as_percent"
+                ],
                 "type": "string"
               },
               {

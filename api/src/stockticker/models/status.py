@@ -35,6 +35,17 @@ class BackfillProgress(BaseModel):
     listings_total: int
 
 
+class AiStatus(BaseModel):
+    """Populated once the AI chat agent's `ai_usage` table (migration
+    0002+) and pricing module exist; see `_ai_status` in
+    `api/routers/status.py` for exactly what's real today versus a
+    placeholder."""
+
+    spend_usd: float
+    limit_usd: float
+    enabled: bool
+
+
 class StatusResponse(BaseModel):
     server_time: datetime
     market_clock: MarketClock | None
@@ -43,3 +54,4 @@ class StatusResponse(BaseModel):
     missing_keys: list[str]
     data_as_of: datetime | None
     open_gaps: int
+    ai: AiStatus

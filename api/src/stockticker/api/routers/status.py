@@ -20,13 +20,14 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from sqlalchemy.engine import Row
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from stockticker.config import Settings, get_settings
 from stockticker.db import get_app_writer_connection
 from stockticker.ingest.registry import JOBS
 from stockticker.marketdata import fetch_market_clock
-from stockticker.models.status import BackfillProgress, JobStatusEntry, StatusResponse
+from stockticker.models.status import AiStatus, BackfillProgress, JobStatusEntry, StatusResponse
 
 router = APIRouter(tags=["status"])
 
@@ -112,6 +113,24 @@ async def _open_gaps(conn: AsyncConnection) -> int:
     return row.items_failed if row else 0
 
 
+async def _ai_status(conn: AsyncConnection, settings: Settings) -> AiStatus:
+    """`ai_usage` is owned by the AI chat agent's migration (0002+, chained
+    after this one); read defensively so /api/v1/status still works before
+    that migration has run. `enabled` doesn't yet check
+    `stockticker.ai.pricing.price_for(settings.ai_model)` -- that module
+    doesn't exist in this codebase yet either; the AI chat agent extends
+    this condition once it does."""
+    try:
+        raw_spend = await conn.scalar(text("SELECT coalesce(sum(cost_usd), 0) FROM ai_usage"))
+        spend_usd = float(raw_spend or 0)
+    except DBAPIError:
+        await conn.rollback()
+        spend_usd = 0.0
+    limit_usd = float(settings.ai_spend_limit_usd)
+    enabled = bool(settings.anthropic_api_key) and spend_usd < limit_usd
+    return AiStatus(spend_usd=spend_usd, limit_usd=limit_usd, enabled=enabled)
+
+
 @router.get("/status", response_model=StatusResponse)
 async def status(
     conn: AsyncConnection = Depends(get_app_writer_connection),
@@ -126,4 +145,5 @@ async def status(
         missing_keys=settings.missing_keys(required_keys),
         data_as_of=await _data_as_of(conn),
         open_gaps=await _open_gaps(conn),
+        ai=await _ai_status(conn, settings),
     )

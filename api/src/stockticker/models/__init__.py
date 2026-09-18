@@ -6,6 +6,7 @@ from stockticker.models.market import MarketResponse, MarketRow
 from stockticker.models.notes import Note, NotePut, NotesPage, NoteUpdate
 from stockticker.models.problem import ProblemDetail
 from stockticker.models.status import (
+    AiStatus,
     BackfillProgress,
     JobRunStatus,
     JobStatusEntry,
@@ -39,6 +40,7 @@ __all__ = [
     "NotesPage",
     "NoteUpdate",
     "ProblemDetail",
+    "AiStatus",
     "BackfillProgress",
     "JobRunStatus",
     "JobStatusEntry",

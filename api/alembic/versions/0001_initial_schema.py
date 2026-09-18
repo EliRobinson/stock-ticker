@@ -95,11 +95,25 @@ def upgrade() -> None:
     op.execute("ALTER SCHEMA public OWNER TO app_owner;")
     op.execute("REVOKE ALL ON SCHEMA public FROM PUBLIC;")
     op.execute(f"GRANT CREATE ON DATABASE {DATABASE_NAME} TO app_owner;")
+    # PostgreSQL grants TEMP on every database to PUBLIC by default -- close
+    # that, and hand it back only to the roles that legitimately need scratch
+    # tables (app_owner for migrations, app_writer for ingest jobs).
+    # ai_reader never gets it: it cannot create a temp table to shadow a
+    # permanent one, even before the SQL guard (a later issue) rejects
+    # anything but a single SELECT.
+    op.execute(f"REVOKE TEMP ON DATABASE {DATABASE_NAME} FROM PUBLIC;")
+    op.execute(f"GRANT TEMP ON DATABASE {DATABASE_NAME} TO app_owner, app_writer;")
     _revoke_dangerous_functions_from_public()
     # app_writer needs these to run the job wrapper's advisory lock
     # (system design §4); nobody else gets them back.
     op.execute("GRANT EXECUTE ON FUNCTION pg_catalog.pg_try_advisory_lock(bigint) TO app_writer;")
     op.execute("GRANT EXECUTE ON FUNCTION pg_catalog.pg_advisory_unlock(bigint) TO app_writer;")
+    # set_config() lets a session change its own default_transaction_read_only
+    # (among other GUCs); revoking it from PUBLIC closes that specific
+    # function-call vector. It does NOT block the plain `SET` statement --
+    # see the ai_reader-read-only-escape test and its comment for why that
+    # doesn't matter in practice (ai_reader has no DML grant to escape to).
+    op.execute("REVOKE EXECUTE ON FUNCTION pg_catalog.set_config(text, text, boolean) FROM PUBLIC;")
 
     # --- Schema objects, owned by app_owner ------------------------------
     op.execute("SET ROLE app_owner;")
@@ -254,7 +268,7 @@ def _create_tables() -> None:
           close numeric(18, 6) NOT NULL,
           volume bigint NOT NULL,
           adj_close numeric(18, 6) NOT NULL,
-          source text NOT NULL,
+          source text NOT NULL DEFAULT 'alpaca',
           ingested_at timestamptz NOT NULL,
           PRIMARY KEY (symbol, trade_date),
           CHECK (
@@ -394,6 +408,7 @@ def _create_indexes() -> None:
     )
     op.execute("CREATE INDEX listings_cik_idx ON listings (cik);")
     op.execute("CREATE INDEX ingest_runs_job_started_at_idx ON ingest_runs (job, started_at DESC);")
+    op.execute("CREATE INDEX refetch_requests_requested_at_idx ON refetch_requests (requested_at);")
 
 
 def _create_notes_trigger() -> None:
@@ -678,12 +693,12 @@ def _create_returns_between_function() -> None:
         LANGUAGE sql
         STABLE
         SECURITY DEFINER
-        SET search_path = public, pg_catalog
+        SET search_path = pg_catalog, public, pg_temp
         AS $$
           WITH bounds AS (
             SELECT
-              (SELECT min(trade_date) FROM trading_days WHERE trade_date >= d1) AS start_date,
-              (SELECT min(trade_date) FROM trading_days WHERE trade_date >= d2) AS end_date
+              (SELECT min(trade_date) FROM public.trading_days WHERE trade_date >= d1) AS start_date,
+              (SELECT min(trade_date) FROM public.trading_days WHERE trade_date >= d2) AS end_date
           ),
           windowed AS (
             SELECT
@@ -699,8 +714,8 @@ def _create_returns_between_function() -> None:
                 PARTITION BY b.symbol ORDER BY b.trade_date
                 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
               ) AS running_peak
-            FROM daily_bars b
-            JOIN listings l ON l.symbol = b.symbol AND l.is_active
+            FROM public.daily_bars b
+            JOIN public.listings l ON l.symbol = b.symbol AND l.is_active
             CROSS JOIN bounds bnd
             WHERE bnd.start_date IS NOT NULL
               AND bnd.end_date IS NOT NULL
@@ -729,6 +744,22 @@ def _create_returns_between_function() -> None:
         "adj_close over the window; max_drawdown_pct is the largest peak-to-trough percent "
         "decline within the window (zero or negative; -12.5 means -12.5%). Call as: "
         "SELECT * FROM ai.returns_between(date ''2020-01-01'', date ''2020-12-31'').';"
+    )
+    op.execute(
+        """
+        CREATE FUNCTION ai.today_ny() RETURNS date
+        LANGUAGE sql
+        STABLE
+        SET search_path = pg_catalog, pg_temp
+        AS $$ SELECT current_date; $$;
+        """
+    )
+    op.execute(
+        "COMMENT ON FUNCTION ai.today_ny() IS "
+        "'Today''s date in the America/New_York timezone (the ai_reader session is set to it). "
+        "Use this instead of now()::date or current_date directly in a WHERE clause when you mean "
+        "\"today\" in the market''s sense -- now()::date is UTC and can already read as tomorrow "
+        "after 8pm ET.';"
     )
 
 
@@ -774,6 +805,7 @@ def _grant_ai_reader_privileges() -> None:
     op.execute("GRANT SELECT ON ALL TABLES IN SCHEMA ai TO ai_reader;")
     op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA ai GRANT SELECT ON TABLES TO ai_reader;")
     op.execute("GRANT EXECUTE ON FUNCTION ai.returns_between(date, date) TO ai_reader;")
+    op.execute("GRANT EXECUTE ON FUNCTION ai.today_ny() TO ai_reader;")
 
 
 # CIKs verified against SEC EDGAR company search (2026-09-17). BRK.B is

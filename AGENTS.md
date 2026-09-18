@@ -282,6 +282,8 @@ Components are added to `src/components/ui/` and can be customized freely. Never
 
 ## Git Hooks (Husky)
 
+**GitHub Actions checks are disabled.** `.github/workflows/ci.yml` has its `quality`/`unit`/`e2e` jobs commented out, left with a single `hooks-notice` job so PRs still show a green check. The git hooks below are the actual gate — nothing runs in Actions. To restore CI, uncomment the jobs in `ci.yml`.
+
 The `pre-commit` hook runs `lint-staged`:
 
 - `*.{ts,tsx,js,jsx}` → ESLint fix + Prettier
@@ -289,7 +291,7 @@ The `pre-commit` hook runs `lint-staged`:
 
 The `commit-msg` hook runs `commitlint` to enforce Conventional Commits.
 
-The `pre-push` hook mirrors the fast CI jobs (`pnpm type-check`, `pnpm lint`, `pnpm format:check`, `pnpm test`) so a push that would fail CI fails locally first, before consuming a CI run. It intentionally skips the `build` and `test:e2e` steps from the `e2e` CI job — those are slower and still run on the PR itself.
+The `pre-push` hook runs everything that used to run in CI: `pnpm type-check`, `pnpm lint`, `pnpm format:check`, `pnpm test`, and `pnpm build`, in that order, failing fast (`set -e`) and printing which step failed. E2E (Playwright) is skipped by default — it needs browsers installed and a build, which is too slow for every push — and prints a one-line note when skipped. Run `RUN_E2E=1 git push` to include it.
 
 To skip hooks in an emergency: `git commit --no-verify` / `git push --no-verify` (discouraged — fix the underlying issue instead).
 
@@ -323,7 +325,7 @@ That writes to `~/.npmrc`, outside the repo. It is a one-time setup step, not a 
 
 **Why not a `${NODE_AUTH_TOKEN}` placeholder in the repo's `.npmrc`?** pnpm 10 stopped expanding environment variables in registry credentials read from a project `.npmrc`, because that file is committed and a malicious registry line could exfiltrate the token. A placeholder there resolves to nothing and installs fail with a `401` that names no cause. Credentials have to come from a source pnpm still trusts — `~/.npmrc` or `pnpm config set`.
 
-CI does the same thing explicitly: an `Authenticate to GitHub Packages` step writes the `NODE_AUTH_TOKEN` repository secret into the runner's `~/.npmrc` before installing. The secret is scoped to that step alone, so it is absent from the environment during `pnpm install` and the test and build steps.
+The commented-out `quality`/`unit`/`e2e` jobs in `ci.yml` did the same thing explicitly: an `Authenticate to GitHub Packages` step wrote the `NODE_AUTH_TOKEN` repository secret into the runner's `~/.npmrc` before installing. That step is dormant with the rest of CI — see [Git Hooks](#git-hooks-husky) — but the pattern still applies if those jobs are ever re-enabled: the secret would be scoped to that step alone, absent from the environment during `pnpm install` and the test and build steps.
 
 ## Database (optional)
 

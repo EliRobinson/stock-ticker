@@ -1,4 +1,23 @@
-pnpm type-check
-pnpm lint
-pnpm format:check
-pnpm test
+set -e
+
+run_step() {
+  name="$1"
+  shift
+  echo "==> $name"
+  if ! "$@"; then
+    echo "pre-push failed at: $name" >&2
+    exit 1
+  fi
+}
+
+run_step "type-check" pnpm type-check
+run_step "lint" pnpm lint
+run_step "format:check" pnpm format:check
+run_step "test" pnpm test
+run_step "build" pnpm build
+
+if [ "$RUN_E2E" = "1" ]; then
+  run_step "test:e2e" pnpm test:e2e
+else
+  echo "Skipping E2E (RUN_E2E not set). Run with RUN_E2E=1 git push to include it."
+fi

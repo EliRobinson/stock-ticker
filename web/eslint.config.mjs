@@ -13,12 +13,11 @@ const eslintConfig = [
       'out/**',
       'build/**',
       'dist/**',
-      'coverage/**',
-      '.claude/**'
+      'coverage/**'
     ]
   },
   // Standard JS style rules, deferring formatting to Prettier.
-  // TypeScript linting is left to next/typescript below — neostandard's
+  // TypeScript linting is left to next/typescript below - neostandard's
   // own `ts: true` registers a second @typescript-eslint plugin instance
   // that conflicts with the one next/typescript registers.
   ...neostandard({ noStyle: true }),
@@ -30,12 +29,12 @@ const eslintConfig = [
         'error',
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }
       ],
-      '@typescript-eslint/no-explicit-any': 'warn',
+      '@typescript-eslint/no-explicit-any': 'error',
       '@typescript-eslint/consistent-type-imports': [
         'error',
         { prefer: 'type-imports' }
       ],
-      'no-console': ['warn', { allow: ['warn', 'error'] }]
+      'no-console': ['error', { allow: ['warn', 'error'] }]
     }
   },
   // Prettier must be last to disable conflicting formatting rules

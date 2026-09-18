@@ -16,7 +16,7 @@ from stockticker.ai.prompt import build_system_prompt, market_status_line
 from stockticker.ai.schema_prompt import schema_cache
 from stockticker.ai.spend import PostgresSpendLedger
 from stockticker.config import Settings
-from stockticker.db import get_ai_reader_engine, get_app_writer_engine
+from stockticker.db import get_ai_reader_engine, get_api_app_writer_engine
 from stockticker.marketdata import fetch_market_clock
 from stockticker.timeutil import NY_TZ, now_ny
 
@@ -81,7 +81,7 @@ def build_chat_deps(settings: Settings) -> ChatDeps:
         model=settings.ai_model,
         client=_anthropic_client(key) if key else None,
         executor=_executor(get_ai_reader_engine()),
-        ledger=PostgresSpendLedger(get_app_writer_engine()),
+        ledger=PostgresSpendLedger(get_api_app_writer_engine()),
         load_context=load_prompt_context,
         spend_limit_usd=settings.ai_spend_limit_usd,
         daily_token_budget=settings.ai_daily_token_budget,

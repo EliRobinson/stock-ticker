@@ -5,7 +5,7 @@ import {
   getQuoteStaleness,
   isQuoteStale,
   pollIntervalMs,
-  type MarketClockLike
+  refetchIntervalFor
 } from '@/lib/staleness'
 import {
   CLOSED_POLL_MS,
@@ -13,10 +13,11 @@ import {
   OPEN_POLL_MS,
   STALE_THRESHOLD_MS
 } from '@/lib/query-config'
+import type { MarketClock } from '@/lib/api'
 
 const SERVER_TIME = '2024-06-03T15:00:00.000Z'
 
-function clock(overrides: Partial<MarketClockLike>): MarketClockLike {
+function clock(overrides: Partial<MarketClock>): MarketClock {
   return {
     is_open: true,
     next_open: '2024-06-04T13:30:00.000Z',
@@ -159,5 +160,21 @@ describe('pollIntervalMs', () => {
       next_open: '2024-06-03T14:59:00.000Z'
     })
     expect(pollIntervalMs(c, SERVER_TIME)).toBe(MIN_POLL_MS)
+  })
+})
+
+describe('refetchIntervalFor', () => {
+  it('polls at OPEN_POLL_MS before the first response', () => {
+    expect(refetchIntervalFor(undefined)).toBe(OPEN_POLL_MS)
+  })
+
+  it('delegates to pollIntervalMs once there is a response', () => {
+    const data = {
+      market_clock: clock({ is_open: false }),
+      server_time: SERVER_TIME
+    }
+    expect(refetchIntervalFor(data)).toBe(
+      pollIntervalMs(data.market_clock, data.server_time)
+    )
   })
 })

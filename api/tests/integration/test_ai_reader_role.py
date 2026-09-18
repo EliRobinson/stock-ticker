@@ -34,19 +34,6 @@ async def executor(ai_reader_engine: AsyncEngine) -> AsyncIterator[AiReaderExecu
     await dispose_engines()
 
 
-@pytest_asyncio.fixture
-async def superuser_engine() -> AsyncIterator[AsyncEngine]:
-    engine = create_async_engine(get_settings().superuser_dsn)
-    try:
-        async with engine.connect() as conn:
-            await conn.execute(text("SELECT 1"))
-    except Exception:
-        await engine.dispose()
-        pytest.skip("Postgres not reachable as the superuser -- see tests/integration/conftest.py.")
-    yield engine
-    await engine.dispose()
-
-
 ATTACKS = [
     "SELECT 1; DELETE FROM ai.notes",
     "SELECT 1; SELECT 2",
@@ -204,14 +191,15 @@ async def test_pool_acquire_timeout_is_a_tool_error(ai_reader_engine: AsyncEngin
 
 
 async def test_cancelling_the_caller_cancels_the_running_query(
-    executor: AiReaderExecutor, superuser_engine: AsyncEngine
+    executor: AiReaderExecutor, ai_reader_engine: AsyncEngine
 ) -> None:
     marker = "cancel_probe_4242"
     task = asyncio.create_task(executor.execute(ENDLESS.format(marker=marker)))
     await asyncio.sleep(0.5)
 
     async def running() -> int:
-        async with superuser_engine.connect() as conn:
+        # A role sees its own sessions' query text in pg_stat_activity.
+        async with ai_reader_engine.connect() as conn:
             count = await conn.scalar(
                 text("SELECT count(*) FROM pg_stat_activity WHERE state = 'active' AND query LIKE :q"),
                 {"q": f"%{marker}%"},

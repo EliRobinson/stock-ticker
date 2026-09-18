@@ -71,7 +71,7 @@ async def load_prompt_context() -> PromptContext:
     status = await market_status(engine, now)
     return PromptContext(
         system=build_system_prompt(catalog, today=now.date(), now=now, market_status=status),
-        ai_views=catalog.view_names,
+        surface=catalog.surface,
     )
 
 

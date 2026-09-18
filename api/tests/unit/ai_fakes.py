@@ -22,6 +22,7 @@ from anthropic import AsyncAnthropic
 
 from stockticker.ai.convert import UIMessage
 from stockticker.ai.executor import Column, QueryResult, ToolError
+from stockticker.ai.guard import AiSurface
 from stockticker.ai.loop import ChatDeps, Limits, PromptContext
 from stockticker.ai.pricing import TokenUsage
 from stockticker.ai.spend import LedgerTotals, SpendGate, check_gate
@@ -285,7 +286,7 @@ def prompt_context() -> PromptContext:
             {"type": "text", "text": "stable prompt", "cache_control": {"type": "ephemeral"}},
             {"type": "text", "text": "Today is Thursday, 2026-09-17."},
         ],
-        ai_views=frozenset({"companies", "market_caps", "daily_prices", "listings"}),
+        surface=AiSurface(views=frozenset({"companies", "market_caps", "daily_prices", "listings"})),
     )
 
 

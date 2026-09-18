@@ -70,6 +70,25 @@ async def test_request_gives_up_after_max_attempts() -> None:
     assert route.call_count == 4
 
 
+@respx.mock
+async def test_request_with_attempts_one_does_not_retry_a_5xx() -> None:
+    """`attempts=1` (Alpaca `get_snapshots(retry=False)`, `get_clock`) makes
+    exactly one try, even for a normally-retryable status."""
+    route = respx.get("https://example.test/always-503").mock(return_value=httpx.Response(503))
+    async with build_http_client(base_url="https://example.test") as client:
+        with pytest.raises(Exception, match="retryable status"):
+            await request(client, "GET", "/always-503", rate_budget=RateBudgetName.SEC, attempts=1)
+    assert route.call_count == 1
+
+
+@respx.mock
+async def test_request_with_attempts_one_still_succeeds_on_the_first_try() -> None:
+    respx.get("https://example.test/ok").mock(return_value=httpx.Response(200, json={"ok": True}))
+    async with build_http_client(base_url="https://example.test") as client:
+        response = await request(client, "GET", "/ok", rate_budget=RateBudgetName.SEC, attempts=1)
+    assert response.status_code == 200
+
+
 def test_parse_retry_after_numeric_seconds() -> None:
     assert _parse_retry_after("5") == 5.0
 

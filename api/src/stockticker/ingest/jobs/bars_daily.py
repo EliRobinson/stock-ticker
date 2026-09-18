@@ -60,12 +60,14 @@ async def bars_daily(ctx: JobContext) -> JobResult:
 async def run_bars_daily(engine: AsyncEngine, source: BarSource) -> JobResult:
     async with engine.connect() as conn:
         window = await _recent_trading_days(conn, WINDOW_TRADING_DAYS)
+        await conn.commit()
     if not window:
         raise JobSkipped("no Trading Days recorded yet")
     start, end = window[0], window[-1]
 
     async with engine.connect() as conn:
         symbols = await _backfilled_symbols(conn)
+        await conn.commit()
     if not symbols:
         raise JobSkipped("no Listings have completed backfill yet")
 
@@ -83,6 +85,7 @@ async def run_bars_daily(engine: AsyncEngine, source: BarSource) -> JobResult:
         grouped = group_by_symbol(bars)
         async with engine.connect() as conn:
             stored = await _stored_adj_closes(conn, batch, start, end)
+            await conn.commit()
             for symbol in batch:
                 rows = grouped.get(symbol, [])
                 if not rows:
@@ -91,17 +94,20 @@ async def run_bars_daily(engine: AsyncEngine, source: BarSource) -> JobResult:
                     if detect_drift(rows, stored.get(symbol, {})):
                         await _queue_drift_refetch(conn, symbol)
                     result = await upsert_bars(conn, rows)
-                    rows_written += result.rows_written
-                    failed_items.extend(result.failed_items)
-                    await conn.commit()
                 except Exception as exc:  # noqa: BLE001 - recorded as a per-item failure, run continues
                     await conn.rollback()
                     failed_items.append(FailedItem(key=symbol, error=str(exc)))
+                else:
+                    await conn.commit()
+                    rows_written += result.rows_written
+                    failed_items.extend(result.failed_items)
 
     return JobResult(rows_written=rows_written, failed_items=failed_items)
 
 
 async def _recent_trading_days(conn: AsyncConnection, count: int) -> list[date]:
+    """Read-only; executes on `conn` without committing -- `run_bars_daily`
+    owns that decision (issue #26 item 3)."""
     rows = (
         await conn.execute(
             text(
@@ -111,11 +117,11 @@ async def _recent_trading_days(conn: AsyncConnection, count: int) -> list[date]:
             {"today": today_ny(), "n": count},
         )
     ).all()
-    await conn.commit()
     return sorted(row.trade_date for row in rows)
 
 
 async def _backfilled_symbols(conn: AsyncConnection) -> list[str]:
+    """Read-only; executes without committing -- see `_recent_trading_days`."""
     rows = (
         await conn.execute(
             text(
@@ -124,19 +130,18 @@ async def _backfilled_symbols(conn: AsyncConnection) -> list[str]:
             )
         )
     ).all()
-    await conn.commit()
     return [row.symbol for row in rows]
 
 
 async def _stored_adj_closes(
     conn: AsyncConnection, symbols: list[str], start: date, end: date
 ) -> dict[str, dict[date, Decimal]]:
+    """Read-only; executes without committing -- see `_recent_trading_days`."""
     stmt = text(
         "SELECT symbol, trade_date, adj_close FROM daily_bars "
         "WHERE symbol IN :symbols AND trade_date BETWEEN :start AND :end"
     ).bindparams(bindparam("symbols", expanding=True))
     rows = (await conn.execute(stmt, {"symbols": symbols, "start": start, "end": end})).all()
-    await conn.commit()
     result: dict[str, dict[date, Decimal]] = {}
     for row in rows:
         result.setdefault(row.symbol, {})[row.trade_date] = row.adj_close
@@ -144,6 +149,9 @@ async def _stored_adj_closes(
 
 
 async def _queue_drift_refetch(conn: AsyncConnection, symbol: str) -> None:
+    """Executes without committing -- `run_bars_daily` commits this in the
+    same transaction as the bar upsert it precedes, so the two land or roll
+    back together (issue #26 item 3)."""
     await conn.execute(
         text(
             "INSERT INTO refetch_requests (symbol, reason, from_date) "
@@ -153,7 +161,6 @@ async def _queue_drift_refetch(conn: AsyncConnection, symbol: str) -> None:
         ),
         {"symbol": symbol, "from_date": HISTORY_START},
     )
-    await conn.commit()
 
 
 __all__ = [

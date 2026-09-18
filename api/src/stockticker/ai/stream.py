@@ -163,32 +163,53 @@ class UIMessageStreamEncoder:
 _END = object()
 _background_tasks: set[asyncio.Task[None]] = set()
 
+Emit = Callable[[str], Awaitable[None]]
+Producer = Callable[[Emit], Awaitable[None]]
+
+# What the relay sends when the producer itself crashes. The producer closes its
+# own parts on every failure it can see; this is the last resort, so the
+# client still gets an error and a finished stream.
+_CRASH_EVENTS = [
+    sse({"type": "error", "errorText": "The answer stopped on an internal error. Try again."}),
+    sse({"type": "finish", "finishReason": "error"}),
+    DONE,
+]
+
 
 async def until_disconnected(
-    source: AsyncIterator[str],
+    producer: Producer,
     is_disconnected: Callable[[], Awaitable[bool]],
     *,
     poll_seconds: float = 0.25,
 ) -> AsyncIterator[str]:
-    """Relays `source` until the client disconnects.
+    """Runs `producer` in its own task and relays what it emits until the
+    client disconnects.
 
-    `source` runs in its own task, so a disconnect is noticed while the loop
-    is waiting on the model or on Postgres, not only between chunks. On
-    disconnect that task is cancelled (which closes the Anthropic stream and
+    Because the producer runs apart from the response, a disconnect is noticed
+    while the loop waits on the model or on Postgres, not only between chunks.
+    On disconnect the task is cancelled (which closes the Anthropic stream and
     cancels the running query) and nothing more is yielded."""
     queue: asyncio.Queue[object] = asyncio.Queue(maxsize=64)
+    finished = False
 
-    async def pump() -> None:
+    async def emit(event: str) -> None:
+        nonlocal finished
+        finished = event == DONE
+        await queue.put(event)
+
+    async def run() -> None:
         try:
-            async for chunk in source:
-                await queue.put(chunk)
+            await producer(emit)
         except Exception:
-            _logger.exception("ai_stream_source_failed")
+            _logger.exception("ai_stream_producer_failed")
+            if not finished:
+                for event in _CRASH_EVENTS:
+                    await queue.put(event)
         await queue.put(_END)
 
-    producer = asyncio.create_task(pump())
-    _background_tasks.add(producer)
-    producer.add_done_callback(_background_tasks.discard)
+    task = asyncio.create_task(run())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
     try:
         while True:
             getter = asyncio.ensure_future(queue.get())
@@ -207,4 +228,4 @@ async def until_disconnected(
             assert isinstance(item, str)
             yield item
     finally:
-        producer.cancel()
+        task.cancel()

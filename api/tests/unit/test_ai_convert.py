@@ -12,7 +12,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from support.ai_fakes import FakeExecutor, ScriptedAnthropic, make_deps, result, text_answer, tool_call, user
+from ai_fakes import FakeExecutor, ScriptedAnthropic, make_deps, result, text_answer, tool_call, user
 
 from stockticker.ai.convert import (
     SUMMARY_BYTES,
@@ -22,6 +22,7 @@ from stockticker.ai.convert import (
     to_anthropic_messages,
 )
 from stockticker.ai.loop import stream_answer
+from stockticker.ai.tools import TOOL_NAMES
 
 GOLDEN = Path(__file__).parent / "golden"
 QUESTION = "Which 2 companies are largest?"
@@ -72,7 +73,7 @@ async def test_round_trip_matches_what_the_loop_sent_the_model() -> None:
     sent_on_last_call = anthropic.requests[2]["messages"]
 
     history = [user(QUESTION), fixture("normal_answer_with_table")]
-    converted = to_anthropic_messages([*history, user("And second?", "u2")])
+    converted = to_anthropic_messages([*history, user("And second?", "u2")], tool_names=TOOL_NAMES)
 
     # Everything the model saw is reconstructed from the client's copy, then
     # the final text and the new question follow.
@@ -84,7 +85,9 @@ async def test_round_trip_matches_what_the_loop_sent_the_model() -> None:
 
 
 def test_data_parts_are_dropped_and_steps_split_turns() -> None:
-    converted = to_anthropic_messages([user(QUESTION), fixture("normal_answer_with_table"), user("next")])
+    converted = to_anthropic_messages(
+        [user(QUESTION), fixture("normal_answer_with_table"), user("next")], tool_names=TOOL_NAMES
+    )
     roles = [m["role"] for m in converted]
     assert roles == ["user", "assistant", "user", "assistant", "user", "assistant", "user"]
     assert "data-view" not in json.dumps(converted)
@@ -92,7 +95,9 @@ def test_data_parts_are_dropped_and_steps_split_turns() -> None:
 
 
 def test_output_error_becomes_an_is_error_result() -> None:
-    converted = to_anthropic_messages([user("roles?"), fixture("tool_error"), user("ok")])
+    converted = to_anthropic_messages(
+        [user("roles?"), fixture("tool_error"), user("ok")], tool_names=TOOL_NAMES
+    )
     tool_result: Any = converted[2]["content"][0]  # type: ignore[index]
     assert tool_result["type"] == "tool_result"
     assert tool_result["is_error"] is True
@@ -102,7 +107,7 @@ def test_output_error_becomes_an_is_error_result() -> None:
 
 def test_unfinished_tool_call_becomes_an_is_error_result() -> None:
     converted = to_anthropic_messages(
-        [user(QUESTION), fixture("disconnected_during_tool"), user("try again")]
+        [user(QUESTION), fixture("disconnected_during_tool"), user("try again")], tool_names=TOOL_NAMES
     )
     assistant, results = converted[1], converted[2]
     assert [b["type"] for b in assistant["content"]] == ["text", "tool_use"]  # type: ignore[index]
@@ -116,7 +121,7 @@ def test_unfinished_tool_call_becomes_an_is_error_result() -> None:
 
 def test_unfinished_call_and_next_question_merge_into_one_user_turn() -> None:
     converted = to_anthropic_messages(
-        [user(QUESTION), fixture("disconnected_during_tool"), user("try again")]
+        [user(QUESTION), fixture("disconnected_during_tool"), user("try again")], tool_names=TOOL_NAMES
     )
     assert [m["role"] for m in converted] == ["user", "assistant", "user"]
     blocks = converted[2]["content"]
@@ -175,7 +180,7 @@ def test_non_text_parts_and_system_messages_are_dropped() -> None:
         UIMessage(role="user", parts=[{"type": "text", "text": "   "}]),
         UIMessage(role="user", parts=[{"type": "text", "text": "Top 5?"}]),
     ]
-    assert to_anthropic_messages(messages) == [
+    assert to_anthropic_messages(messages, tool_names=TOOL_NAMES) == [
         {"role": "user", "content": [{"type": "text", "text": "Hi"}]},
         {"role": "assistant", "content": [{"type": "text", "text": "Hello."}]},
         {"role": "user", "content": [{"type": "text", "text": "Top 5?"}]},
@@ -200,14 +205,14 @@ def test_text_after_a_tool_call_starts_a_new_turn_without_step_markers() -> None
         ),
         user("next"),
     ]
-    converted = to_anthropic_messages(messages)
+    converted = to_anthropic_messages(messages, tool_names=TOOL_NAMES)
     assert [m["role"] for m in converted] == ["user", "assistant", "user", "assistant", "user"]
     assert converted[3] == {"role": "assistant", "content": [{"type": "text", "text": "Done."}]}
 
 
 def test_trailing_assistant_turn_is_dropped() -> None:
     converted = to_anthropic_messages(
-        [user("q"), UIMessage(role="assistant", parts=[{"type": "text", "text": "a"}])]
+        [user("q"), UIMessage(role="assistant", parts=[{"type": "text", "text": "a"}])], tool_names=TOOL_NAMES
     )
     assert converted == [{"role": "user", "content": [{"type": "text", "text": "q"}]}]
 
@@ -230,6 +235,6 @@ def test_dynamic_tool_parts_are_converted() -> None:
         ),
         user("next"),
     ]
-    converted = to_anthropic_messages(messages)
+    converted = to_anthropic_messages(messages, tool_names=TOOL_NAMES)
     assert converted[1]["content"][0]["name"] == "run_sql"  # type: ignore[index]
     assert converted[2]["content"][0]["is_error"] is True  # type: ignore[index]

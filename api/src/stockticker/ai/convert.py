@@ -22,9 +22,9 @@ import json
 from typing import Any, Literal, cast
 
 from anthropic.types import MessageParam
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from stockticker.ai.tools import TOOLS_BY_NAME, wrap_untrusted
+from stockticker.ai.serialize import wrap_untrusted
 
 SUMMARY_BYTES = 2 * 1024
 UNFINISHED_TOOL_RESULT = "This tool call never finished (the answer was interrupted). Its result is unknown."
@@ -34,12 +34,26 @@ _SUMMARY_SUFFIX = "...[cut to 2 KB; run the query again to see more]"
 _Turn = dict[str, Any]
 
 
+MAX_MESSAGES = 500
+MAX_PARTS_PER_MESSAGE = 200
+MAX_TEXT_PART_CHARS = 32_000
+
+
 class UIMessage(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     id: str = ""
     role: Literal["system", "user", "assistant"]
-    parts: list[dict[str, Any]] = Field(default_factory=list)
+    parts: list[dict[str, Any]] = Field(default_factory=list, max_length=MAX_PARTS_PER_MESSAGE)
+
+    @field_validator("parts")
+    @classmethod
+    def _text_parts_are_bounded(cls, parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        for part in parts:
+            text = part.get("text")
+            if isinstance(text, str) and len(text) > MAX_TEXT_PART_CHARS:
+                raise ValueError(f"a text part is longer than {MAX_TEXT_PART_CHARS:,} characters")
+        return parts
 
 
 class ChatRequest(BaseModel):
@@ -49,7 +63,7 @@ class ChatRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     id: str | None = None
-    messages: list[UIMessage] = Field(min_length=1, max_length=500)
+    messages: list[UIMessage] = Field(min_length=1, max_length=MAX_MESSAGES)
     trigger: str | None = None
     messageId: str | None = None  # noqa: N815 -- the AI SDK's field name
 
@@ -104,7 +118,7 @@ def _assistant_steps(parts: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     return [step for step in steps if step]
 
 
-def _convert_assistant(parts: list[dict[str, Any]]) -> list[_Turn]:
+def _convert_assistant(parts: list[dict[str, Any]], tool_names: frozenset[str]) -> list[_Turn]:
     messages: list[_Turn] = []
     for step in _assistant_steps(parts):
         content: list[dict[str, Any]] = []
@@ -117,7 +131,7 @@ def _convert_assistant(parts: list[dict[str, Any]]) -> list[_Turn]:
                 continue
             name = _tool_name(part)
             call_id = part.get("toolCallId")
-            if name not in TOOLS_BY_NAME or not isinstance(call_id, str) or not call_id:
+            if name not in tool_names or not isinstance(call_id, str) or not call_id:
                 continue
             tool_input = part.get("input")
             content.append(
@@ -169,13 +183,14 @@ def _convert_user(parts: list[dict[str, Any]]) -> list[_Turn]:
     return [{"role": "user", "content": content}] if content else []
 
 
-def to_anthropic_messages(messages: list[UIMessage]) -> list[MessageParam]:
+def to_anthropic_messages(messages: list[UIMessage], *, tool_names: frozenset[str]) -> list[MessageParam]:
+    """`tool_names`: tool parts for any other name are dropped."""
     converted: list[_Turn] = []
     for message in messages:
         if message.role == "user":
             converted.extend(_convert_user(message.parts))
         elif message.role == "assistant":
-            converted.extend(_convert_assistant(message.parts))
+            converted.extend(_convert_assistant(message.parts, tool_names))
     merged = _merge_same_role(converted)
     while merged and merged[0]["role"] != "user":
         merged.pop(0)

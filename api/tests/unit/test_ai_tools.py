@@ -8,18 +8,35 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
-from support.ai_fakes import FakeExecutor, result
+from ai_fakes import FakeExecutor, result
 
 from stockticker.ai.executor import ToolError
+from stockticker.ai.serialize import MODEL_BYTE_LIMIT, MODEL_ROW_LIMIT, json_value, wrap_untrusted
 from stockticker.ai.tools import (
-    MODEL_BYTE_LIMIT,
-    MODEL_ROW_LIMIT,
+    INTERNAL_TOOL_ERROR,
     TOOLS,
     AnswerTools,
+    ToolFailure,
+    ToolOutcome,
+    ToolSuccess,
     anthropic_tools,
-    json_value,
-    wrap_untrusted,
 )
+
+
+def ok(outcome: ToolOutcome) -> ToolSuccess:
+    assert isinstance(outcome, ToolSuccess), outcome
+    return outcome
+
+
+def failed(outcome: ToolOutcome) -> str:
+    assert isinstance(outcome, ToolFailure), outcome
+    return outcome.message
+
+
+def view_json(outcome: ToolOutcome) -> dict[str, Any]:
+    view = ok(outcome).view
+    assert view is not None
+    return view.model_dump(mode="json")
 
 
 def unwrap(content: str) -> Any:
@@ -67,62 +84,62 @@ async def test_run_sql_rounds_numbers_to_six_significant_digits() -> None:
         )
     )
     outcome = await run_sql(AnswerTools(executor))
-    assert outcome.output["rows"] == [
+    assert ok(outcome).output["rows"] == [
         [3123460000000, 0.123457, 123456789, "2020-01-02", "2020-01-02T03:04:00"]
     ]
-    assert unwrap(outcome.model_content) == outcome.output
+    assert unwrap(outcome.model_content) == ok(outcome).output
 
 
 async def test_run_sql_sends_at_most_200_rows_and_keeps_the_rest_for_show() -> None:
     rows = [(i,) for i in range(1_000)]
     tools = AnswerTools(FakeExecutor(result([("n", "int4")], rows)))
     outcome = await run_sql(tools)
-    assert len(outcome.output["rows"]) == MODEL_ROW_LIMIT
-    assert outcome.output["row_count"] == 1_000
-    assert outcome.output["truncated"] is True
+    assert len(ok(outcome).output["rows"]) == MODEL_ROW_LIMIT
+    assert ok(outcome).output["row_count"] == 1_000
+    assert ok(outcome).output["truncated"] is True
     assert len(tools.results["r1"].rows) == 1_000
 
 
 async def test_run_sql_keeps_at_most_5000_rows_and_says_the_count_is_capped() -> None:
     tools = AnswerTools(FakeExecutor(result([("n", "int4")], [(i,) for i in range(5_001)])))
     outcome = await run_sql(tools)
-    assert outcome.output["row_count"] == 5_000
-    assert outcome.output["row_count_is_capped"] is True
+    assert ok(outcome).output["row_count"] == 5_000
+    assert ok(outcome).output["row_count_is_capped"] is True
     assert len(tools.results["r1"].rows) == 5_000
 
 
 async def test_run_sql_keeps_the_model_payload_under_16kb() -> None:
     rows = [("x" * 900,) for _ in range(200)]
     outcome = await run_sql(AnswerTools(FakeExecutor(result([("body", "text")], rows))))
-    assert len(json.dumps(outcome.output, separators=(",", ":")).encode()) <= MODEL_BYTE_LIMIT
-    assert 0 < len(outcome.output["rows"]) < 200
-    assert outcome.output["truncated"] is True
+    assert len(json.dumps(ok(outcome).output, separators=(",", ":")).encode()) <= MODEL_BYTE_LIMIT
+    assert 0 < len(ok(outcome).output["rows"]) < 200
+    assert ok(outcome).output["truncated"] is True
 
 
 async def test_run_sql_clips_huge_cells() -> None:
     outcome = await run_sql(AnswerTools(FakeExecutor(result([("body", "text")], [("y" * 50_000,)]))))
-    (cell,) = outcome.output["rows"][0]
+    (cell,) = ok(outcome).output["rows"][0]
     assert cell.endswith("[cut]") and len(cell) < 1_100
-    assert outcome.output["truncated"] is True
+    assert ok(outcome).output["truncated"] is True
 
 
 async def test_run_sql_guard_error_is_a_tool_error() -> None:
     executor = FakeExecutor()
     outcome = await run_sql(AnswerTools(executor), "DELETE FROM ai.notes")
-    assert outcome.is_error
+    message = failed(outcome)
     assert executor.queries == []
-    assert unwrap(outcome.model_content) == {"error": outcome.error}
+    assert unwrap(outcome.model_content) == {"error": message}
 
 
 async def test_run_sql_database_error_is_a_tool_error() -> None:
     outcome = await run_sql(AnswerTools(FakeExecutor(ToolError("SQL error: division by zero"))))
-    assert outcome.error == "SQL error: division by zero"
+    assert failed(outcome) == "SQL error: division by zero"
 
 
 async def test_run_sql_executes_the_wrapped_query() -> None:
     executor = FakeExecutor(result([("name", "text")], []))
     await run_sql(AnswerTools(executor), "select name from companies -- hi")
-    assert executor.queries == ["SELECT * FROM (SELECT name FROM companies) AS q LIMIT 5001"]
+    assert executor.queries == ["SELECT * FROM (SELECT name FROM ai.companies) AS q LIMIT 5001"]
 
 
 async def test_result_ids_are_unique_per_answer() -> None:
@@ -147,12 +164,11 @@ async def test_show_table_builds_a_table_spec_from_the_full_result() -> None:
         "show_table",
         {"result_id": "r1", "title": "T", "columns": [{"key": "cap", "label": "Cap", "format": "number"}]},
     )
-    assert not outcome.is_error
-    assert outcome.view is not None
-    assert outcome.view["kind"] == "table"
-    assert len(outcome.view["rows"]) == 300
-    assert outcome.view["rows"][0] == {"cap": 1.23456789}
-    assert outcome.view_id == outcome.view["id"]
+    view = view_json(outcome)
+    assert view["kind"] == "table"
+    assert len(view["rows"]) == 300
+    assert view["rows"][0] == {"cap": 1.23456789}
+    assert ok(outcome).output["view_id"] == view["id"]
 
 
 @pytest.mark.parametrize(
@@ -178,8 +194,7 @@ async def test_show_table_builds_a_table_spec_from_the_full_result() -> None:
 async def test_show_table_rejects_bad_input(tool_input: dict[str, Any], message: str) -> None:
     tools = await tools_with([("name", "text")], [("A",)])
     outcome = await tools.run("show_table", tool_input)
-    assert outcome.is_error and message in (outcome.error or "")
-    assert outcome.view is None
+    assert message in failed(outcome)
 
 
 async def test_show_table_rejects_duplicate_column_names() -> None:
@@ -187,7 +202,7 @@ async def test_show_table_rejects_duplicate_column_names() -> None:
     outcome = await tools.run(
         "show_table", {"result_id": "r1", "title": "T", "columns": [{"key": "cik", "label": "C"}]}
     )
-    assert "duplicate column names" in (outcome.error or "")
+    assert "duplicate column names" in failed(outcome)
 
 
 async def test_show_chart_builds_a_timeseries_spec() -> None:
@@ -202,7 +217,7 @@ async def test_show_chart_builds_a_timeseries_spec() -> None:
             "y_format": "currency",
         },
     )
-    assert outcome.view == {
+    assert view_json(outcome) == {
         "kind": "timeseries",
         "id": "view-1",
         "title": "T",
@@ -228,7 +243,7 @@ async def test_show_chart_validates_the_spec(x: str, series: list[dict[str, str]
         [("d", "date"), ("a", "numeric"), ("name", "text")], [(date(2020, 1, 2), 1, "x")]
     )
     outcome = await tools.run("show_chart", {"result_id": "r1", "title": "T", "x": x, "series": series})
-    assert outcome.is_error and message in (outcome.error or "")
+    assert message in failed(outcome)
 
 
 async def test_show_rejects_a_result_from_the_current_turn() -> None:
@@ -238,12 +253,12 @@ async def test_show_rejects_a_result_from_the_current_turn() -> None:
     outcome = await tools.run(
         "show_table", {"result_id": "r1", "title": "T", "columns": [{"key": "name", "label": "N"}]}
     )
-    assert "same turn" in (outcome.error or "")
+    assert "same turn" in failed(outcome)
 
 
 async def test_unknown_tool_is_a_tool_error() -> None:
     outcome = await AnswerTools(FakeExecutor()).run("drop_tables", {})
-    assert "Unknown tool" in (outcome.error or "")
+    assert "Unknown tool" in failed(outcome)
 
 
 # --- serialization -----------------------------------------------------------------
@@ -269,3 +284,23 @@ def test_wrap_untrusted_cannot_be_closed_by_data() -> None:
 )
 def test_json_value(value: Any, expected: Any) -> None:
     assert json_value(value) == expected
+
+
+async def test_show_table_cuts_long_text_cells() -> None:
+    tools = await tools_with([("body", "text")], [("z" * 50_000,)])
+    outcome = await tools.run(
+        "show_table", {"result_id": "r1", "title": "T", "columns": [{"key": "body", "label": "B"}]}
+    )
+    (row,) = view_json(outcome)["rows"]
+    assert row["body"].endswith("[cut]") and len(row["body"]) < 1_100
+
+
+async def test_an_unexpected_tool_exception_is_a_tool_failure_not_the_end_of_the_answer() -> None:
+    class Exploding:
+        async def execute(self, sql: str) -> Any:
+            raise KeyError("boom")
+
+    tools = AnswerTools(Exploding())
+    tools.step = 1
+    outcome = await tools.run("run_sql", {"sql": "SELECT name FROM ai.companies", "purpose": "p"})
+    assert failed(outcome) == INTERNAL_TOOL_ERROR

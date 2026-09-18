@@ -31,13 +31,15 @@ must never overwrite an already-set value.
 
 Every symbol commits on its own connection (system design §4: "Commit per
 symbol"), opened only after `BarSource.daily_bars` has already returned --
-no transaction is ever open across an HTTP call. A symbol with one or more
-outstanding refetch rows has each of them resolved through issue #5's
-shared `ingest.refetch` contract in the same per-symbol commit that
-rewrites its series: `finish_refetch` on success (it leaves an open `gap`
-row's attempt count alone -- no bar in the window on this pass -- and
-counts that as a failed attempt itself), `mark_refetch_failed` for every
-reason on a symbol that raises mid-write.
+no transaction is ever open across an HTTP call. `_write_symbol` only
+executes; `run_bars_backfill` is the one place that commits or rolls back,
+per symbol, so that rule is checkable by inspection (issue #26 item 3). A
+symbol with one or more outstanding refetch rows has each of them resolved
+through issue #5's shared `ingest.refetch` contract in that same per-symbol
+transaction: `finish_refetch` on success (it leaves an open `gap` row's
+attempt count alone -- no bar in the window on this pass -- and counts that
+as a failed attempt itself), `mark_refetch_failed` for every reason on a
+symbol that raises mid-write.
 
 A bar whose `high`/`low` sits far outside its own `open`/`close` (a SIP bad
 print, not a real move) is clamped before it's written -- see
@@ -130,6 +132,7 @@ async def bars_backfill(ctx: JobContext) -> JobResult:
 async def run_bars_backfill(engine: AsyncEngine, source: BarSource) -> JobResult:
     async with engine.connect() as conn:
         plans = await _select_batch(conn)
+        await conn.commit()
     if not plans:
         raise JobSkipped("no listings need backfilling")
 
@@ -148,14 +151,16 @@ async def run_bars_backfill(engine: AsyncEngine, source: BarSource) -> JobResult
         outcome = outcomes[plan.symbol]
         async with engine.connect() as conn:
             try:
-                written = await _commit_symbol(conn, plan, outcome)
-                rows_written += written
+                written = await _write_symbol(conn, plan, outcome)
             except Exception as exc:  # noqa: BLE001 - recorded as a per-item failure, run continues
                 await conn.rollback()
                 failed_items.append(FailedItem(key=plan.symbol, error=str(exc)))
                 for reason in plan.refetch_reasons:
                     await mark_refetch_failed(conn, plan.symbol, reason, str(exc))
                 await conn.commit()
+            else:
+                await conn.commit()
+                rows_written += written
 
     return JobResult(rows_written=rows_written, failed_items=failed_items)
 
@@ -218,13 +223,16 @@ async def _select_batch(conn: AsyncConnection) -> list[SymbolBackfillPlan]:
                     first_run=resume_from is None,
                 )
             )
-    await conn.commit()
     return plans
 
 
-async def _commit_symbol(
+async def _write_symbol(
     conn: AsyncConnection, plan: SymbolBackfillPlan, outcome: SymbolBackfillOutcome
 ) -> int:
+    """Executes one symbol's writes on `conn` -- upsert, watermark, listing
+    flags, and refetch resolution -- without committing or rolling back.
+    `run_bars_backfill` owns that decision, since only it knows whether the
+    whole set succeeded."""
     written = 0
     if outcome.rows:
         result = await upsert_bars(conn, outcome.rows)
@@ -264,7 +272,6 @@ async def _commit_symbol(
         for reason in plan.refetch_reasons:
             await finish_refetch(conn, plan.symbol, reason, plan.refetch_selected_at)
 
-    await conn.commit()
     return written
 
 

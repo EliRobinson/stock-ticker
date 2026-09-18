@@ -1,31 +1,36 @@
 """Alpaca REST client (system design §4, ADR 0001).
 
 Two hosts: the trading API (`/v2/clock`, `/v2/calendar`) and the market-data
-API (`/v2/stocks/...`, `/v1/corporate-actions`). Every call goes through
-`stockticker.ingest.http.request` for the shared retry/rate-budget policy,
-except `get_snapshots(..., retry=False)` (`quotes_poll`), which draws from
-the rate budget directly and makes a single attempt -- system design §4:
-"No retries, because the next tick is the retry."
+API (`/v2/stocks/...`, `/v1/corporate-actions`). Every call, including
+`get_snapshots(..., retry=False)` (`quotes_poll`) and `get_clock`, goes
+through `stockticker.ingest.http.request` for the shared rate-budget policy;
+`retry=False` and the clock's own fetch both map to `request(...,
+attempts=1)` rather than bypassing it -- system design §4: "No retries,
+because the next tick is the retry."
 
-`get_bars` and `get_corporate_actions` exhaust pagination themselves (loop
-on `next_page_token`) so a caller always gets one fully-paged result for
-the range it asked for; page tokens are never persisted (system design §4,
-`bars_backfill`: "Page tokens are never saved").
+`get_bars` and `get_corporate_actions` exhaust pagination themselves,
+through the shared `_paged()` helper (loop on `next_page_token`), so a
+caller always gets one fully-paged result for the range it asked for;
+page tokens are never persisted (system design §4, `bars_backfill`: "Page
+tokens are never saved"). `get_calendar` never paginates -- Alpaca's
+`/v2/calendar` returns the whole requested range in one response.
 """
 
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from functools import lru_cache
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
+
+import httpx
 
 from stockticker.config import get_settings
 from stockticker.ingest.common import FEED_IEX, FEED_SIP, ny_date
-from stockticker.ingest.http import RateBudgetName, build_http_client, get_rate_budget, request
+from stockticker.ingest.http import MAX_ATTEMPTS, RateBudgetName, build_http_client, request
 from stockticker.ingest.providers import ProviderQuote
 from stockticker.models.status import MarketClock
 from stockticker.timeutil import NY_TZ
@@ -61,6 +66,29 @@ def _parse_timestamp(value: str) -> datetime:
 def _combine_ny(trade_date: date, hhmm: str) -> datetime:
     hour, minute = (int(part) for part in hhmm.split(":"))
     return datetime(trade_date.year, trade_date.month, trade_date.day, hour, minute, tzinfo=NY_TZ)
+
+
+def _is_open_between(next_open: datetime, next_close: datetime, now: datetime) -> bool:
+    """Alpaca's clock shape: while the market is open, `next_close` (today's
+    close) comes before `next_open` (the *following* session's open); while
+    closed, `next_open` comes first. Comparing `now` against whichever shape
+    a cached pair has lets a stale clock still answer correctly through one
+    open-or-close transition it has not itself observed."""
+    if next_close < next_open:
+        return now < next_close
+    return next_open <= now < next_close
+
+
+def _stale_clock(cached: MarketClock) -> MarketClock:
+    """The live `/v2/clock` fetch failed -- fall back to the last clock this
+    client saw, re-deriving `is_open` instead of trusting the stored flag,
+    which the elapsed time may have made wrong."""
+    now = datetime.now(UTC)
+    return MarketClock(
+        is_open=_is_open_between(cached.next_open, cached.next_close, now),
+        next_open=cached.next_open,
+        next_close=cached.next_close,
+    )
 
 
 @dataclass(slots=True, frozen=True)
@@ -177,11 +205,29 @@ class AlpacaClient:
         await self._data.aclose()
 
     async def get_clock(self, *, use_cache: bool = True) -> MarketClock:
-        if use_cache and self._clock_cache is not None:
-            fetched_at, cached = self._clock_cache
+        """Draws from the quotes budget, not the general one -- `quotes_poll`
+        calls this every 15s tick, and freshness (N1) must never queue
+        behind a slow backfill batch spending the general budget. A single
+        attempt: an Alpaca outage right now falls back to the last clock
+        this client saw rather than block the tick on retries, with
+        `is_open` re-derived from that cached clock's `next_open`/
+        `next_close` (`_is_open_between`) since the elapsed time may have
+        made the cached flag itself wrong."""
+        cached_entry = self._clock_cache
+        if use_cache and cached_entry is not None:
+            fetched_at, cached = cached_entry
             if time.monotonic() - fetched_at < CLOCK_CACHE_SECONDS:
                 return cached
-        response = await request(self._trading, "GET", "/v2/clock", rate_budget=RateBudgetName.ALPACA)
+
+        try:
+            response = await request(
+                self._trading, "GET", "/v2/clock", rate_budget=RateBudgetName.ALPACA_QUOTES, attempts=1
+            )
+        except httpx.HTTPError:
+            if cached_entry is None:
+                raise
+            return _stale_clock(cached_entry[1])
+
         body = response.json()
         clock = MarketClock(
             is_open=body["is_open"],
@@ -208,6 +254,25 @@ class AlpacaClient:
             for row in response.json()
         ]
 
+    async def _paged(
+        self, method: str, url: str, *, params: dict[str, str | int], rate_budget: RateBudgetName
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Yield each page's JSON body from `url` against the market-data
+        host, merging `next_page_token` into `params` on every request after
+        the first until Alpaca stops sending one. Shared by `get_bars` and
+        `get_corporate_actions`, whose only difference is what they do with
+        each page's body; page tokens are never persisted (system design
+        §4, `bars_backfill`: "Page tokens are never saved")."""
+        page_token: str | None = None
+        while True:
+            page_params = dict(params) if page_token is None else {**params, "page_token": page_token}
+            response = await request(self._data, method, url, params=page_params, rate_budget=rate_budget)
+            body = response.json()
+            yield body
+            page_token = body.get("next_page_token")
+            if not page_token:
+                return
+
     async def get_bars(
         self,
         symbols: Sequence[str],
@@ -219,23 +284,18 @@ class AlpacaClient:
         feed: str = FEED_SIP,
     ) -> dict[str, list[RawBar]]:
         results: dict[str, list[RawBar]] = {symbol: [] for symbol in symbols}
-        page_token: str | None = None
-        while True:
-            params: dict[str, str | int] = {
-                "symbols": ",".join(symbols),
-                "timeframe": timeframe,
-                "start": start.isoformat(),
-                "end": _bars_end(end),
-                "adjustment": adjustment,
-                "feed": feed,
-                "limit": BARS_PAGE_LIMIT,
-            }
-            if page_token:
-                params["page_token"] = page_token
-            response = await request(
-                self._data, "GET", "/v2/stocks/bars", params=params, rate_budget=RateBudgetName.ALPACA
-            )
-            body = response.json()
+        params: dict[str, str | int] = {
+            "symbols": ",".join(symbols),
+            "timeframe": timeframe,
+            "start": start.isoformat(),
+            "end": _bars_end(end),
+            "adjustment": adjustment,
+            "feed": feed,
+            "limit": BARS_PAGE_LIMIT,
+        }
+        async for body in self._paged(
+            "GET", "/v2/stocks/bars", params=params, rate_budget=RateBudgetName.ALPACA
+        ):
             for symbol, bars in (body.get("bars") or {}).items():
                 bucket = results.setdefault(symbol, [])
                 for raw in bars:
@@ -250,26 +310,23 @@ class AlpacaClient:
                             volume=int(raw["v"]),
                         )
                     )
-            page_token = body.get("next_page_token")
-            if not page_token:
-                return results
+        return results
 
     async def get_snapshots(
         self, symbols: Sequence[str], *, feed: str = FEED_IEX, retry: bool = True
     ) -> list[ProviderQuote]:
+        """`retry=False` (`quotes_poll`) still draws from the quotes budget
+        and still goes through `request()`, just with `attempts=1` -- the
+        next 15s tick is the retry (system design §4)."""
         params = {"symbols": ",".join(symbols), "feed": feed}
-        if retry:
-            response = await request(
-                self._data,
-                "GET",
-                SNAPSHOTS_PATH,
-                params=params,
-                rate_budget=RateBudgetName.ALPACA_QUOTES,
-            )
-        else:
-            await get_rate_budget(RateBudgetName.ALPACA_QUOTES).acquire()
-            response = await self._data.get(SNAPSHOTS_PATH, params=params)
-            response.raise_for_status()
+        response = await request(
+            self._data,
+            "GET",
+            SNAPSHOTS_PATH,
+            params=params,
+            rate_budget=RateBudgetName.ALPACA_QUOTES,
+            attempts=MAX_ATTEMPTS if retry else 1,
+        )
         body = response.json()
         quotes: list[ProviderQuote] = []
         for symbol in symbols:
@@ -302,21 +359,16 @@ class AlpacaClient:
         dividends: list[CashDividendAction] = []
         name_changes: list[NameChangeAction] = []
         errors: list[str] = []
-        page_token: str | None = None
-        while True:
-            params: dict[str, str | int] = {
-                "symbols": ",".join(symbols),
-                "types": ",".join(types),
-                "start": start.isoformat(),
-                "end": end.isoformat(),
-                "limit": CORPORATE_ACTIONS_PAGE_LIMIT,
-            }
-            if page_token:
-                params["page_token"] = page_token
-            response = await request(
-                self._data, "GET", "/v1/corporate-actions", params=params, rate_budget=RateBudgetName.ALPACA
-            )
-            body = response.json()
+        params: dict[str, str | int] = {
+            "symbols": ",".join(symbols),
+            "types": ",".join(types),
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "limit": CORPORATE_ACTIONS_PAGE_LIMIT,
+        }
+        async for body in self._paged(
+            "GET", "/v1/corporate-actions", params=params, rate_budget=RateBudgetName.ALPACA
+        ):
             actions = body.get("corporate_actions") or {}
             for row in actions.get("forward_splits", []):
                 _parse_row(row, lambda r: _split_action(r, reverse=False), splits, errors, "forward_split")
@@ -326,11 +378,9 @@ class AlpacaClient:
                 _parse_row(row, _dividend_action, dividends, errors, "cash_dividend")
             for row in actions.get("name_changes", []):
                 _parse_row(row, _name_change_action, name_changes, errors, "name_change")
-            page_token = body.get("next_page_token")
-            if not page_token:
-                return CorporateActionsPage(
-                    splits=splits, dividends=dividends, name_changes=name_changes, errors=errors
-                )
+        return CorporateActionsPage(
+            splits=splits, dividends=dividends, name_changes=name_changes, errors=errors
+        )
 
 
 def _parse_row[T](

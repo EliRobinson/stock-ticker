@@ -99,15 +99,6 @@ def test_415_response_still_carries_request_id() -> None:
     assert response.headers.get("x-request-id")
 
 
-def test_stub_router_returns_501_problem_json() -> None:
-    # /api/v1/chat is the one router still out of scope for this issue
-    # (system design §6) -- every other router in this package now has a
-    # real implementation instead of a 501 stub.
-    response = client.post("/api/v1/chat", json={})
-    assert response.status_code == 501
-    assert response.headers["content-type"] == "application/problem+json"
-
-
 def test_health_live_needs_no_database() -> None:
     response = client.get("/api/v1/health/live")
     assert response.status_code == 200

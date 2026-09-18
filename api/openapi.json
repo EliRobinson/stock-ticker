@@ -105,6 +105,21 @@
         "title": "BarsResponse",
         "type": "object"
       },
+      "ChartSeries": {
+        "properties": {
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": ["key", "label"],
+        "title": "ChartSeries",
+        "type": "object"
+      },
       "CompanyDetail": {
         "properties": {
           "cik": {
@@ -226,6 +241,42 @@
           "first_bar_date"
         ],
         "title": "CompanyDetail",
+        "type": "object"
+      },
+      "DataViewPart": {
+        "description": "The `data-view` stream part: a table or chart built from a result the\nmodel has seen. Documented here so the web app can generate its type.",
+        "properties": {
+          "data": {
+            "discriminator": {
+              "mapping": {
+                "table": "#/components/schemas/TableSpec",
+                "timeseries": "#/components/schemas/TimeseriesChartSpec"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TableSpec"
+              },
+              {
+                "$ref": "#/components/schemas/TimeseriesChartSpec"
+              }
+            ],
+            "title": "Data"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "data-view",
+            "default": "data-view",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": ["id", "data"],
+        "title": "DataViewPart",
         "type": "object"
       },
       "Event": {
@@ -974,6 +1025,119 @@
         "title": "StatusResponse",
         "type": "object"
       },
+      "TableColumn": {
+        "properties": {
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Format"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": ["key", "label"],
+        "title": "TableColumn",
+        "type": "object"
+      },
+      "TableSpec": {
+        "properties": {
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/TableColumn"
+            },
+            "title": "Columns",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "table",
+            "default": "table",
+            "title": "Kind",
+            "type": "string"
+          },
+          "rows": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": ["id", "title", "columns", "rows"],
+        "title": "TableSpec",
+        "type": "object"
+      },
+      "TimeseriesChartSpec": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "timeseries",
+            "default": "timeseries",
+            "title": "Kind",
+            "type": "string"
+          },
+          "rows": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "series": {
+            "items": {
+              "$ref": "#/components/schemas/ChartSeries"
+            },
+            "title": "Series",
+            "type": "array"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "x": {
+            "title": "X",
+            "type": "string"
+          },
+          "y_format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Y Format"
+          }
+        },
+        "required": ["id", "title", "x", "series", "rows"],
+        "title": "TimeseriesChartSpec",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -1021,16 +1185,96 @@
     "/api/v1/chat": {
       "post": {
         "operationId": "chat_api_v1_chat_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "description": "What `DefaultChatTransport` POSTs: `{id, messages, trigger, messageId}`\nplus any extra `body` fields the client adds, which are ignored.",
+                "properties": {
+                  "id": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "messageId": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "messages": {
+                    "items": {
+                      "additionalProperties": true,
+                      "properties": {
+                        "id": {
+                          "default": "",
+                          "type": "string"
+                        },
+                        "parts": {
+                          "items": {
+                            "additionalProperties": true,
+                            "type": "object"
+                          },
+                          "maxItems": 200,
+                          "type": "array"
+                        },
+                        "role": {
+                          "enum": ["system", "user", "assistant"],
+                          "type": "string"
+                        }
+                      },
+                      "required": ["role"],
+                      "type": "object"
+                    },
+                    "maxItems": 500,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "trigger": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": ["messages"],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DataViewPart"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataViewPart"
+                }
               }
             },
-            "description": "Successful Response"
+            "description": "An AI SDK UI message stream (v1): `data: <json>` server-sent events, ending with `data: [DONE]`. The schema shown is the app-specific `data-view` part; the other parts are the AI SDK's own."
           },
-          "501": {
+          "413": {
             "content": {
               "application/json": {
                 "schema": {
@@ -1038,7 +1282,27 @@
                 }
               }
             },
-            "description": "Not Implemented"
+            "description": "Request Entity Too Large"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unsupported Media Type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
           }
         },
         "summary": "Chat",

@@ -90,3 +90,5 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 api/.venv/
+
+.cursor/worktrees/

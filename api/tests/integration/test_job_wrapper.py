@@ -444,12 +444,17 @@ async def test_run_job_with_engine_quotes_fits_in_the_real_quotes_pool_size() ->
     lock, invisible to the rest of this suite because every other test
     here passes a NullPool `app_writer_engine` in the `quotes_engine`
     role)."""
+    from sqlalchemy.pool import QueuePool
+
     from stockticker.db import get_quotes_engine
+
+    real_quotes_pool = get_quotes_engine().pool
+    assert isinstance(real_quotes_pool, QueuePool)
 
     job_name = _job_name()
     quotes_engine = create_async_engine(
         get_settings().app_writer_dsn,
-        pool_size=get_quotes_engine().pool.size(),
+        pool_size=real_quotes_pool.size(),
         max_overflow=0,
         pool_timeout=2,
     )

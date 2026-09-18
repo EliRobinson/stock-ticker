@@ -11,14 +11,14 @@ from stockticker.db import (
 
 
 def test_each_purpose_gets_its_own_engine_with_the_right_pool_size() -> None:
-    # Full-suite runs may have already cached engines under a different
-    # POSTGRES_DB (app vs stockticker_test). Dispose and rebuild so the
-    # pool sizes match the settings this process actually has (#38).
-    import asyncio
-
-    asyncio.run(dispose_engines())
-    get_settings.cache_clear()
-
+    # Read whatever engines are already cached for this process rather than
+    # disposing and rebuilding them: a full-suite run shares this process
+    # with tests/integration/conftest.py's session-scoped api_client
+    # fixture, which deliberately keeps its asyncpg pool bound to the
+    # TestClient's background loop. Tearing that down here with
+    # asyncio.run(dispose_engines()) would await closing connections from a
+    # brand-new loop, which can crash with "Task got Future attached to a
+    # different loop" or silently recreate the pool for later tests (#38).
     api_engine = get_api_app_writer_engine()
     worker_engine = get_worker_app_writer_engine()
     quotes_engine = get_quotes_engine()

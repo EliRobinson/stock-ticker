@@ -92,19 +92,24 @@ async def test_ai_reader_cannot_create_a_temp_table(ai_reader_engine: AsyncEngin
             await conn.execute(text("CREATE TEMP TABLE companies (cik text)"))
 
 
-async def test_ai_reader_cannot_call_set_config(ai_reader_engine: AsyncEngine) -> None:
+async def test_ai_reader_can_select_an_array_typed_column(ai_reader_engine: AsyncEngine) -> None:
+    """`set_config` is granted to ai_reader (see the migration's comment at
+    that GRANT block): asyncpg calls it internally, ahead of its own
+    type-introspection query, for any array-typed bind parameter or
+    result -- revoking it outright broke that for every asyncpg role, not
+    just ai_reader (found during review, reproduced on PG17). A real
+    date[] result exercises that exact introspection path."""
     async with ai_reader_engine.connect() as conn:
-        with pytest.raises(DBAPIError):
-            await conn.execute(text("SELECT set_config('default_transaction_read_only', 'off', false)"))
+        result = await conn.scalar(text("SELECT array_agg(trade_date) FROM ai.trading_days"))
+        assert result is None or isinstance(result, list)
 
 
 async def test_set_read_only_off_does_not_grant_ai_reader_a_write(ai_reader_engine: AsyncEngine) -> None:
-    """`set_config()` is blocked (see above), but the plain `SET` statement
-    is a different mechanism entirely and Postgres does not restrict it by
-    default -- this succeeds. Documented, not silently assumed: it doesn't
-    matter, because ai_reader independently has no DML grant on anything to
-    escape *to*. The future SQL guard (a later issue) closes the vector at
-    the application layer too, since it only ever parses and runs a single
+    """Postgres does not restrict the plain `SET` statement by default --
+    this succeeds. Documented, not silently assumed: it doesn't matter,
+    because ai_reader independently has no DML grant on anything to escape
+    *to*. The future SQL guard (a later issue) closes the vector at the
+    application layer too, since it only ever parses and runs a single
     SELECT -- a `SET` statement never reaches the database via `run_sql`."""
     async with ai_reader_engine.connect() as conn:
         await conn.execute(text("SET default_transaction_read_only = off"))

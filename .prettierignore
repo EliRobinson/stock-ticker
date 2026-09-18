@@ -15,3 +15,7 @@ pnpm-lock.yaml
 # which makes next dev rewrite it right back.
 web/AGENTS.md
 web/CLAUDE.md
+
+# ---- api/ (generated / recorded, not hand-formatted) ----
+api/uv.lock
+api/tests/fixtures/

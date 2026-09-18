@@ -5,29 +5,21 @@ See tests/integration/conftest.py for how to run these."""
 
 from __future__ import annotations
 
-import json
 import uuid
 from collections.abc import AsyncIterator, Iterator
-from pathlib import Path
-from typing import Any
 
 import httpx
 import pytest
 import pytest_asyncio
 import respx
+from edgar_support import load_fixture as _fixture
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from stockticker.ingest.edgar.sync import EDGAR_BASE_URL, run_edgar_sync
 from stockticker.ingest.http import reset_rate_budgets
 
-FIXTURES = Path(__file__).parent.parent / "fixtures" / "edgar"
 USER_AGENT = "Jane Doe jane@example.com"
-
-
-def _fixture(name: str) -> dict[str, Any]:
-    data: dict[str, Any] = json.loads((FIXTURES / name).read_text())
-    return data
 
 
 @pytest.fixture(autouse=True)

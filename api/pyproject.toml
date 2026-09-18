@@ -47,7 +47,11 @@ packages = ["src/stockticker"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-pythonpath = ["tests/unit"]
+# `tests/edgar_support.py` is shared by unit + integration; `tests/unit`
+# holds top-level helpers (`ai_fakes`, `provider_bars`). Neither directory
+# has an __init__.py, so both must be on pythonpath — not via a shared
+# `tests/conftest.py`, which would collide with mypy's top-level module rules.
+pythonpath = ["tests", "tests/unit"]
 
 [tool.ruff]
 line-length = 110

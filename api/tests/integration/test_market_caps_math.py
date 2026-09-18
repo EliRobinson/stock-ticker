@@ -5,15 +5,13 @@ See tests/integration/conftest.py for how to run these."""
 
 from __future__ import annotations
 
-import json
-import uuid
 from collections.abc import AsyncIterator
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import date
 from decimal import Decimal
-from typing import Any
 
 import pytest
 import pytest_asyncio
+from seed import Scenario, new_symbol
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
@@ -36,141 +34,6 @@ async def conn(app_writer_engine: AsyncEngine) -> AsyncIterator[AsyncConnection]
 
 def d(value: str) -> date:
     return date.fromisoformat(value)
-
-
-def new_symbol() -> str:
-    return f"T{uuid.uuid4().hex[:6].upper()}"
-
-
-class Scenario:
-    def __init__(self, conn: AsyncConnection) -> None:
-        self.conn = conn
-
-    async def company(self, *, price_symbol: str | None = None, unit_ratio: str = "1") -> str:
-        """A fresh Company. `price_symbol` also seeds a share_class_rules row,
-        like the multi-class issuers in the migration."""
-        cik = f"9{uuid.uuid4().int % 10**9:09d}"
-        await self.conn.execute(
-            text("INSERT INTO companies (cik, name, sector) VALUES (:cik, 'Test Co', 'Test')"), {"cik": cik}
-        )
-        if price_symbol is not None:
-            await self.conn.execute(
-                text(
-                    "INSERT INTO share_class_rules (cik, price_symbol, shares_unit_ratio, note) "
-                    "VALUES (:cik, :symbol, :ratio, 'test')"
-                ),
-                {"cik": cik, "symbol": price_symbol, "ratio": Decimal(unit_ratio)},
-            )
-        return cik
-
-    async def listing(
-        self,
-        cik: str,
-        symbol: str | None = None,
-        *,
-        primary: bool = True,
-        active: bool = True,
-        backfilled: bool = True,
-        splits_synced: bool = True,
-    ) -> str:
-        symbol = symbol or new_symbol()
-        if primary and active:
-            await self.conn.execute(
-                text("UPDATE listings SET is_primary = false WHERE cik = :cik AND symbol <> :symbol"),
-                {"cik": cik, "symbol": symbol},
-            )
-        await self.conn.execute(
-            text(
-                "INSERT INTO listings (symbol, cik, is_primary, is_active, backfill_completed_at) "
-                "VALUES (:symbol, :cik, :primary, :active, CASE WHEN :backfilled THEN now() END)"
-            ),
-            {"symbol": symbol, "cik": cik, "primary": primary, "active": active, "backfilled": backfilled},
-        )
-        if splits_synced:
-            await self.conn.execute(
-                text(
-                    "INSERT INTO ingest_watermarks (job, key, value, updated_at) "
-                    "VALUES ('corporate_actions_sync', :key, '2018-01-01', now())"
-                ),
-                {"key": f"bootstrapped:{symbol}"},
-            )
-        return symbol
-
-    async def bars(self, symbol: str, closes: dict[str, str]) -> None:
-        for day, close in closes.items():
-            trade_date = d(day)
-            opens = datetime.combine(trade_date, time(13, 30), tzinfo=UTC)
-            await self.conn.execute(
-                text(
-                    "INSERT INTO trading_days (trade_date, open_at, close_at) VALUES (:d, :o, :c) "
-                    "ON CONFLICT (trade_date) DO NOTHING"
-                ),
-                {"d": trade_date, "o": opens, "c": opens + timedelta(hours=6, minutes=30)},
-            )
-            await self.conn.execute(
-                text(
-                    "INSERT INTO daily_bars (symbol, trade_date, open, high, low, close, volume, adj_close, "
-                    "source, ingested_at) VALUES (:s, :d, :p, :p, :p, :p, 0, :p, 'test', now()) "
-                    "ON CONFLICT (symbol, trade_date) DO UPDATE SET open = excluded.open, "
-                    "high = excluded.high, low = excluded.low, close = excluded.close, "
-                    "adj_close = excluded.adj_close"
-                ),
-                {"s": symbol, "d": trade_date, "p": Decimal(close)},
-            )
-
-    async def shares(
-        self,
-        cik: str,
-        as_of: str,
-        filed: str,
-        shares: int,
-        *,
-        concept: str = DEI_SHARES,
-        accession: str | None = None,
-    ) -> None:
-        await self.conn.execute(
-            text(
-                "INSERT INTO shares_outstanding "
-                "(cik, as_of_date, concept, accession, form, filed_date, shares) "
-                "VALUES (:cik, :as_of, :concept, :accession, '10-Q', :filed, :shares)"
-            ),
-            {
-                "cik": cik,
-                "as_of": d(as_of),
-                "concept": concept,
-                "accession": accession or f"acc-{uuid.uuid4().hex[:10]}",
-                "filed": d(filed),
-                "shares": shares,
-            },
-        )
-
-    async def event(
-        self, cik: str, symbol: str | None, kind: str, on: str, details: dict[str, Any] | None = None
-    ) -> None:
-        await self.conn.execute(
-            text(
-                "INSERT INTO events (cik, symbol, event_date, kind, title, details, source, source_ref) "
-                "VALUES (:cik, :symbol, :on, :kind, 'test', CAST(:details AS jsonb), 'test', :ref)"
-            ),
-            {
-                "cik": cik,
-                "symbol": symbol,
-                "on": d(on),
-                "kind": kind,
-                "details": json.dumps(details or {}),
-                "ref": uuid.uuid4().hex,
-            },
-        )
-
-    async def caps(self, cik: str) -> dict[date, Any]:
-        result = await self.conn.execute(
-            text(
-                "SELECT trade_date, market_cap, shares_used, shares_as_of, is_multi_class "
-                "FROM market_caps WHERE cik = :cik ORDER BY trade_date"
-            ),
-            {"cik": cik},
-        )
-        return {row.trade_date: row for row in result}
 
 
 @pytest_asyncio.fixture

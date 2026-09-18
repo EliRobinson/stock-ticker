@@ -105,7 +105,7 @@ async def constituents_sync(ctx: JobContext) -> JobResult:
 
 
 async def run_constituents_sync(engine: AsyncEngine) -> JobResult:
-    async with build_http_client(headers={"User-Agent": USER_AGENT}) as client:
+    async with build_http_client(headers={"User-Agent": USER_AGENT}, follow_redirects=True) as client:
         html = await fetch_constituents_html(client)
     rows = parse_constituents(html)
     async with engine.connect() as conn:

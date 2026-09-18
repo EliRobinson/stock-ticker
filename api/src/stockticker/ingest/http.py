@@ -141,8 +141,15 @@ def build_http_client(
     base_url: str = "",
     headers: dict[str, str] | None = None,
     timeout: httpx.Timeout = DEFAULT_TIMEOUT,
+    follow_redirects: bool = False,
 ) -> httpx.AsyncClient:
-    return httpx.AsyncClient(base_url=base_url, headers=headers, timeout=timeout)
+    """`follow_redirects=True` for a provider that redirects under normal
+    operation (SEC EDGAR, Wikipedia: protocol/www normalization) -- off by
+    default because Alpaca's API generally doesn't redirect and httpx
+    itself defaults to not following."""
+    return httpx.AsyncClient(
+        base_url=base_url, headers=headers, timeout=timeout, follow_redirects=follow_redirects
+    )
 
 
 async def request(

@@ -42,7 +42,9 @@ NO_COMPANYFACTS = "EDGAR has no companyfacts for this CIK"
 
 
 def build_edgar_client(user_agent: str) -> httpx.AsyncClient:
-    return build_http_client(base_url=EDGAR_BASE_URL, headers={"User-Agent": user_agent})
+    return build_http_client(
+        base_url=EDGAR_BASE_URL, headers={"User-Agent": user_agent}, follow_redirects=True
+    )
 
 
 async def _get_json(client: httpx.AsyncClient, path: str) -> dict[str, Any]:

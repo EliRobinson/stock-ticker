@@ -3,17 +3,17 @@ import { getCompany } from '@/lib/api'
 
 export const companyKeys = {
   all: ['company'] as const,
-  detail: (cik: string) => [...companyKeys.all, cik] as const
+  detail: (cik: string | undefined) => [...companyKeys.all, cik] as const
 }
 
 const STALE_TIME_MS = 60 * 1000
 
-export function useCompany(cik: string) {
+export function useCompany(cik: string | undefined) {
   return useQuery({
     queryKey: companyKeys.detail(cik),
-    queryFn: () => getCompany(cik),
+    queryFn: () => getCompany(cik as string),
     staleTime: STALE_TIME_MS,
-    enabled: cik !== ''
+    enabled: cik !== undefined
   })
 }
 

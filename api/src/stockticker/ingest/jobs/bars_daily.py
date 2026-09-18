@@ -31,6 +31,7 @@ from stockticker.ingest.alpaca.client import require_alpaca_client
 from stockticker.ingest.common import HISTORY_START, chunked, group_by_symbol, sanitize_bars
 from stockticker.ingest.job import FailedItem, JobContext, JobResult, JobSkipped
 from stockticker.ingest.providers import BarSource, ProviderBar
+from stockticker.ingest.refetch import queue_refetch
 from stockticker.ingest.sinks import upsert_bars
 from stockticker.timeutil import today_ny
 
@@ -152,15 +153,7 @@ async def _queue_drift_refetch(conn: AsyncConnection, symbol: str) -> None:
     """Executes without committing -- `run_bars_daily` commits this in the
     same transaction as the bar upsert it precedes, so the two land or roll
     back together (issue #26 item 3)."""
-    await conn.execute(
-        text(
-            "INSERT INTO refetch_requests (symbol, reason, from_date) "
-            "VALUES (:symbol, 'adj_drift', :from_date) "
-            "ON CONFLICT (symbol, reason) DO UPDATE SET "
-            "from_date = LEAST(refetch_requests.from_date, excluded.from_date), requested_at = now()"
-        ),
-        {"symbol": symbol, "from_date": HISTORY_START},
-    )
+    await queue_refetch(conn, symbol, "adj_drift", HISTORY_START)
 
 
 __all__ = [

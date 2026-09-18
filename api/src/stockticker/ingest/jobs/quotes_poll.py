@@ -1,7 +1,7 @@
 """`quotes_poll` (system design §4): every 15s while the market is open,
 Alpaca `/v2/stocks/snapshots` (`feed=iex`, batches of 100), upserting only a
 newer `observed_at`. No retries -- the next 15s tick is the retry
-(`AlpacaQuoteSource.snapshot` calls the client with `retry=False`). Its
+(`AlpacaQuoteSource.snapshot` calls the client with `attempts=1`). Its
 `JobSpec` sets `engine="quotes"` (`ingest/registry.py`), so both the
 advisory lock and `ctx.engine`/`ctx.quotes_engine` are the small, dedicated
 quotes engine (`db.get_quotes_engine`) -- never the pool the rest of the

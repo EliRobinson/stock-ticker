@@ -169,7 +169,7 @@ async def request(
     `attempts=1` still draws from the budget and still raises the same
     exception types on failure, but makes exactly one try and never
     retries -- for a caller whose own next tick is the retry (Alpaca
-    `get_snapshots(retry=False)`, `get_clock`)."""
+    `get_snapshots(attempts=1)`, `get_clock`)."""
     bucket = get_rate_budget(rate_budget)
 
     async for attempt in AsyncRetrying(

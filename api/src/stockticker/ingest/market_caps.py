@@ -2,39 +2,49 @@
 
     market_cap(c, d) = close(price Listing, d) x shares(c, d)
 
-- **Price Listing.** `share_class_rules.price_symbol` when a rule exists,
-  else the primary Listing. Only an active Listing prices a Company, so a
-  retired ticker never adds to its value.
+- **Price Listing.** `share_class_rules.price_symbol` when a rule exists and
+  that Listing is active, else the active primary Listing. Resolved once, in
+  `load_target`, and passed to SQL as `:price_symbol`.
 - **Shares.** Point-in-time: the count from the latest filing with
   `filed_date <= d`; among counts filed the same day, the latest
   `as_of_date`, then `dei` before `us-gaap`. Multiplied by
-  `shares_unit_ratio` (default 1) and by the product of the price Listing's
-  split ratios with `anchor < ex_date <= d`.
-- `is_multi_class` is true exactly when the Company has a
-  `share_class_rules` row.
+  `shares_unit_ratio` (default 1) and by the product of split ratios with
+  `anchor < ex_date <= d` (`ShareCount.anchor_date`, the one copy of that
+  rule; SQL receives the anchor as data).
+- **Splits** are the Company's `split`/`reverse_split` Events on the price
+  Listing, on a retired ticker, or with no symbol. A split on another
+  *active* class Listing is that class's, not the price Listing's. A split
+  recorded under the old ticker before a rename (FISV before FI) still
+  applies.
+- **Multi-class issuers** (a `share_class_rules` row) use `us-gaap` counts
+  only. Their `dei` cover count is either per class, which companyfacts
+  omits, or a placeholder: Fox's only one is `1`. `is_multi_class` is true
+  exactly for these.
 
-Point-in-time counts stop EDGAR restatements from leaking into the past:
-a later filing re-reports old periods already restated for newer splits
-(Alphabet's 2021-12-31 count is 13.2B in filings after its July 2022
-20-for-1 split). The worked cases are in
-`tests/integration/test_market_caps_math.py`.
+A Company is skipped, and its rows are left as they are, when:
 
-**Split anchor.** The split window starts at the count's *anchor*. For a
-`us-gaap` balance-sheet count that is its `filed_date`, because statements
-restate share counts for any split before they are issued. For a `dei`
-cover-page count it is its `as_of_date`: that count is the number
-outstanding on that day, so a split between the cover date and the filing
-date still has to be applied. §3 (PR #14) says `filed_date` for both; the
-two agree except in that window.
+- it is inactive: its history is data and stays frozen;
+- it has no active price Listing;
+- its price Listing's backfill has not finished (after a ticker change the
+  new Listing has no bars yet, and rebuilding would delete the history);
+- its splits have not been synced yet: `corporate_actions_sync` has not
+  written the `bootstrapped:{symbol}` watermark for the price Listing.
 
-Sanity checks run in Python over each Company's counts before the rebuild,
-in filing order. Each rejected count is a failed item and is excluded from
-the rebuild, so the previous accepted count carries forward:
+Sanity checks run in Python over each Company's counts, in filing order.
+A rejected count is excluded, so the previous accepted count carries
+forward:
 
 - the count is 0;
 - the count is dated after its own filing;
 - the count differs by more than 40% from the previous accepted count, with
-  no split, spin-off, or merger (an 8-K item 2.01) in between.
+  no split, spin-off, or merger (an 8-K item 2.01) in between. If the next
+  count agrees with the rejected one within 40%, the change was real: both
+  are accepted and become the new baseline, so one rejection can never
+  freeze every later count.
+
+Failed items are reported only when they are new since the previous run,
+so a permanent condition (Berkshire has no whole-company count) does not
+make every run `partial`.
 
 The rebuild itself is one SQL statement per Company: it upserts every
 computable Trading Day and deletes rows that are no longer computable.
@@ -42,8 +52,9 @@ computable Trading Day and deletes rows that are no longer computable.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -54,13 +65,22 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from stockticker.ingest.edgar.parse import DEI_SHARES, MERGER_ITEM, shares_key
 from stockticker.ingest.job import FailedItem, JobContext, JobResult, JobSkipped
+from stockticker.ingest.watermarks import read_watermark, symbols_with_watermark, write_watermark
 from stockticker.logging import get_logger
 
 logger = get_logger(__name__)
 
+JOB_NAME = "market_caps_rebuild"
 MAX_UNEXPLAINED_CHANGE = Decimal("0.40")
 SPLIT_KINDS = ("split", "reverse_split")
 NO_WHOLE_COMPANY_COUNT = "no_whole_company_count"
+SPLITS_NOT_SYNCED = "splits_not_synced"
+REPORTED_KEY = "reported_items"
+
+# Written by corporate_actions_sync (#4) once a symbol's corporate actions
+# have been fetched back to 2018.
+CORPORATE_ACTIONS_JOB = "corporate_actions_sync"
+BOOTSTRAPPED_PREFIX = "bootstrapped:"
 
 
 class SplitRatioError(ValueError):
@@ -81,6 +101,9 @@ class ShareCount:
 
     @property
     def anchor_date(self) -> date:
+        """Where the split window starts. A `dei` cover count is the number
+        outstanding on its `as_of_date`; a `us-gaap` balance-sheet count is
+        restated for every split before its `filed_date`."""
         return self.as_of_date if self.concept == DEI_SHARES else self.filed_date
 
 
@@ -94,6 +117,15 @@ class Split:
 class Rejection:
     count: ShareCount
     reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class PriceTarget:
+    price_symbol: str | None
+    unit_ratio: Decimal
+    is_multi_class: bool
+    backfilled: bool
+    splits_synced: bool
 
 
 def split_ratio(kind: str, details: dict[str, Any]) -> Decimal:
@@ -127,24 +159,51 @@ def validate_counts(
     )
     accepted: list[ShareCount] = []
     rejected: list[Rejection] = []
-    previous: ShareCount | None = None
+    baseline: ShareCount | None = None
+    # The counts of the most recent filing that were rejected as jumps. A
+    # later *filing* (not another count in the same one) that agrees with
+    # them confirms the new level.
+    jumped: list[ShareCount] = []
     for count in ordered:
-        reason = _rejection_reason(count, previous, exemption_dates)
-        if reason is not None:
-            rejected.append(Rejection(count, reason))
+        invalid = _invalid_reason(count)
+        if invalid is not None:
+            rejected.append(Rejection(count, invalid))
             continue
-        accepted.append(count)
-        previous = count
+        jump = _jump_reason(count, baseline, exemption_dates)
+        if jump is None:
+            accepted.append(count)
+            baseline, jumped = count, []
+            continue
+        confirms = (
+            jumped
+            and count.accession != jumped[-1].accession
+            and _jump_reason(count, jumped[-1], exemption_dates) is None
+        )
+        if confirms:
+            confirmed = {id(c) for c in jumped}
+            rejected = [r for r in rejected if id(r.count) not in confirmed]
+            accepted.extend((*jumped, count))
+            baseline, jumped = count, []
+            continue
+        rejected.append(Rejection(count, jump))
+        if not jumped or jumped[-1].accession != count.accession:
+            jumped = []
+        jumped.append(count)
+    accepted.sort(key=lambda c: (c.filed_date, c.as_of_date, c.concept != DEI_SHARES, c.accession))
     return accepted, rejected
 
 
-def _rejection_reason(
-    count: ShareCount, previous: ShareCount | None, exemption_dates: Sequence[date]
-) -> str | None:
+def _invalid_reason(count: ShareCount) -> str | None:
     if count.shares <= 0:
         return "shares outstanding is 0"
     if count.as_of_date > count.filed_date:
         return f"count dated {count.as_of_date}, after its filing on {count.filed_date}"
+    return None
+
+
+def _jump_reason(
+    count: ShareCount, previous: ShareCount | None, exemption_dates: Sequence[date]
+) -> str | None:
     if previous is None:
         return None
     change = abs(Decimal(count.shares - previous.shares)) / Decimal(previous.shares)
@@ -162,61 +221,46 @@ def _rejection_reason(
 
 REBUILD_SQL = text(
     """
-    WITH target AS (
-      SELECT c.cik,
-             COALESCE(r.shares_unit_ratio, 1) AS unit_ratio,
-             r.cik IS NOT NULL AS is_multi_class,
-             COALESCE(
-               (SELECT l.symbol FROM listings l
-                 WHERE l.cik = c.cik AND l.is_active AND l.symbol = r.price_symbol),
-               (SELECT l.symbol FROM listings l
-                 WHERE l.cik = c.cik AND l.is_active AND l.is_primary)
-             ) AS price_symbol
-      FROM companies c
-      LEFT JOIN share_class_rules r ON r.cik = c.cik
-      WHERE c.cik = :cik
-    ),
-    splits AS (
+    WITH splits AS (
       SELECT * FROM unnest(CAST(:split_dates AS date[]), CAST(:split_ratios AS numeric[]))
         AS s(ex_date, ratio)
     ),
     accepted AS (
       SELECT * FROM unnest(CAST(:accepted_as_of AS date[]), CAST(:accepted_concept AS text[]),
-                           CAST(:accepted_accession AS text[]))
-        AS a(as_of_date, concept, accession)
+                           CAST(:accepted_accession AS text[]), CAST(:accepted_anchor AS date[]))
+        AS a(as_of_date, concept, accession, anchor_date)
     ),
     counts AS (
-      SELECT s.as_of_date, s.filed_date, s.concept, s.accession, s.shares,
-             CASE WHEN s.concept = :dei THEN s.as_of_date ELSE s.filed_date END AS anchor_date
+      SELECT s.as_of_date, s.filed_date, s.concept, s.accession, s.shares, a.anchor_date
       FROM shares_outstanding s
       JOIN accepted a USING (as_of_date, concept, accession)
       WHERE s.cik = :cik
     ),
     chosen AS (
       SELECT b.trade_date, b.close, cnt.shares, cnt.as_of_date, cnt.anchor_date
-      FROM target t
-      JOIN daily_bars b ON b.symbol = t.price_symbol
+      FROM daily_bars b
       CROSS JOIN LATERAL (
         SELECT * FROM counts s
         WHERE s.as_of_date <= b.trade_date AND s.filed_date <= b.trade_date
         ORDER BY s.filed_date DESC, s.as_of_date DESC, (s.concept = :dei) DESC, s.accession DESC
         LIMIT 1
       ) cnt
+      WHERE b.symbol = :price_symbol
     ),
     valued AS (
-      SELECT ch.trade_date, ch.close, ch.as_of_date, t.is_multi_class,
+      SELECT ch.trade_date, ch.close, ch.as_of_date,
              round(
-               ch.shares * t.unit_ratio * COALESCE(
+               ch.shares * CAST(:unit_ratio AS numeric) * COALESCE(
                  (SELECT exp(sum(ln(sp.ratio))) FROM splits sp
                    WHERE sp.ex_date > ch.anchor_date AND sp.ex_date <= ch.trade_date),
                  1)
              )::bigint AS shares_used
-      FROM chosen ch CROSS JOIN target t
+      FROM chosen ch
     ),
     upserted AS (
       INSERT INTO market_caps (cik, trade_date, market_cap, shares_used, shares_as_of, is_multi_class)
       SELECT :cik, v.trade_date, round(v.close * v.shares_used, 2), v.shares_used, v.as_of_date,
-             v.is_multi_class
+             CAST(:is_multi_class AS boolean)
       FROM valued v
       ON CONFLICT (cik, trade_date) DO UPDATE SET
         market_cap = excluded.market_cap, shares_used = excluded.shares_used,
@@ -239,20 +283,69 @@ REBUILD_SQL = text(
 
 @dataclass(slots=True)
 class CompanyRebuild:
-    upserted: int
-    removed: int
-    rejections: list[Rejection]
-    # No whole-company count on file (Berkshire reports per class only):
-    # the Company has no Market Cap, and that is reported, not guessed.
+    upserted: int = 0
+    removed: int = 0
+    rejections: list[Rejection] = field(default_factory=list)
+    skipped: str | None = None  # why the Company was left untouched
+    # No whole-company count on file (Berkshire, Fox, and News Corp report
+    # per class only): the Company has no Market Cap, and that is reported,
+    # not guessed.
     no_whole_company_count: bool = False
+
+
+async def load_target(conn: AsyncConnection, cik: str) -> PriceTarget:
+    row = (
+        await conn.execute(
+            text(
+                """
+                SELECT COALESCE(r.shares_unit_ratio, 1) AS unit_ratio,
+                       r.cik IS NOT NULL AS is_multi_class,
+                       p.symbol AS price_symbol,
+                       p.backfill_completed_at IS NOT NULL AS backfilled
+                FROM companies c
+                LEFT JOIN share_class_rules r ON r.cik = c.cik
+                LEFT JOIN LATERAL (
+                  SELECT l.symbol, l.backfill_completed_at FROM listings l
+                  WHERE l.cik = c.cik AND l.is_active AND (l.symbol = r.price_symbol OR l.is_primary)
+                  ORDER BY (l.symbol = r.price_symbol) DESC NULLS LAST
+                  LIMIT 1
+                ) p ON true
+                WHERE c.cik = :cik
+                """
+            ),
+            {"cik": cik},
+        )
+    ).one()
+    synced = (
+        bool(
+            await symbols_with_watermark(conn, CORPORATE_ACTIONS_JOB, BOOTSTRAPPED_PREFIX, [row.price_symbol])
+        )
+        if row.price_symbol
+        else False
+    )
+    return PriceTarget(
+        price_symbol=row.price_symbol,
+        unit_ratio=row.unit_ratio,
+        is_multi_class=row.is_multi_class,
+        backfilled=row.backfilled or False,
+        splits_synced=synced,
+    )
 
 
 async def rebuild_company(conn: AsyncConnection, cik: str) -> CompanyRebuild:
     """Validate one Company's counts and rebuild its `market_caps` rows in
-    one statement. Does not commit. Raises `SplitRatioError` if a split on
-    the price Listing has no usable ratio, before writing anything."""
-    counts = await _load_counts(conn, cik)
-    splits, exemption_dates = await _load_corporate_events(conn, cik)
+    one statement. Does not commit. Raises `SplitRatioError` if an applicable
+    split has no usable ratio, before writing anything."""
+    target = await load_target(conn, cik)
+    if target.price_symbol is None:
+        return CompanyRebuild(skipped="no active price Listing")
+    if not target.backfilled:
+        return CompanyRebuild(skipped=f"{target.price_symbol} backfill not finished")
+    if not target.splits_synced:
+        return CompanyRebuild(skipped=SPLITS_NOT_SYNCED)
+
+    counts = await _load_counts(conn, cik, us_gaap_only=target.is_multi_class)
+    splits, exemption_dates = await _load_corporate_events(conn, cik, target.price_symbol)
     accepted, rejections = validate_counts(counts, exemption_dates)
     row = (
         await conn.execute(
@@ -260,11 +353,15 @@ async def rebuild_company(conn: AsyncConnection, cik: str) -> CompanyRebuild:
             {
                 "cik": cik,
                 "dei": DEI_SHARES,
+                "price_symbol": target.price_symbol,
+                "unit_ratio": target.unit_ratio,
+                "is_multi_class": target.is_multi_class,
                 "split_dates": [split.ex_date for split in splits],
                 "split_ratios": [split.ratio for split in splits],
                 "accepted_as_of": [count.as_of_date for count in accepted],
                 "accepted_concept": [count.concept for count in accepted],
                 "accepted_accession": [count.accession for count in accepted],
+                "accepted_anchor": [count.anchor_date for count in accepted],
             },
         )
     ).one()
@@ -276,13 +373,13 @@ async def rebuild_company(conn: AsyncConnection, cik: str) -> CompanyRebuild:
     )
 
 
-async def _load_counts(conn: AsyncConnection, cik: str) -> list[ShareCount]:
+async def _load_counts(conn: AsyncConnection, cik: str, *, us_gaap_only: bool) -> list[ShareCount]:
     result = await conn.execute(
         text(
             "SELECT as_of_date, filed_date, concept, accession, shares FROM shares_outstanding "
-            "WHERE cik = :cik"
+            "WHERE cik = :cik AND (NOT :us_gaap_only OR concept <> :dei)"
         ),
-        {"cik": cik},
+        {"cik": cik, "us_gaap_only": us_gaap_only, "dei": DEI_SHARES},
     )
     return [
         ShareCount(
@@ -296,20 +393,19 @@ async def _load_counts(conn: AsyncConnection, cik: str) -> list[ShareCount]:
     ]
 
 
-async def _load_corporate_events(conn: AsyncConnection, cik: str) -> tuple[list[Split], list[date]]:
-    """Splits on the price Listing (for the share factor), and the dates of
-    every split, spin-off, and merger of the Company (for the jump check)."""
+async def _load_corporate_events(
+    conn: AsyncConnection, cik: str, price_symbol: str
+) -> tuple[list[Split], list[date]]:
+    """The splits that apply to the price Listing (for the share factor),
+    and the dates of every split, spin-off, and merger of the Company (for
+    the jump check)."""
     result = await conn.execute(
         text(
             """
-            WITH price AS (
-              SELECT COALESCE(
-                (SELECT l.symbol FROM listings l JOIN share_class_rules r ON r.cik = l.cik
-                  WHERE l.cik = :cik AND l.is_active AND l.symbol = r.price_symbol),
-                (SELECT l.symbol FROM listings l WHERE l.cik = :cik AND l.is_active AND l.is_primary)
-              ) AS symbol
-            )
-            SELECT e.kind, e.event_date, e.details, e.symbol = (SELECT symbol FROM price) AS on_price
+            SELECT e.kind, e.event_date, e.details,
+                   e.symbol IS NULL OR e.symbol = :price_symbol OR NOT EXISTS (
+                     SELECT 1 FROM listings l WHERE l.cik = e.cik AND l.is_active AND l.symbol = e.symbol
+                   ) AS applies_to_price
             FROM events e
             WHERE e.cik = :cik
               AND (e.kind IN ('split', 'reverse_split', 'spin_off')
@@ -317,20 +413,23 @@ async def _load_corporate_events(conn: AsyncConnection, cik: str) -> tuple[list[
                        AND e.details -> 'items' @> jsonb_build_array(CAST(:merger_item AS text))))
             """
         ),
-        {"cik": cik, "merger_item": MERGER_ITEM},
+        {"cik": cik, "price_symbol": price_symbol, "merger_item": MERGER_ITEM},
     )
     splits: list[Split] = []
     exemption_dates: list[date] = []
     for row in result:
         exemption_dates.append(row.event_date)
-        if row.kind in SPLIT_KINDS and row.on_price:
+        if row.kind in SPLIT_KINDS and row.applies_to_price:
             splits.append(Split(ex_date=row.event_date, ratio=split_ratio(row.kind, row.details)))
     return splits, exemption_dates
 
 
 async def _companies_to_rebuild(conn: AsyncConnection) -> list[str]:
     result = await conn.execute(
-        text("SELECT cik FROM listings WHERE is_active UNION SELECT cik FROM market_caps ORDER BY cik")
+        text(
+            "SELECT DISTINCT c.cik FROM companies c JOIN listings l ON l.cik = c.cik "
+            "WHERE c.is_active AND l.is_active ORDER BY c.cik"
+        )
     )
     return [row.cik for row in result]
 
@@ -341,11 +440,12 @@ async def market_caps_rebuild(ctx: JobContext) -> JobResult:
 
 async def run_market_caps_rebuild(engine: AsyncEngine) -> JobResult:
     result = JobResult()
+    data_items: list[FailedItem] = []
     async with engine.connect() as conn:
         ciks = await _companies_to_rebuild(conn)
         await conn.commit()
         if not ciks:
-            raise JobSkipped("no active Listings and no Market Cap rows")
+            raise JobSkipped("no active Companies with an active Listing")
         for cik in ciks:
             try:
                 rebuilt = await rebuild_company(conn, cik)
@@ -357,11 +457,31 @@ async def run_market_caps_rebuild(engine: AsyncEngine) -> JobResult:
                 result.failed_items.append(FailedItem(key=cik, error=f"rebuild skipped: {exc}"))
                 continue
             result.rows_written += rebuilt.upserted + rebuilt.removed
+            if rebuilt.skipped == SPLITS_NOT_SYNCED:
+                data_items.append(FailedItem(key=cik, error=SPLITS_NOT_SYNCED))
+            elif rebuilt.skipped:
+                logger.debug("market_caps_rebuild.skipped", cik=cik, reason=rebuilt.skipped)
             if rebuilt.no_whole_company_count:
-                result.failed_items.append(FailedItem(key=cik, error=NO_WHOLE_COMPANY_COUNT))
-            result.failed_items.extend(
+                data_items.append(FailedItem(key=cik, error=NO_WHOLE_COMPANY_COUNT))
+            data_items.extend(
                 FailedItem(key=f"{cik}:{rejection.count.key}", error=rejection.reason)
                 for rejection in rebuilt.rejections
             )
-    logger.info("market_caps_rebuild.done", companies=len(ciks), rows_written=result.rows_written)
+        result.failed_items.extend(await only_new_items(conn, data_items))
+        await conn.commit()
+    logger.info(
+        "market_caps_rebuild.done",
+        companies=len(ciks),
+        rows_written=result.rows_written,
+        data_items=len(data_items),
+    )
     return result
+
+
+async def only_new_items(conn: AsyncConnection, items: Sequence[FailedItem]) -> list[FailedItem]:
+    """The items not already reported by the previous run; remembers this
+    run's full set for the next one. Does not commit."""
+    previous = set(json.loads(await read_watermark(conn, JOB_NAME, REPORTED_KEY) or "[]"))
+    current = sorted({f"{item.key}\t{item.error}" for item in items})
+    await write_watermark(conn, JOB_NAME, REPORTED_KEY, json.dumps(current))
+    return [item for item in items if f"{item.key}\t{item.error}" not in previous]

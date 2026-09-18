@@ -181,3 +181,68 @@ def test_anchor_date_is_as_of_for_dei_and_filed_for_us_gaap() -> None:
 
     assert cover.anchor_date == date(2020, 7, 17)
     assert balance_sheet.anchor_date == date(2020, 7, 31)
+
+
+def test_two_later_filings_that_agree_rebaseline_after_a_rejected_jump() -> None:
+    """The reviewers' cascade probe: one rejection must not freeze every later
+    count."""
+    base = count("2021-01-20", "2021-02-01", 100_000_000)
+    jump = count("2021-04-20", "2021-05-01", 150_000_000)
+    confirm = count("2021-07-20", "2021-08-01", 152_000_000)
+    later = count("2022-07-20", "2022-08-01", 160_000_000)
+
+    accepted, rejected = validate_counts([base, jump, confirm, later], [])
+
+    assert accepted == [base, jump, confirm, later]
+    assert rejected == []
+
+
+def test_a_second_count_in_the_same_filing_does_not_confirm_a_jump() -> None:
+    base = count("2021-01-20", "2021-02-01", 100_000_000)
+    cover = count("2021-04-20", "2021-05-01", 150_000_000, accession="same")
+    balance = count("2021-03-31", "2021-05-01", 151_000_000, concept=US_GAAP_SHARES, accession="same")
+
+    accepted, rejected = validate_counts([base, cover, balance], [])
+
+    assert accepted == [base]
+    assert {r.count for r in rejected} == {cover, balance}
+
+
+def test_a_later_filing_confirms_every_jumped_count_of_the_previous_filing() -> None:
+    base = count("2021-01-20", "2021-02-01", 100_000_000)
+    cover = count("2021-04-20", "2021-05-01", 150_000_000, accession="q1")
+    balance = count("2021-03-31", "2021-05-01", 151_000_000, concept=US_GAAP_SHARES, accession="q1")
+    confirm = count("2021-07-20", "2021-08-01", 152_000_000, accession="q2")
+
+    accepted, rejected = validate_counts([base, cover, balance, confirm], [])
+
+    assert set(accepted) == {base, cover, balance, confirm}
+    assert rejected == []
+
+
+def test_two_jumps_that_disagree_stay_rejected() -> None:
+    base = count("2021-01-20", "2021-02-01", 100_000_000)
+    up = count("2021-04-20", "2021-05-01", 150_000_000)
+    way_up = count("2021-07-20", "2021-08-01", 400_000_000)
+
+    accepted, rejected = validate_counts([base, up, way_up], [])
+
+    assert accepted == [base]
+    assert [r.count for r in rejected] == [up, way_up]
+
+
+def test_apple_without_its_split_event_rebaselines_on_the_next_filing() -> None:
+    """Real Apple cover counts around the 2020 4-for-1 split, with the split
+    Event missing: the first post-split count is rejected, and the next
+    filing confirms it. With the split synced, nothing is rejected at all."""
+    counts = [
+        count("2020-07-17", "2020-07-31", 4_275_634_000),
+        count("2020-10-16", "2020-10-30", 17_001_802_000),
+        count("2021-01-15", "2021-01-28", 16_788_096_000),
+    ]
+
+    accepted, rejected = validate_counts(counts, [])
+    with_split, none_rejected = validate_counts(counts, [date(2020, 8, 31)])
+
+    assert accepted == counts and rejected == []
+    assert with_split == counts and none_rejected == []

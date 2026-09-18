@@ -18,10 +18,13 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from stockticker.ingest.edgar.parse import DEI_SHARES, US_GAAP_SHARES
-from stockticker.ingest.market_caps import SplitRatioError, rebuild_company
-
-ALPHABET = "0001652044"
-BERKSHIRE = "0001067983"
+from stockticker.ingest.job import FailedItem
+from stockticker.ingest.market_caps import (
+    NO_WHOLE_COMPANY_COUNT,
+    SplitRatioError,
+    only_new_items,
+    rebuild_company,
+)
 
 
 @pytest_asyncio.fixture
@@ -35,25 +38,42 @@ def d(value: str) -> date:
     return date.fromisoformat(value)
 
 
+def new_symbol() -> str:
+    return f"T{uuid.uuid4().hex[:6].upper()}"
+
+
 class Scenario:
     def __init__(self, conn: AsyncConnection) -> None:
         self.conn = conn
 
-    async def company(self, cik: str | None = None) -> str:
-        cik = cik or f"9{uuid.uuid4().int % 10**9:09d}"
+    async def company(self, *, price_symbol: str | None = None, unit_ratio: str = "1") -> str:
+        """A fresh Company. `price_symbol` also seeds a share_class_rules row,
+        like the multi-class issuers in the migration."""
+        cik = f"9{uuid.uuid4().int % 10**9:09d}"
         await self.conn.execute(
-            text(
-                "INSERT INTO companies (cik, name, sector) VALUES (:cik, 'Test Co', 'Test') "
-                "ON CONFLICT (cik) DO NOTHING"
-            ),
-            {"cik": cik},
+            text("INSERT INTO companies (cik, name, sector) VALUES (:cik, 'Test Co', 'Test')"), {"cik": cik}
         )
+        if price_symbol is not None:
+            await self.conn.execute(
+                text(
+                    "INSERT INTO share_class_rules (cik, price_symbol, shares_unit_ratio, note) "
+                    "VALUES (:cik, :symbol, :ratio, 'test')"
+                ),
+                {"cik": cik, "symbol": price_symbol, "ratio": Decimal(unit_ratio)},
+            )
         return cik
 
     async def listing(
-        self, cik: str, symbol: str | None = None, *, primary: bool = True, active: bool = True
+        self,
+        cik: str,
+        symbol: str | None = None,
+        *,
+        primary: bool = True,
+        active: bool = True,
+        backfilled: bool = True,
+        splits_synced: bool = True,
     ) -> str:
-        symbol = symbol or f"T{uuid.uuid4().hex[:6].upper()}"
+        symbol = symbol or new_symbol()
         if primary and active:
             await self.conn.execute(
                 text("UPDATE listings SET is_primary = false WHERE cik = :cik AND symbol <> :symbol"),
@@ -61,13 +81,19 @@ class Scenario:
             )
         await self.conn.execute(
             text(
-                "INSERT INTO listings (symbol, cik, is_primary, is_active) "
-                "VALUES (:symbol, :cik, :primary, :active) "
-                "ON CONFLICT (symbol) DO UPDATE SET cik = excluded.cik, is_primary = excluded.is_primary, "
-                "is_active = excluded.is_active"
+                "INSERT INTO listings (symbol, cik, is_primary, is_active, backfill_completed_at) "
+                "VALUES (:symbol, :cik, :primary, :active, CASE WHEN :backfilled THEN now() END)"
             ),
-            {"symbol": symbol, "cik": cik, "primary": primary, "active": active},
+            {"symbol": symbol, "cik": cik, "primary": primary, "active": active, "backfilled": backfilled},
         )
+        if splits_synced:
+            await self.conn.execute(
+                text(
+                    "INSERT INTO ingest_watermarks (job, key, value, updated_at) "
+                    "VALUES ('corporate_actions_sync', :key, '2018-01-01', now())"
+                ),
+                {"key": f"bootstrapped:{symbol}"},
+            )
         return symbol
 
     async def bars(self, symbol: str, closes: dict[str, str]) -> None:
@@ -223,12 +249,12 @@ async def test_two_splits_compound(s: Scenario) -> None:
     assert caps[d("2021-04-01")].shares_used == 6_000_000
 
 
-async def test_a_split_on_another_listing_does_not_apply(s: Scenario) -> None:
+async def test_a_split_on_another_active_class_does_not_apply(s: Scenario) -> None:
     cik = await s.company()
     symbol = await s.listing(cik)
-    old = await s.listing(cik, primary=False, active=False)
+    other_class = await s.listing(cik, primary=False)
     await s.shares(cik, "2021-01-15", "2021-01-28", 1_000_000)
-    await s.event(cik, old, "split", "2021-03-01", {"ratio": 2})
+    await s.event(cik, other_class, "split", "2021-03-01", {"ratio": 2})
     await s.bars(symbol, {"2021-03-02": "1"})
 
     await rebuild_company(s.conn, cik)
@@ -237,33 +263,63 @@ async def test_a_split_on_another_listing_does_not_apply(s: Scenario) -> None:
 
 
 async def test_alphabet_is_priced_on_googl_and_flagged_multi_class(s: Scenario) -> None:
-    await s.company(ALPHABET)
-    googl = await s.listing(ALPHABET, "GOOGL")
-    goog = await s.listing(ALPHABET, "GOOG", primary=False)
-    await s.shares(ALPHABET, "2023-09-30", "2023-10-24", 12_526_000_000, concept=US_GAAP_SHARES)
+    googl, goog = new_symbol(), new_symbol()
+    cik = await s.company(price_symbol=googl)
+    await s.listing(cik, goog)
+    await s.listing(cik, googl, primary=False)
+    await s.shares(cik, "2023-09-30", "2023-10-24", 12_526_000_000, concept=US_GAAP_SHARES)
     await s.bars(googl, {"2023-11-01": "125.30"})
     await s.bars(goog, {"2023-11-01": "999.99"})
 
-    await rebuild_company(s.conn, ALPHABET)
+    await rebuild_company(s.conn, cik)
 
-    row = (await s.caps(ALPHABET))[d("2023-11-01")]
+    row = (await s.caps(cik))[d("2023-11-01")]
     assert row.market_cap == Decimal("125.30") * 12_526_000_000
     assert row.shares_used == 12_526_000_000
     assert row.is_multi_class is True
 
 
-async def test_berkshire_counts_class_a_equivalents_in_brk_b_units(s: Scenario) -> None:
-    await s.company(BERKSHIRE)
-    brk_b = await s.listing(BERKSHIRE, "BRK.B")
-    await s.shares(BERKSHIRE, "2023-10-16", "2023-10-30", 1_440_000)
+async def test_berkshire_style_unit_ratio_converts_to_price_listing_units(s: Scenario) -> None:
+    brk_b = new_symbol()
+    cik = await s.company(price_symbol=brk_b, unit_ratio="1500")
+    await s.listing(cik, brk_b)
+    await s.shares(cik, "2023-10-16", "2023-10-30", 1_440_000, concept=US_GAAP_SHARES)
     await s.bars(brk_b, {"2023-11-01": "345.67"})
 
-    await rebuild_company(s.conn, BERKSHIRE)
+    await rebuild_company(s.conn, cik)
 
-    row = (await s.caps(BERKSHIRE))[d("2023-11-01")]
+    row = (await s.caps(cik))[d("2023-11-01")]
     assert row.shares_used == 1_440_000 * 1500
     assert row.market_cap == Decimal("345.67") * 1_440_000 * 1500
     assert row.is_multi_class is True
+
+
+async def test_multi_class_issuers_ignore_dei_cover_counts(s: Scenario) -> None:
+    """Fox's only dei count is a placeholder of 1 share; a multi-class
+    issuer's cover count is per class at best. us-gaap alone decides."""
+    price = new_symbol()
+    cik = await s.company(price_symbol=price)
+    await s.listing(cik, price)
+    await s.shares(cik, "2023-09-30", "2023-10-24", 470_000_000, concept=US_GAAP_SHARES)
+    await s.shares(cik, "2023-10-20", "2023-10-24", 1, concept=DEI_SHARES)
+    await s.bars(price, {"2023-11-01": "30"})
+
+    await rebuild_company(s.conn, cik)
+
+    assert (await s.caps(cik))[d("2023-11-01")].shares_used == 470_000_000
+
+
+async def test_multi_class_issuer_with_only_a_placeholder_dei_count_gets_no_rows(s: Scenario) -> None:
+    price = new_symbol()
+    cik = await s.company(price_symbol=price)
+    await s.listing(cik, price)
+    await s.shares(cik, "2019-03-18", "2019-03-18", 1, concept=DEI_SHARES)
+    await s.bars(price, {"2023-11-01": "30"})
+
+    rebuilt = await rebuild_company(s.conn, cik)
+
+    assert await s.caps(cik) == {}
+    assert rebuilt.no_whole_company_count is True
 
 
 async def test_ticker_change_prices_only_the_active_listing(s: Scenario) -> None:
@@ -283,19 +339,74 @@ async def test_ticker_change_prices_only_the_active_listing(s: Scenario) -> None
     assert caps[d("2022-06-09")].market_cap == Decimal("184.00") * 2_700_000_000
 
 
-async def test_no_active_price_listing_means_no_rows_and_old_rows_are_removed(s: Scenario) -> None:
+async def test_a_split_recorded_under_a_retired_ticker_still_applies(s: Scenario) -> None:
+    """Reviewer probe: FISV -> FI. The split Event carries the old symbol."""
+    cik = await s.company()
+    old = await s.listing(cik, primary=False, active=False)
+    new = await s.listing(cik)
+    await s.shares(cik, "2018-02-01", "2018-02-10", 200_000_000)
+    await s.event(cik, old, "split", "2018-03-19", {"ratio": 2})
+    await s.bars(new, {"2018-03-20": "50"})
+
+    await rebuild_company(s.conn, cik)
+
+    assert (await s.caps(cik))[d("2018-03-20")].shares_used == 400_000_000
+
+
+async def test_a_split_with_no_symbol_applies_to_the_price_listing(s: Scenario) -> None:
     cik = await s.company()
     symbol = await s.listing(cik)
-    await s.shares(cik, "2022-04-22", "2022-04-28", 1_000)
-    await s.bars(symbol, {"2022-06-09": "1"})
+    await s.shares(cik, "2018-02-01", "2018-02-10", 200_000_000)
+    await s.event(cik, None, "split", "2018-03-19", {"ratio": 2})
+    await s.bars(symbol, {"2018-03-20": "50"})
+
     await rebuild_company(s.conn, cik)
-    assert len(await s.caps(cik)) == 1
+
+    assert (await s.caps(cik))[d("2018-03-20")].shares_used == 400_000_000
+
+
+async def test_a_retired_price_listing_leaves_the_history_untouched(s: Scenario) -> None:
+    """Reviewer probe: a Company that left the index keeps its rows."""
+    cik = await s.company()
+    symbol = await s.listing(cik)
+    await s.shares(cik, "2021-01-20", "2021-02-01", 100)
+    await s.bars(symbol, {"2021-03-01": "10"})
+    await rebuild_company(s.conn, cik)
 
     await s.conn.execute(text("UPDATE listings SET is_active = false WHERE symbol = :s"), {"s": symbol})
     rebuilt = await rebuild_company(s.conn, cik)
 
+    assert len(await s.caps(cik)) == 1
+    assert rebuilt.skipped == "no active price Listing"
+
+
+async def test_a_new_ticker_before_its_backfill_leaves_the_history_untouched(s: Scenario) -> None:
+    """Reviewer probe: right after a rename the new Listing has no bars yet;
+    rebuilding then would delete the Company's whole history."""
+    cik = await s.company()
+    old = await s.listing(cik)
+    await s.shares(cik, "2021-01-20", "2021-02-01", 100)
+    await s.bars(old, {"2021-03-01": "10"})
+    await rebuild_company(s.conn, cik)
+
+    await s.listing(cik, backfilled=False)
+    rebuilt = await rebuild_company(s.conn, cik)
+
+    assert len(await s.caps(cik)) == 1
+    assert rebuilt.removed == 0
+    assert rebuilt.skipped is not None and "backfill not finished" in rebuilt.skipped
+
+
+async def test_no_rows_until_the_splits_are_synced(s: Scenario) -> None:
+    cik = await s.company()
+    symbol = await s.listing(cik, splits_synced=False)
+    await s.shares(cik, "2021-01-20", "2021-02-01", 100)
+    await s.bars(symbol, {"2021-03-01": "10"})
+
+    rebuilt = await rebuild_company(s.conn, cik)
+
     assert await s.caps(cik) == {}
-    assert rebuilt.removed == 1
+    assert rebuilt.skipped == "splits_not_synced"
 
 
 async def test_tie_break_prefers_the_latest_filing_for_the_same_as_of_date(s: Scenario) -> None:
@@ -364,14 +475,15 @@ async def test_a_split_between_the_cover_date_and_the_filing_applies_to_a_dei_co
     assert (await s.caps(cik))[d("2024-05-30")].shares_used == 24_640_000_000
 
 
-async def test_berkshire_without_a_whole_company_count_gets_no_rows(s: Scenario) -> None:
-    await s.company(BERKSHIRE)
-    brk_b = await s.listing(BERKSHIRE, "BRK.B")
+async def test_no_whole_company_count_gets_no_rows(s: Scenario) -> None:
+    brk_b = new_symbol()
+    cik = await s.company(price_symbol=brk_b, unit_ratio="1500")
+    await s.listing(cik, brk_b)
     await s.bars(brk_b, {"2023-11-01": "345.67"})
 
-    rebuilt = await rebuild_company(s.conn, BERKSHIRE)
+    rebuilt = await rebuild_company(s.conn, cik)
 
-    assert await s.caps(BERKSHIRE) == {}
+    assert await s.caps(cik) == {}
     assert rebuilt.no_whole_company_count is True
     assert rebuilt.rejections == []
 
@@ -382,17 +494,27 @@ async def test_brown_forman_is_seeded_as_multi_class_priced_on_bf_b(s: Scenario)
             text("SELECT price_symbol, shares_unit_ratio FROM share_class_rules WHERE cik = '0000014693'")
         )
     ).one()
+
     assert (rule.price_symbol, rule.shares_unit_ratio) == ("BF.B", 1)
 
-    bf_b = await s.listing("0000014693", "BF.B")
-    await s.shares("0000014693", "2023-11-30", "2023-12-06", 473_000_000)
-    await s.bars(bf_b, {"2023-12-07": "58.00"})
 
-    await rebuild_company(s.conn, "0000014693")
+async def test_one_rejected_count_does_not_freeze_later_counts(s: Scenario) -> None:
+    """Reviewer probe: 100M, then 150M (a +50% jump, rejected), then 152M
+    and 160M. The second filing confirms the new level."""
+    cik = await s.company()
+    symbol = await s.listing(cik)
+    await s.shares(cik, "2021-01-20", "2021-02-01", 100_000_000)
+    await s.shares(cik, "2021-04-20", "2021-05-01", 150_000_000)
+    await s.shares(cik, "2021-07-20", "2021-08-01", 152_000_000)
+    await s.shares(cik, "2022-07-20", "2022-08-01", 160_000_000)
+    await s.bars(symbol, {"2021-05-03": "10", "2022-09-01": "10"})
 
-    row = (await s.caps("0000014693"))[d("2023-12-07")]
-    assert row.is_multi_class is True
-    assert row.market_cap == Decimal("58.00") * 473_000_000
+    rebuilt = await rebuild_company(s.conn, cik)
+
+    caps = await s.caps(cik)
+    assert caps[d("2021-05-03")].shares_used == 150_000_000
+    assert caps[d("2022-09-01")].shares_used == 160_000_000
+    assert rebuilt.rejections == []
 
 
 async def test_no_row_before_the_first_filing(s: Scenario) -> None:
@@ -546,3 +668,23 @@ async def test_rebuild_is_idempotent(s: Scenario) -> None:
 
     assert (first.upserted, first.removed) == (2, 0)
     assert (second.upserted, second.removed) == (0, 0)
+
+
+async def test_a_data_item_is_reported_once_until_it_changes(conn: AsyncConnection) -> None:
+    await conn.execute(
+        text("DELETE FROM ingest_watermarks WHERE job = 'market_caps_rebuild' AND key = 'reported_items'")
+    )
+    berkshire = FailedItem(key="0001067983", error=NO_WHOLE_COMPANY_COUNT)
+    rejection = FailedItem(key="0000000001:2022-06-30:x:y", error="count changed 50%")
+
+    first = await only_new_items(conn, [berkshire])
+    second = await only_new_items(conn, [berkshire, rejection])
+    third = await only_new_items(conn, [berkshire, rejection])
+    after_clearing = await only_new_items(conn, [])
+    back_again = await only_new_items(conn, [berkshire])
+
+    assert first == [berkshire]
+    assert second == [rejection]
+    assert third == []
+    assert after_clearing == []
+    assert back_again == [berkshire]

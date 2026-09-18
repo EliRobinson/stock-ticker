@@ -61,11 +61,15 @@ def get_quotes_engine() -> AsyncEngine:
 @lru_cache
 def get_ai_reader_engine() -> AsyncEngine:
     # The migration also caps ai_reader's server-side connection limit at 3
-    # (§3); keep the client-side pool at or under that.
+    # (§3); keep the client-side pool at or under that. Against the pytest
+    # database, use pool_size=1 so integration fixtures can open their own
+    # short-lived ai_reader engines without TooManyConnectionsError (#38).
+    settings = get_settings()
+    pool_size = 1 if settings.postgres_db.endswith("_test") else 3
     return create_async_engine(
-        get_settings().ai_reader_dsn,
+        settings.ai_reader_dsn,
         pool_pre_ping=True,
-        pool_size=3,
+        pool_size=pool_size,
         max_overflow=0,
         pool_timeout=POOL_ACQUIRE_TIMEOUT_SECONDS,
         # The /api/v1/chat SQL guard's executor runs DISCARD ALL before a

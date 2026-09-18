@@ -70,9 +70,23 @@ async def run_startup_chain(engine: AsyncEngine, quotes_engine: AsyncEngine) -> 
         # cheap insurance against a bug in run_job itself still not
         # aborting every other step in this gather.
         await asyncio.gather(
-            *(run_job(spec, engine=engine, quotes_engine=quotes_engine) for spec in specs),
+            *(_run_startup_job(spec, engine, quotes_engine) for spec in specs),
             return_exceptions=True,
         )
+
+
+async def _run_startup_job(spec: JobSpec, engine: AsyncEngine, quotes_engine: AsyncEngine) -> None:
+    """Run one startup-chain job. `bars_backfill` loops until it reports
+    nothing left to do (issue #38: a first boot otherwise takes ~10 hours
+    at 50 symbols per hourly cron tick). Other jobs run once."""
+    while True:
+        outcome = await run_job(spec, engine=engine, quotes_engine=quotes_engine)
+        if spec.name != "bars_backfill":
+            return
+        # succeeded / partial: another batch may remain. skipped: caught up.
+        # failed / skipped_locked: stop — don't spin on a hard error or a lock.
+        if outcome.status in ("skipped", "skipped_locked", "failed"):
+            return
 
 
 def create_scheduler() -> AsyncIOScheduler:

@@ -15,6 +15,9 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-stockticker}
     volumes:
       - db_data:/var/lib/postgresql/data
+      # Creates `stockticker_test` on first volume init (issue #38). Existing
+      # volumes use `api/scripts/ensure_test_database.py` instead.
+      - ./api/docker/postgres:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test:
         [

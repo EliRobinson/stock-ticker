@@ -32,16 +32,17 @@ def _truncated_page(keep_rows: int) -> str:
 
 
 def test_normal_page_parses_every_constituent() -> None:
-    rows = parse_constituents(NORMAL_PAGE)
+    parsed = parse_constituents(NORMAL_PAGE)
 
-    assert len(rows) == 503
-    assert len({row.symbol for row in rows}) == 503
-    assert all(len(row.cik) == 10 and row.cik.isdigit() for row in rows)
-    assert all(row.name and row.sector for row in rows)
+    assert len(parsed.rows) == 503
+    assert parsed.rejected == ()
+    assert len({row.symbol for row in parsed.rows}) == 503
+    assert all(len(row.cik) == 10 and row.cik.isdigit() for row in parsed.rows)
+    assert all(row.name and row.sector for row in parsed.rows)
 
 
 def test_first_row_matches_the_page() -> None:
-    mmm = parse_constituents(NORMAL_PAGE)[0]
+    mmm = parse_constituents(NORMAL_PAGE).rows[0]
 
     assert mmm.symbol == "MMM"
     assert mmm.name == "3M"
@@ -53,7 +54,7 @@ def test_first_row_matches_the_page() -> None:
 
 
 def test_share_classes_keep_the_dot_form_and_one_cik() -> None:
-    by_symbol = {row.symbol: row for row in parse_constituents(NORMAL_PAGE)}
+    by_symbol = {row.symbol: row for row in parse_constituents(NORMAL_PAGE).rows}
 
     assert by_symbol["BRK.B"].cik == "0001067983"
     assert by_symbol["BF.B"].name == "Brown–Forman"
@@ -64,13 +65,13 @@ def test_share_classes_keep_the_dot_form_and_one_cik() -> None:
 
 
 def test_headquarters_keeps_the_text_around_links() -> None:
-    by_symbol = {row.symbol: row for row in parse_constituents(NORMAL_PAGE)}
+    by_symbol = {row.symbol: row for row in parse_constituents(NORMAL_PAGE).rows}
 
     assert by_symbol["AOS"].headquarters == "Milwaukee, Wisconsin"
 
 
 def test_footnote_markers_are_dropped() -> None:
-    rows = parse_constituents(NORMAL_PAGE)
+    rows = parse_constituents(NORMAL_PAGE).rows
 
     assert not any("[" in f"{row.name}{row.sector}{row.sub_industry}{row.headquarters}" for row in rows)
 
@@ -93,7 +94,7 @@ def test_fewer_than_480_rows_fails() -> None:
 
 
 def test_exactly_480_rows_passes() -> None:
-    assert len(parse_constituents(_truncated_page(MIN_ROWS))) == MIN_ROWS
+    assert len(parse_constituents(_truncated_page(MIN_ROWS)).rows) == MIN_ROWS
 
 
 def test_a_non_numeric_cik_fails() -> None:
@@ -109,6 +110,28 @@ def test_a_cik_must_be_one_to_ten_ascii_digits(cik: str) -> None:
 
     with pytest.raises(ConstituentsParseError, match="bad CIK"):
         parse_constituents(page)
+
+
+@pytest.mark.parametrize(
+    "junk",
+    [
+        "T131793",
+        "T137FB9",
+        "T3F04A1",
+        "BRK.BB",
+        "TOOLONG",
+        "AAPL1",
+    ],
+)
+def test_invalid_tickers_are_rejected_as_failed_items_not_a_failed_parse(junk: str) -> None:
+    page = NORMAL_PAGE.replace(">MMM</a>", f">{junk}</a>", 1)
+
+    parsed = parse_constituents(page)
+
+    assert junk not in {row.symbol for row in parsed.rows}
+    assert len(parsed.rejected) == 1
+    assert parsed.rejected[0].key == junk
+    assert "invalid ticker" in parsed.rejected[0].error
 
 
 @respx.mock

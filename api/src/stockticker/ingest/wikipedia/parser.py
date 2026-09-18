@@ -15,7 +15,8 @@ from datetime import date
 
 from selectolax.parser import HTMLParser, Node
 
-from stockticker.ingest.symbols import normalize_cik, normalize_symbol
+from stockticker.ingest.job import FailedItem
+from stockticker.ingest.symbols import is_valid_listing_ticker, normalize_cik, normalize_symbol
 
 MIN_ROWS = 480
 
@@ -53,7 +54,13 @@ class ConstituentRow:
     cik: str
 
 
-def parse_constituents(html: str) -> list[ConstituentRow]:
+@dataclass(frozen=True, slots=True)
+class ConstituentsParseResult:
+    rows: list[ConstituentRow]
+    rejected: tuple[FailedItem, ...] = ()
+
+
+def parse_constituents(html: str) -> ConstituentsParseResult:
     tree = HTMLParser(html)
     table = tree.css_first("table#constituents")
     if table is None:
@@ -71,18 +78,23 @@ def parse_constituents(html: str) -> list[ConstituentRow]:
     index_of = {field: positions[column] for column, field in EXPECTED_COLUMNS.items()}
 
     parsed: list[ConstituentRow] = []
+    rejected: list[FailedItem] = []
     for row_number, row in enumerate(rows[1:], start=2):
         cells = [_cell_text(cell) for cell in row.css("td")]
         if len(cells) < len(headers):
             raise ConstituentsParseError(f"row {row_number} has {len(cells)} cells, expected {len(headers)}")
-        parsed.append(_to_row(cells, index_of, row_number))
+        outcome = _to_row(cells, index_of, row_number)
+        if isinstance(outcome, FailedItem):
+            rejected.append(outcome)
+        else:
+            parsed.append(outcome)
 
     if len(parsed) < MIN_ROWS:
         raise ConstituentsParseError(f"only {len(parsed)} rows, expected at least {MIN_ROWS}")
-    return parsed
+    return ConstituentsParseResult(rows=parsed, rejected=tuple(rejected))
 
 
-def _to_row(cells: list[str], index_of: dict[str, int], row_number: int) -> ConstituentRow:
+def _to_row(cells: list[str], index_of: dict[str, int], row_number: int) -> ConstituentRow | FailedItem:
     def field(name: str) -> str:
         return cells[index_of[name]]
 
@@ -90,6 +102,9 @@ def _to_row(cells: list[str], index_of: dict[str, int], row_number: int) -> Cons
         symbol = normalize_symbol(field("symbol"))
     except ValueError as exc:
         raise ConstituentsParseError(f"row {row_number}: empty symbol") from exc
+
+    if not is_valid_listing_ticker(symbol):
+        return FailedItem(key=symbol, error=f"row {row_number}: invalid ticker {symbol!r}")
 
     cik_raw = field("cik")
     if not _CIK.fullmatch(cik_raw):

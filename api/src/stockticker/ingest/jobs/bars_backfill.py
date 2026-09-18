@@ -19,6 +19,12 @@ from the *earliest* resume point any member needs, and
 or a database) discards, per symbol, any row before that symbol's own
 resume point.
 
+When the provider rejects one or more symbols in the batch (Alpaca 400 /
+"invalid symbol"), the fetch bisects until the bad symbols are isolated;
+each is recorded as a `FailedItem`, deactivated, and marked
+`backfill_completed_at` so it stops starving the other ~500 (issue #38).
+A non-rejection failure (network, 5xx) still fails the run.
+
 `end` is now minus a 16-minute lag (system design §4), converted to its
 New York trading date; a symbol whose new watermark reaches that date is
 "caught up" and gets `backfill_completed_at` set. So does a symbol whose
@@ -52,9 +58,11 @@ picks it up.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 
+import httpx
 from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
@@ -124,6 +132,44 @@ def plan_symbol_outcomes(
     return outcomes
 
 
+def is_provider_symbol_rejection(exc: BaseException) -> bool:
+    """True when the provider refused one or more symbols in the request
+    (Alpaca HTTP 400 / "invalid symbol"), not a transient transport error."""
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
+        return exc.response.status_code == 400
+    return "invalid symbol" in str(exc).lower()
+
+
+async def daily_bars_isolating_rejects(
+    source: BarSource,
+    symbols: Sequence[str],
+    start: date,
+    end: date,
+) -> tuple[list[ProviderBar], list[FailedItem]]:
+    """Fetch bars for `symbols`, bisecting on provider symbol rejections so
+    one bad ticker never fails the whole batch (issue #38). Non-rejection
+    errors propagate."""
+    if not symbols:
+        return [], []
+    try:
+        return await source.daily_bars(symbols, start, end), []
+    except Exception as exc:
+        if not is_provider_symbol_rejection(exc):
+            raise
+        if len(symbols) == 1:
+            return [], [FailedItem(key=symbols[0], error=str(exc))]
+        named = [symbol for symbol in symbols if symbol in str(exc)]
+        if named and len(named) < len(symbols):
+            remaining = [symbol for symbol in symbols if symbol not in set(named)]
+            bars, more_failed = await daily_bars_isolating_rejects(source, remaining, start, end)
+            rejected = [FailedItem(key=symbol, error=str(exc)) for symbol in named]
+            return bars, rejected + more_failed
+        mid = len(symbols) // 2
+        left_bars, left_failed = await daily_bars_isolating_rejects(source, symbols[:mid], start, end)
+        right_bars, right_failed = await daily_bars_isolating_rejects(source, symbols[mid:], start, end)
+        return left_bars + right_bars, left_failed + right_failed
+
+
 async def bars_backfill(ctx: JobContext) -> JobResult:
     client = require_alpaca_client()
     return await run_bars_backfill(ctx.engine, AlpacaBarSource(client))
@@ -141,12 +187,24 @@ async def run_bars_backfill(engine: AsyncEngine, source: BarSource) -> JobResult
     start = min(plan.resume_from for plan in plans)
     symbols = [plan.symbol for plan in plans]
 
-    bars = await source.daily_bars(symbols, start, end.date())
+    bars, rejected = await daily_bars_isolating_rejects(source, symbols, start, end.date())
+    failed_items: list[FailedItem] = list(rejected)
+    if rejected:
+        rejected_keys = {item.key for item in rejected}
+        async with engine.connect() as conn:
+            for item in rejected:
+                plan = next(p for p in plans if p.symbol == item.key)
+                await _retire_rejected_symbol(conn, plan, item.error)
+            await conn.commit()
+        plans = [plan for plan in plans if plan.symbol not in rejected_keys]
+        if not plans:
+            return JobResult(rows_written=0, failed_items=failed_items)
+
     bars, sanity_failed = sanitize_bars(bars)
     outcomes = plan_symbol_outcomes(bars, plans, end_trading_day)
 
     rows_written = 0
-    failed_items: list[FailedItem] = list(sanity_failed)
+    failed_items.extend(sanity_failed)
     for plan in plans:
         outcome = outcomes[plan.symbol]
         async with engine.connect() as conn:
@@ -226,6 +284,21 @@ async def _select_batch(conn: AsyncConnection) -> list[SymbolBackfillPlan]:
     return plans
 
 
+async def _retire_rejected_symbol(conn: AsyncConnection, plan: SymbolBackfillPlan, error: str) -> None:
+    """Deactivate a Listing the provider will never serve, and mark its
+    backfill complete so it leaves the incomplete queue (issue #38)."""
+    await conn.execute(
+        text(
+            "UPDATE listings SET is_active = false, "
+            "backfill_completed_at = COALESCE(backfill_completed_at, now()), "
+            "updated_at = now() WHERE symbol = :symbol"
+        ),
+        {"symbol": plan.symbol},
+    )
+    for reason in plan.refetch_reasons:
+        await mark_refetch_failed(conn, plan.symbol, reason, error)
+
+
 async def _write_symbol(
     conn: AsyncConnection, plan: SymbolBackfillPlan, outcome: SymbolBackfillOutcome
 ) -> int:
@@ -281,6 +354,8 @@ __all__ = [
     "SymbolBackfillOutcome",
     "SymbolBackfillPlan",
     "bars_backfill",
+    "daily_bars_isolating_rejects",
+    "is_provider_symbol_rejection",
     "plan_symbol_outcomes",
     "run_bars_backfill",
 ]

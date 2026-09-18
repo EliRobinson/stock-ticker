@@ -24,7 +24,7 @@ from stockticker.ingest.wikipedia.sync import (
 )
 
 PAGE = (Path(__file__).parent.parent / "fixtures" / "wikipedia" / "sp500_constituents.html").read_text()
-ROWS = parse_constituents(PAGE)
+ROWS = parse_constituents(PAGE).rows
 
 
 @pytest_asyncio.fixture

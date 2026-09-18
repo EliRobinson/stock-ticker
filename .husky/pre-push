@@ -46,11 +46,24 @@ if [ -z "$API_BASE" ] || ! git diff --quiet "$API_BASE" HEAD -- api/ 2>/dev/null
   # it's not already up, REQUIRE_DB=1 turns the resulting "not reachable"
   # into a clear pytest.fail message (tests/integration/conftest.py)
   # instead of a skip.
-  echo "==> api:pytest (REQUIRE_DB=1, via docker compose)"
-  if ! docker compose run --rm --no-deps --entrypoint "" api sh -c "REQUIRE_DB=1 uv run --no-sync pytest tests -q"; then
+  # Tests always use stockticker_test (issue #38), never the app DB.
+  # `migrate` already has the superuser password in its compose env, so
+  # ensure_test_database runs there; pytest still runs in `api`.
+  echo "==> api:ensure-test-db + pytest (REQUIRE_DB=1, via docker compose)"
+  if ! docker compose run --rm --no-deps --entrypoint "" \
+      -e POSTGRES_TEST_DB=stockticker_test \
+      migrate sh -c "uv run --no-sync python scripts/ensure_test_database.py"; then
+    echo "pre-push failed at: api:ensure-test-db" >&2
+    echo "If that was a DB-reachability failure: run \`docker compose up -d db\` first." >&2
+    exit 1
+  fi
+  if ! docker compose run --rm --no-deps --entrypoint "" \
+      -e POSTGRES_DB=stockticker_test \
+      -e POSTGRES_TEST_DB=stockticker_test \
+      api sh -c "REQUIRE_DB=1 uv run --no-sync pytest tests -q"; then
     echo "pre-push failed at: api:pytest" >&2
     echo "If that was a DB-reachability failure: run \`docker compose up -d db\`" >&2
-    echo "(and \`docker compose run --rm migrate\` if the schema isn't current), then push again." >&2
+    echo "(and re-run the ensure_test_database step), then push again." >&2
     exit 1
   fi
 else

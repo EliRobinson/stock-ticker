@@ -83,7 +83,16 @@ Then open http://127.0.0.1:3000.
 
 - Eli's `.env` already has all keys, plus 3 generated `POSTGRES_*_PASSWORD` values. Never print or copy `.env`.
 - The API has an Anthropic spend cap: `AI_SPEND_LIMIT_USD=5`. The Anthropic Console has a $5 limit too. Do not run the evals or the live AI more than needed.
-- API tests: `docker compose run --rm --no-deps --entrypoint "" api sh -c "REQUIRE_DB=1 uv run --no-sync pytest tests -q"`.
+- API tests: create/migrate `stockticker_test`, then run pytest against it (never the app DB):
+
+```bash
+docker compose run --rm --no-deps --entrypoint "" migrate \
+  sh -c "uv run --no-sync python scripts/ensure_test_database.py"
+docker compose run --rm --no-deps --entrypoint "" \
+  -e POSTGRES_DB=stockticker_test -e POSTGRES_TEST_DB=stockticker_test api \
+  sh -c "REQUIRE_DB=1 uv run --no-sync pytest tests -q"
+```
+
 - Web tests: `pnpm --filter web test`. E2E: `RUN_E2E=1 git push`, or `pnpm --filter web test:e2e`.
 - The pre-push hook is the CI gate. It runs web type-check, lint, format, tests, and build, and, when `api/` changed, api ruff, mypy, and pytest. Never use `--no-verify`.
 - Hooks path gotcha: `pnpm install` inside a git worktree rewrites `core.hooksPath` to a relative path, and then worktrees without their own install run no hooks. After installing, set it back with `git config core.hooksPath "$PWD/.husky/_"` from the main checkout.

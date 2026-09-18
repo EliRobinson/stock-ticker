@@ -77,14 +77,18 @@ async def queue_refetch(
     conn: AsyncConnection, symbol: str, reason: RefetchReason, from_date: date, *, reopen: bool = False
 ) -> None:
     """Upsert one `(symbol, reason)` request (`bars_daily` for `adj_drift`,
-    `gap_check` for `gap`). An existing row's `from_date` only ever widens
-    (`LEAST`); `requested_at` always moves to `now()`, so a widen mid-flight
-    still protects `finish_refetch`'s renewed-since-selection check.
+    `gap_check` for `gap`). An existing open row's `from_date` only ever
+    widens (`LEAST`). `requested_at` moves to `now()` only when `from_date`
+    actually moves earlier — a no-op nightly widen must not renew the row,
+    or `finish_refetch`'s `requested_at <= selected_at` delete fails after
+    an overlapping `bars_backfill`. A real widen mid-flight still renews,
+    so the serving job leaves the newer request alone.
 
     `reopen=True` is for a request that was accepted (gap_check giving up)
     or never existed: the whole row -- attempts, `last_error`, `accepted_at`
     -- resets, since this is a fresh cycle, not a widen of one still being
-    served."""
+    served. Accepted rows are left alone on the non-reopen path
+    (`WHERE accepted_at IS NULL`), matching gap_check's old widen UPDATE."""
     if reopen:
         await conn.execute(
             text(
@@ -101,7 +105,11 @@ async def queue_refetch(
             "INSERT INTO refetch_requests (symbol, reason, from_date, requested_at) "
             "VALUES (:symbol, :reason, :from_date, now()) "
             "ON CONFLICT (symbol, reason) DO UPDATE SET "
-            "from_date = LEAST(refetch_requests.from_date, excluded.from_date), requested_at = now()"
+            "from_date = LEAST(refetch_requests.from_date, excluded.from_date), "
+            "requested_at = CASE "
+            "WHEN excluded.from_date < refetch_requests.from_date THEN now() "
+            "ELSE refetch_requests.requested_at END "
+            "WHERE refetch_requests.accepted_at IS NULL"
         ),
         {"symbol": symbol, "reason": reason, "from_date": from_date},
     )

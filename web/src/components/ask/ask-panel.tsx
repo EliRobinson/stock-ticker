@@ -2,7 +2,6 @@
 
 import { ChevronDown, ChevronRight, X } from 'lucide-react'
 import { useMemo, useState, useSyncExternalStore } from 'react'
-import type { ComponentProps } from 'react'
 
 import { CodeBlock } from '@/components/ai-elements/code-block'
 import {
@@ -39,6 +38,7 @@ import { cn } from '@/lib/utils'
 
 import { TimeseriesChart } from '../chart/timeseries-chart'
 import { StatusAlert } from '../shared/feedback'
+import { safeMarkdownProps } from '../shared/markdown'
 import { toNumber } from '../shared/format'
 import { askCopy as copy } from './copy'
 import type {
@@ -58,13 +58,6 @@ type ViewPart = Extract<Part, { type: 'data-view' }>
 
 const isTool = (p: Part): p is ToolPart => p.type.startsWith('tool-')
 const toolName = (p: ToolPart) => p.type.slice('tool-'.length)
-
-// Markdown in answers: raw HTML off, remote images off, only https links (system design §7).
-const safeMarkdown: Partial<ComponentProps<typeof MessageResponse>> = {
-  skipHtml: true,
-  disallowedElements: ['img'],
-  urlTransform: (url: string) => (url.startsWith('https://') ? url : null)
-}
 
 export interface AskPanelProps {
   messages: AskMessage[]
@@ -296,7 +289,7 @@ function AskTurn({
       {texts.map((p, i) => (
         <MessageContent key={i} className='text-sm leading-[1.55]'>
           <div aria-busy={streaming || undefined}>
-            <MessageResponse {...safeMarkdown}>
+            <MessageResponse {...safeMarkdownProps}>
               {p.type === 'text' ? p.text : ''}
             </MessageResponse>
             {streaming && i === texts.length - 1 && (

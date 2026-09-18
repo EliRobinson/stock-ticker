@@ -2,9 +2,7 @@
 
 import { EllipsisVertical } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import type { ComponentProps } from 'react'
 import type { DateRange } from 'react-day-picker'
-import { Streamdown } from 'streamdown'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -32,6 +30,7 @@ import type { Note } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 import { EmptyState, SkeletonBar, StatusAlert } from '../shared/feedback'
+import { SafeMarkdown } from '../shared/markdown'
 import { formatDateRange } from '../shared/format'
 import { notesCopy as copy } from './copy'
 import { NoteDialog } from './note-dialog'
@@ -39,14 +38,6 @@ import type { CompanyOption, NoteDraft } from './note-dialog'
 
 const ALL = '__all__'
 const MARKET = '__market__'
-
-// Note bodies are the user's markdown: raw HTML and images off, https links only.
-const safeMarkdown: Partial<ComponentProps<typeof Streamdown>> = {
-  skipHtml: true,
-  disallowedElements: ['img'],
-  urlTransform: (url: string) => (url.startsWith('https://') ? url : null),
-  controls: false
-}
 
 export interface NotesScreenProps {
   notes: Note[]
@@ -315,7 +306,7 @@ export function NoteCard({
             !open && 'line-clamp-3'
           )}
         >
-          <Streamdown {...safeMarkdown}>{note.body}</Streamdown>
+          <SafeMarkdown>{note.body}</SafeMarkdown>
         </div>
         {long && (
           <Button

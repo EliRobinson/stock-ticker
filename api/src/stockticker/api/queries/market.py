@@ -45,6 +45,7 @@ MARKET_QUERY = text(
       l.cik,
       c.name,
       c.sector,
+      l.is_primary,
       l.first_bar_date,
       l.backfill_completed_at,
       q.price,

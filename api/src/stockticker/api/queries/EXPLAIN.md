@@ -33,7 +33,7 @@ replacing this query's own `trading_days` lookup) resolves the previous
 Trading Day, and Postgres folds it straight into the `daily_bars_pkey`
 index condition, so the exact bar for that date is a plain equality lookup
 on the table's own primary key `(symbol, trade_date)` -- not a range scan,
-which is *more* index-friendly than the "just take the latest bar" version
+which is _more_ index-friendly than the "just take the latest bar" version
 of this query. `market_caps` gets the same `LATERAL` + `LIMIT 1` treatment
 against its own `(cik, trade_date)` primary key (no shared function for
 that one yet).

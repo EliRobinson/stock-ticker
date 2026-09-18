@@ -112,15 +112,17 @@ class FakeUsage:
 class FakeJudge:
     model = JUDGE
 
-    def __init__(self, usage_source: FakeUsage, *, passed: bool = True, error: bool = False) -> None:
+    def __init__(
+        self, usage_source: FakeUsage, *, passed: bool = True, error: Exception | None = None
+    ) -> None:
         self.usage = usage_source
         self.passed = passed
         self.error = error
 
     async def grade(self, question: str, transcript: Transcript, criteria: Sequence[Any]) -> JudgeResult:
         self.usage.rows.append(usage(JUDGE, "0.003"))
-        if self.error:
-            raise JudgeError("unreadable")
+        if self.error is not None:
+            raise self.error
         verdicts = [Verdict(c, self.passed, "reason") for c in criteria]
         return JudgeResult(verdicts, usage=None, cost_usd=Decimal("0.003"))  # type: ignore[arg-type]
 
@@ -134,7 +136,7 @@ def runner(
     references: FakeReferences | None = None,
     *,
     judge_passes: bool = True,
-    judge_error: bool = False,
+    judge_error: Exception | None = None,
     budget: str = "0.50",
     backfilled_only: bool = False,
 ) -> tuple[Runner, FakeUsage]:
@@ -175,11 +177,22 @@ async def test_a_failed_check_or_judge_verdict_fails_the_case() -> None:
     assert res.failures == ["judge no_invented_numbers: reason"]
 
 
-async def test_a_judge_error_fails_the_criterion_instead_of_crashing() -> None:
-    run, _ = runner(FakeApi(good_answer()), judge_error=True)
-    [res] = await run.run([case()])
-    assert res.outcome is Outcome.FAIL
-    assert "judge error" in res.failures[0]
+@pytest.mark.parametrize("error", [JudgeError("unreadable"), TypeError("unexpected keyword argument")])
+async def test_a_judge_error_fails_the_criterion_instead_of_crashing(error: Exception) -> None:
+    run, _ = runner(FakeApi(good_answer()), judge_error=error)
+    [first, second] = await run.run([case(id="a"), case(id="b")])
+    assert first.outcome is second.outcome is Outcome.FAIL
+    assert "judge error" in first.failures[0]
+    assert first.judge_spend.cost_usd == Decimal("0.003")
+
+
+async def test_an_unexpected_error_in_one_case_does_not_stop_the_run() -> None:
+    api = FakeApi(RuntimeError("stream broke"))
+    run, _ = runner(api)
+    results = await run.run([case(id="a"), case(id="b")])
+    assert [r.outcome for r in results] == [Outcome.ERROR, Outcome.ERROR]
+    assert results[0].reason == "RuntimeError: stream broke"
+    assert len(api.questions) == 2
 
 
 async def test_a_case_with_missing_data_is_blocked_and_never_asked() -> None:

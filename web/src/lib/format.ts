@@ -13,6 +13,42 @@ export function toNumber(value: NumericInput): number | null {
   return Number.isFinite(n) ? n : null
 }
 
+const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/
+const MONTH_ABBREVIATIONS = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec'
+]
+
+/**
+ * A Trading Day, Note start/end date, and Event date are bare `YYYY-MM-DD`
+ * with no time of day (CONTEXT.md) - `new Date('2024-09-17')` parses that
+ * as UTC midnight, and formatting it in any zone behind UTC (including
+ * America/New_York) rolls it back to the previous day's evening. A pure
+ * calendar date has no instant-in-time to convert between zones, so this
+ * reads its year/month/day directly off the string instead of going
+ * through Date + timeZone math at all.
+ */
+function calendarDateParts(
+  value: string
+): { year: number; month: number; day: number } | null {
+  if (!DATE_ONLY_PATTERN.test(value)) return null
+  const [year, month, day] = value.split('-').map(Number)
+  if (year === undefined || month === undefined || day === undefined) {
+    return null
+  }
+  return { year, month, day }
+}
+
 export type Direction = 'up' | 'down' | 'flat'
 
 export function directionOf(value: NumericInput): Direction {
@@ -145,6 +181,11 @@ export function formatVolume(value: NumericInput): string {
 
 export function formatDate(value: string | null | undefined): string {
   if (!value) return EMPTY
+  const calendarDate = calendarDateParts(value)
+  if (calendarDate) {
+    const { year, month, day } = calendarDate
+    return `${MONTH_ABBREVIATIONS[month - 1]} ${day}, ${year}`
+  }
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return EMPTY
   return new Intl.DateTimeFormat('en-US', {
@@ -211,11 +252,17 @@ export function formatTimeET(
 }
 
 /** "17 Sep 2024" - day-month-year, always a 3-letter month. `en-GB`'s short
- * month is "Sept" for September specifically, so this pulls parts from
- * `en-US` (reliably 3 letters year-round) and joins them itself instead of
- * trusting a locale's day-first ordering. */
+ * month is "Sept" for September specifically, so a real timestamp's parts
+ * are pulled from `en-US` (reliably 3 letters year-round) and joined here
+ * instead of trusting a locale's day-first ordering. A bare calendar date
+ * never goes through Intl/timeZone at all - see calendarDateParts. */
 export function formatDateShort(value: string | null | undefined): string {
   if (!value) return EMPTY
+  const calendarDate = calendarDateParts(value)
+  if (calendarDate) {
+    const { year, month, day } = calendarDate
+    return `${day} ${MONTH_ABBREVIATIONS[month - 1]} ${year}`
+  }
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return EMPTY
   const parts = new Intl.DateTimeFormat('en-US', {

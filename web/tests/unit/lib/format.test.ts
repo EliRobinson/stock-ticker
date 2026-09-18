@@ -136,6 +136,10 @@ describe('formatDate', () => {
     expect(formatDate('2024-06-03')).toBe('Jun 3, 2024')
   })
 
+  it('does not shift a bare calendar date across a month/year boundary', () => {
+    expect(formatDate('2024-01-01')).toBe('Jan 1, 2024')
+  })
+
   it('renders a missing date as an em dash', () => {
     expect(formatDate(null)).toBe('—')
     expect(formatDate(undefined)).toBe('—')
@@ -235,6 +239,17 @@ describe('formatDateShort', () => {
 
   it('renders a missing value as an em dash', () => {
     expect(formatDateShort(null)).toBe('—')
+  })
+
+  it('does not shift a bare calendar date back a day in America/New_York', () => {
+    // A Trading Day/Note/Event date has no time of day - new Date('2024-09-17')
+    // is UTC midnight, which is the evening of the 16th in New York, so
+    // this must never go through a timeZone conversion.
+    expect(formatDateShort('2024-09-17')).toBe('17 Sep 2024')
+  })
+
+  it('handles a single-digit day and January correctly', () => {
+    expect(formatDateShort('2024-01-05')).toBe('5 Jan 2024')
   })
 })
 

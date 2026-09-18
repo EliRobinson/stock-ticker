@@ -262,9 +262,12 @@ The function `ai.today_ny()` returns `current_date`, evaluated in the `ai_reader
 
 - **Formula.** `market_cap(c, d) = price(c, d) × shares(c, d)`.
   - `price` is the as-traded close of the Company's `price_symbol` (from `share_class_rules`), or of its primary Listing.
-  - `shares` is the count with the latest `as_of_date <= d`. The tie-break is the latest `filed_date`, then `dei` before `us-gaap`.
-  - That count is multiplied by `shares_unit_ratio` (default 1), and by the product of split ratios for splits with `as_of_date < ex_date <= d` on the price Listing.
-- **Multi-class issuers.** These are seeded in `share_class_rules` and flagged with `is_multi_class = true`: GOOGL/GOOG, BRK.B, FOX/FOXA, and NWS/NWSA. The UI and the AI label their value "approximate (multi-class)".
+  - `shares` is **point-in-time**: the count from the latest filing with `filed_date <= d`, never from a filing made after `d`. EDGAR re-reports old periods in later filings already restated for newer splits, so using a later filing leaks future splits into the past (Alphabet's 2022 value would be about 20× too high).
+  - Tie-break among filings on the same `filed_date`: the latest `as_of_date`, then `dei` before `us-gaap`.
+  - That count is multiplied by `shares_unit_ratio` (default 1), and by the product of split ratios for splits with `filed_date < ex_date <= d` on the price Listing. The window starts at the filing date, not `as_of_date`, because a count filed after a split is already post-split.
+- **Multi-class issuers.** These are seeded in `share_class_rules` and flagged with `is_multi_class = true`: GOOGL/GOOG, BRK.B, FOX/FOXA, NWS/NWSA, and BF.B. The UI and the AI label their value "approximate (multi-class)".
+- **No whole-company count.** Some issuers report only per-class counts (Berkshire has had no whole-company count in `companyfacts` since 2011). Their Market Cap is left empty and shown as unavailable, not guessed.
+- **Merger exemption.** "Merger" means an 8-K with item 2.01 (completion of an acquisition). A share count of 0 is rejected when it is loaded.
 - **Only active Listings count.** A retired ticker never adds to a Company's value.
 - **Sanity checks.** Each failure writes an `ingest_runs.error` item and skips the value:
   - The count is 0.

@@ -36,7 +36,7 @@ _Avoid_: live price, ticker
 A Quote older than expected while the market is open. It is shown with its age, never as current.
 
 **Market Cap**:
-A Company's value on a Trading Day: the as-traded close of each Listing × that Listing's shares outstanding from the latest filing on or before that day, corrected for splits after the filing, summed across Listings.
+A Company's value on a Trading Day: the as-traded close of its pricing Listing × the Company's total shares outstanding as known on that day (from the latest filing already filed by then), corrected for splits between that filing and the day. For a Company with several share classes it is approximate.
 _Avoid_: market value, size
 
 **Event**:
@@ -57,7 +57,7 @@ _Avoid_: comment, annotation (in UI copy), journal entry
 ## Example dialogue
 
 > **Dev:** "GOOGL fell 5% on that day. Is that Alphabet's Market Cap falling 5%?"
-> **Domain expert:** "Only about 5%. Market Cap is for the Company, so it sums both Listings. GOOG may have closed a little differently."
+> **Domain expert:** "Yes. Market Cap is for the Company and is priced from one Listing (GOOGL), times all of Alphabet's shares. That is why it is marked approximate: GOOG may have closed a little differently."
 
 ## Flagged ambiguities
 

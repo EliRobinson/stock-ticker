@@ -12,8 +12,10 @@ reject.
 from __future__ import annotations
 
 import re
+from datetime import date
 
 from stockticker.api.problems import Problem
+from stockticker.ingest.symbols import normalize_symbol
 
 MAX_SYMBOL_LENGTH = 10
 
@@ -23,8 +25,12 @@ MAX_SYMBOL_LENGTH = 10
 _CIK_PATTERN = re.compile(r"^\d{1,10}$")
 
 
+def contains_nul(value: str) -> bool:
+    return "\x00" in value
+
+
 def reject_nul(value: str, *, field: str) -> str:
-    if "\x00" in value:
+    if contains_nul(value):
         raise Problem("invalid-input", 422, f"{field} must not contain a NUL byte")
     return value
 
@@ -45,3 +51,21 @@ def clean_symbol(value: str | None) -> str | None:
     if len(value) > MAX_SYMBOL_LENGTH:
         raise Problem("invalid-input", 422, f"symbol must be at most {MAX_SYMBOL_LENGTH} characters")
     return value
+
+
+def parse_symbol(value: str | None) -> str | None:
+    """`clean_symbol` (NUL/length) followed by `normalize_symbol` (canonical
+    dot form), in one call -- every route that accepts a `symbol` runs both,
+    so this is the one place that order is decided. A falsy `value` (`None`
+    or `""`) passes through as `None`, matching how an omitted query param
+    and an empty one have always been treated the same by callers."""
+    if not value:
+        return None
+    cleaned = clean_symbol(value)
+    assert cleaned is not None  # `value` is truthy, so clean_symbol can't have returned None
+    return normalize_symbol(cleaned)
+
+
+def check_date_range(from_: date | None, to: date | None) -> None:
+    if from_ is not None and to is not None and from_ > to:
+        raise Problem("invalid-range", 422, "from must not be after to")

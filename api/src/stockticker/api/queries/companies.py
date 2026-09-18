@@ -2,13 +2,22 @@
 
 **52-week range.** Counted in Trading Days, not calendar days (a "52-week"
 range is conventionally 252 Trading Days, the number of sessions in a
-trading year) -- the last 252 `daily_bars` rows for the company's price
-Listing (`share_class_rules.price_symbol` if seeded, else the active
-primary Listing). The range itself is the *adjusted* intraday high/low:
+trading year) -- the last 252 `daily_bars` rows for the company's *price*
+Listing. The range itself is the *adjusted* intraday high/low:
 `high * adj_close / close` and `low * adj_close / close`, scaling each
 day's as-traded intraday extreme by that day's own split/dividend
 adjustment factor (`adj_close / close`) rather than reading the stored
 `adj_close` (a close-only figure) as if it were the day's range.
+
+**Price Listing, the active-only rule.** `share_class_rules.price_symbol`
+if that Listing is still active, else the active primary Listing, else
+null (DRY pass on #6's review gate: no further fallback to an inactive
+primary or "the first Listing alphabetically" -- either can point at a
+retired ticker, which would silently use stale prices). This is the same
+rule the market-cap-rebuild job needs on its own side to pick a price
+Listing; `_price_symbol` here is a placeholder for the shared
+`public.price_symbol(cik)` SQL function the foundation is adding, to
+replace once its signature lands.
 """
 
 from __future__ import annotations
@@ -77,14 +86,13 @@ async def fetch_first_bar_date(conn: AsyncConnection, *, cik: str) -> date | Non
 async def _price_symbol(conn: AsyncConnection, *, cik: str, listings: Sequence[Row[Any]]) -> str | None:
     seeded: str | None = await conn.scalar(_PRICE_SYMBOL_QUERY, {"cik": cik})
     if seeded is not None:
-        return seeded
+        for listing in listings:
+            if listing.symbol == seeded and listing.is_active:
+                return seeded
     for listing in listings:
         if listing.is_primary and listing.is_active:
             return str(listing.symbol)
-    for listing in listings:
-        if listing.is_primary:
-            return str(listing.symbol)
-    return str(listings[0].symbol) if listings else None
+    return None
 
 
 async def fetch_week_52_range(

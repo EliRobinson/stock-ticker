@@ -13,14 +13,15 @@ from stockticker.api.pagination import (
     DEFAULT_PAGE_LIMIT,
     MAX_PAGE_LIMIT,
     cursor_bigint,
+    cursor_date,
     decode_cursor,
     paginate,
 )
 from stockticker.api.problems import Problem
-from stockticker.api.queries.events import cik_exists, fetch_event_rows, resolve_symbol_to_cik
-from stockticker.api.validation import clean_cik, clean_symbol
+from stockticker.api.queries.events import fetch_event_rows
+from stockticker.api.queries.lookups import cik_exists, symbol_cik
+from stockticker.api.validation import check_date_range, clean_cik, parse_symbol
 from stockticker.db import get_app_writer_connection
-from stockticker.ingest.symbols import normalize_symbol
 from stockticker.models.events import Event, EventKind, EventsPage
 from stockticker.models.problem import ProblemDetail
 
@@ -55,21 +56,19 @@ async def list_events(
     conn: AsyncConnection = Depends(get_app_writer_connection),
 ) -> EventsPage:
     cik = clean_cik(cik)
-    symbol = clean_symbol(symbol)
-    if from_ is not None and to is not None and from_ > to:
-        raise Problem("invalid-range", 422, "from must not be after to")
+    symbol = parse_symbol(symbol)
+    check_date_range(from_, to)
     if not cik and not symbol:
         raise Problem("events-requires-cik-or-symbol", 422, "Provide cik or symbol.")
 
     resolved_cik = cik
     if symbol:
-        symbol = normalize_symbol(symbol)
-        symbol_cik = await resolve_symbol_to_cik(conn, symbol=symbol)
-        if symbol_cik is None:
+        found_cik = await symbol_cik(conn, symbol=symbol)
+        if found_cik is None:
             raise Problem("unknown-symbol", 404, f"no listing with symbol {symbol}")
-        if cik and cik != symbol_cik:
+        if cik and cik != found_cik:
             raise Problem("cik-symbol-mismatch", 422, "cik and symbol refer to different companies")
-        resolved_cik = symbol_cik
+        resolved_cik = found_cik
     elif cik and not await cik_exists(conn, cik=cik):
         raise Problem("unknown-cik", 404, f"no company with cik {cik}")
 
@@ -81,10 +80,7 @@ async def list_events(
     cursor_id: int | None = None
     if cursor is not None:
         decoded = decode_cursor(cursor)
-        try:
-            cursor_event_date = date.fromisoformat(str(decoded["event_date"]))
-        except (KeyError, ValueError) as exc:
-            raise Problem("invalid-cursor", 422, "cursor is not a valid page token") from exc
+        cursor_event_date = cursor_date(decoded, "event_date")
         cursor_id = cursor_bigint(decoded, "id")
 
     rows = await fetch_event_rows(

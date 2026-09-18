@@ -10,10 +10,18 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from stockticker.api.pagination import DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, decode_cursor, paginate
+from stockticker.api.pagination import (
+    DEFAULT_PAGE_LIMIT,
+    MAX_PAGE_LIMIT,
+    cursor_date,
+    cursor_uuid,
+    decode_cursor,
+    paginate,
+)
 from stockticker.api.problems import Problem
-from stockticker.api.queries.notes import cik_exists, delete_note, fetch_note_rows, upsert_note
-from stockticker.api.validation import clean_cik
+from stockticker.api.queries.lookups import cik_exists
+from stockticker.api.queries.notes import delete_note, fetch_note_rows, upsert_note
+from stockticker.api.validation import check_date_range, clean_cik
 from stockticker.db import get_app_writer_connection
 from stockticker.models.notes import Note, NotePut, NotesPage
 from stockticker.models.problem import ProblemDetail
@@ -39,8 +47,7 @@ async def list_notes(
     conn: AsyncConnection = Depends(get_app_writer_connection),
 ) -> NotesPage:
     cik = clean_cik(cik)
-    if from_ is not None and to is not None and from_ > to:
-        raise Problem("invalid-range", 422, "from must not be after to")
+    check_date_range(from_, to)
     if cik and market_only:
         raise Problem("conflicting-filters", 422, "cik and market_only cannot both be set")
 
@@ -48,11 +55,8 @@ async def list_notes(
     cursor_id: UUID | None = None
     if cursor is not None:
         decoded = decode_cursor(cursor)
-        try:
-            cursor_start_date = date.fromisoformat(str(decoded["start_date"]))
-            cursor_id = UUID(str(decoded["id"]))
-        except (KeyError, ValueError, TypeError) as exc:
-            raise Problem("invalid-cursor", 422, "cursor is not a valid page token") from exc
+        cursor_start_date = cursor_date(decoded, "start_date")
+        cursor_id = cursor_uuid(decoded, "id")
 
     rows = await fetch_note_rows(
         conn,

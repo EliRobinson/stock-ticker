@@ -14,20 +14,29 @@ empty result.
 
 from __future__ import annotations
 
+import base64
 import json
 from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-NY = ZoneInfo("America/New_York")
+from stockticker.timeutil import NY_TZ
 
 
 def trading_day_window(d: date) -> tuple[datetime, datetime]:
-    return datetime.combine(d, time(9, 30), NY), datetime.combine(d, time(16, 0), NY)
+    return datetime.combine(d, time(9, 30), NY_TZ), datetime.combine(d, time(16, 0), NY_TZ)
+
+
+def encode_cursor(payload: dict[str, Any]) -> str:
+    """A cursor payload the app's own `decode_cursor` would accept -- for
+    tests that need to hand-craft an invalid one (a bad type, an
+    out-of-range value) that `stockticker.api.pagination.encode_cursor`
+    itself would never produce."""
+    raw = json.dumps(payload).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
 async def ensure_trading_days(conn: AsyncConnection, days: list[date]) -> None:

@@ -3,6 +3,10 @@
 Integration tests must never write to the compose app database
 (`stockticker`). They use `stockticker_test` (issue #38). This script is
 idempotent: safe to run before every pytest / pre-push gate.
+
+Each run drops and recreates `stockticker_test` so leftover Listings /
+Companies from a prior suite cannot poison constituents_sync or
+quotes_poll assertions that assume a clean universe.
 """
 
 from __future__ import annotations
@@ -36,14 +40,16 @@ def main() -> None:
         dbname="postgres",
         autocommit=True,
     ) as conn:
-        exists = conn.execute("SELECT 1 FROM pg_database WHERE datname = %s", (test_db,)).fetchone()
-        if exists is None:
-            # Identifier from our env default / explicit override only — never
-            # interpolate untrusted input here.
-            conn.execute(f'CREATE DATABASE "{test_db}"')
-            print(f"created database {test_db}", file=sys.stderr)
-        else:
-            print(f"database {test_db} already exists", file=sys.stderr)
+        # Identifier from our env default / explicit override only — never
+        # interpolate untrusted input here.
+        conn.execute(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+            "WHERE datname = %s AND pid <> pg_backend_pid()",
+            (test_db,),
+        )
+        conn.execute(f'DROP DATABASE IF EXISTS "{test_db}"')
+        conn.execute(f'CREATE DATABASE "{test_db}"')
+        print(f"recreated database {test_db}", file=sys.stderr)
 
     env = os.environ.copy()
     env["POSTGRES_DB"] = test_db

@@ -132,13 +132,7 @@ The failure: asked for a table, the model wrote a Markdown table in its text ins
 - A first boot backfills history in the worker startup chain: `bars_backfill` loops until every Listing is caught up ([#38](https://github.com/EliRobinson/stock-ticker/issues/38)).
 - Use `127.0.0.1`, not `localhost`: the API's CORS is pinned to the `127.0.0.1:3000` origin, so `localhost:3000` loads the page but every API call fails.
 
-<<<<<<< HEAD
-**Open follow-ups:** [#38](https://github.com/EliRobinson/stock-ticker/issues/38) (malformed Wikipedia tickers, the slow first backfill, tests writing to the shared compose DB). See all [open issues](https://github.com/EliRobinson/stock-ticker/issues).
-=======
-
 **Open follow-ups:** none right now. See all [open issues](https://github.com/EliRobinson/stock-ticker/issues).
-
-> > > > > > > ed215da (fix(ingest): reject bad Wikipedia tickers and isolate test DB)
 
 ## Submission answers
 

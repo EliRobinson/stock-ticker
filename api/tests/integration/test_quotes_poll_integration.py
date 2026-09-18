@@ -1,7 +1,7 @@
 """`quotes_poll` (system design §4) against a real, migrated Postgres:
 market-closed skip, and that the upsert ordering (newer `observed_at` wins)
 still holds through this job's own path. `run_quotes_poll` takes the quotes
-engine directly (system design: "uses the reserved 1-connection engine");
+engine directly (system design: "uses the reserved 2-connection engine");
 these tests pass `app_writer_engine` in that role so they run against a
 normal test-scoped engine rather than `db.get_quotes_engine()`'s
 process-level singleton. See tests/integration/conftest.py for how to run

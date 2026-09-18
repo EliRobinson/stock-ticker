@@ -505,7 +505,7 @@ Any guard error or SQL error comes back as a tool error that the model can read.
   - `uv.lock` and `pnpm-lock.yaml` are committed.
 - **Pools.**
   - `api`: `app_writer` pool size 5, overflow 5.
-  - `worker`: `app_writer` pool size 6, plus a separate 1-connection engine reserved for `quotes_poll`, so a busy backfill batch never delays a quote tick.
+  - `worker`: `app_writer` pool size 6, plus a separate 2-connection engine reserved for `quotes_poll` (one for `run_job`'s advisory-lock connection, one for the handler's own work), so a busy backfill batch never delays a quote tick.
   - `ai_reader` pool size 3, matching its connection limit.
   - Every pool uses pre-ping and a 2 s acquire timeout. In the AI path, an acquire timeout comes back as a tool error the model can read, not a 500.
   - No code holds a transaction open across an HTTP call, including the Anthropic call inside the tool loop.

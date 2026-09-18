@@ -22,7 +22,11 @@ CONTEXT.md       # Domain glossary - the vocabulary this app uses
 
 `web/` never talks to Postgres directly. It calls the Python API for data; the API and worker own the database.
 
-Repo-wide tooling - Husky, lint-staged, Commitizen, Commitlint - lives in the root `package.json` and runs across the whole workspace. Each workspace package (currently just `web/`) owns its own dependencies, scripts, and lint/format/type-check config. Run a `web` script from anywhere with `pnpm --filter web <script>`, or `cd web` first.
+Repo-wide tooling - Husky, lint-staged, Commitizen, Commitlint, Prettier - lives in the root `package.json` and runs across the whole workspace. Each workspace package (currently just `web/`) owns its own dependencies and its own lint/type-check config. Run a `web` script from anywhere with `pnpm --filter web <script>`, or `cd web` first.
+
+### Compose (for whoever adds `docker-compose.yml`)
+
+The `web` service needs two named volumes, not one: one mounted at the repo root's `node_modules`, one at `web/node_modules`. A single shared volume lets the workspace's hoisted root `node_modules` and `web/node_modules` collide, and native binaries built on a macOS host end up in a Linux container. Don't turn on a polling watcher by default (no `CHOKIDAR_USEPOLLING`/`WATCHPACK_POLLING`) - it burns CPU on every host; only reach for it if native fs events turn out not to cross the bind mount.
 
 ---
 
@@ -76,30 +80,30 @@ If functional copy runs past two short sentences, it is explaining, reassuring, 
 
 ## Project Overview
 
-The `web/` app is a **Next.js 16** frontend for an S&P 500 research app: App Router, TypeScript strict mode, Tailwind CSS v4, shadcn/ui, TanStack data libraries, and a full quality-gate toolchain. It calls the Python API (`api/`, arriving separately) for all data - it holds no database connection of its own.
+The `web/` app is a **Next.js 16** frontend for an S&P 500 research app: App Router, TypeScript strict mode, Tailwind CSS v4, shadcn/ui, TanStack data libraries, and a full quality-gate toolchain. It calls the Python API (`api/`, arriving separately) for all data - it holds no database connection of its own, and the browser calls the API directly (see [Data fetching](#data-fetching-tanstack-query) below).
 
 ---
 
 ## Tech Stack
 
-| Layer                  | Choice                                                                      |
-| ---------------------- | --------------------------------------------------------------------------- |
-| Framework              | Next.js 16 (App Router, Turbopack)                                          |
-| Language               | TypeScript 5 (strict, `@/*` path alias → `src/*`)                           |
-| Components & styling   | shadcn/ui (Tailwind v4, Radix primitives)                                   |
-| Tables & grids         | TanStack Table, TanStack Virtual                                            |
-| Charts                 | lightweight-charts                                                          |
-| Chat                   | Vercel AI Elements + `useChat`                                              |
-| Data fetching          | TanStack Query v5                                                           |
-| Forms                  | TanStack Form                                                               |
-| Env validation         | `@t3-oss/env-nextjs` + Zod (`src/env.ts`)                                   |
-| Unit/integration tests | Vitest + React Testing Library                                              |
-| E2E / functional tests | Playwright                                                                  |
-| Package manager        | pnpm (workspace root: this repo; `web` is one workspace package)            |
-| Linting                | ESLint (Next.js flat config + `neostandard`)                                |
-| Formatting             | Prettier (`prettier-config-standard` + `prettier-plugin-tailwindcss`)       |
-| Commits                | Commitizen + Commitlint (Conventional Commits), configured at the repo root |
-| Dependency updates     | Renovate (auto-merge patch/minor + security)                                |
+| Layer                  | Choice                                                                                                                           |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Framework              | Next.js 16 (App Router, Turbopack)                                                                                               |
+| Language               | TypeScript 5 (strict, `@/*` path alias → `src/*`)                                                                                |
+| Components & styling   | shadcn/ui (Tailwind v4, Radix primitives)                                                                                        |
+| Tables & grids         | TanStack Table, TanStack Virtual                                                                                                 |
+| Charts                 | lightweight-charts                                                                                                               |
+| Chat                   | Vercel AI Elements + `useChat`                                                                                                   |
+| Data fetching          | TanStack Query v5                                                                                                                |
+| Forms                  | TanStack Form                                                                                                                    |
+| Env validation         | `@t3-oss/env-nextjs` + Zod (`src/env.ts`)                                                                                        |
+| Unit/integration tests | Vitest + React Testing Library                                                                                                   |
+| E2E / functional tests | Playwright                                                                                                                       |
+| Package manager        | pnpm (workspace root: this repo; `web` is one workspace package)                                                                 |
+| Linting                | ESLint (Next.js flat config + `neostandard`), configured in `web/`                                                               |
+| Formatting             | Prettier (`prettier-config-standard` + `prettier-plugin-tailwindcss`), configured and run at the repo root, across every package |
+| Commits                | Commitizen + Commitlint (Conventional Commits), configured at the repo root                                                      |
+| Dependency updates     | Renovate (auto-merge patch/minor + security)                                                                                     |
 
 ---
 
@@ -112,12 +116,11 @@ web/
     components/
       ui/          # shadcn/ui components (added via CLI)
       providers.tsx # TanStack Query provider + devtools
-    hooks/         # Custom React hooks
+    hooks/         # TanStack Query hooks, one file per resource
     lib/
       utils.ts     # cn() and shared utilities
-    server/
-      actions/     # Server actions (Zod-validated input)
-    types/         # Shared TypeScript types
+      api.ts       # Typed API client - the only thing that calls fetch (arrives with #8)
+      api-types.ts # Generated from the API's OpenAPI schema by `pnpm gen:api` (arrives with #8)
     env.ts         # Validated environment variables (@t3-oss/env-nextjs + Zod)
   tests/
     unit/          # Vitest + RTL unit & integration tests
@@ -128,23 +131,23 @@ web/
 
 ## Development Commands
 
-Run from the repo root (each proxies to the `web` workspace package):
+Run from the repo root:
 
 ```bash
 pnpm install                    # Install the whole workspace
-pnpm --filter web dev           # Start dev server (Turbopack) on a random free port
+pnpm --filter web dev           # Start dev server (Turbopack) on port 3000
 pnpm --filter web build         # Production build
 pnpm --filter web lint          # ESLint check
 pnpm --filter web lint:fix      # ESLint auto-fix
-pnpm --filter web format        # Prettier write
-pnpm --filter web format:check  # Prettier check
+pnpm format                     # Prettier write, whole repo
+pnpm format:check               # Prettier check, whole repo
 pnpm --filter web type-check    # tsc --noEmit
 pnpm --filter web test          # Vitest (unit)
 pnpm --filter web test:e2e      # Playwright (E2E)
-pnpm commit                     # Commitizen interactive commit (repo root)
+pnpm commit                     # Commitizen interactive commit
 ```
 
-Or `cd web` first and drop the `--filter web` prefix.
+`format`/`format:check` are repo-wide (root-owned Prettier, see [Tech Stack](#tech-stack)); everything else is `web`-scoped, and drops the `--filter web` prefix if you `cd web` first.
 
 ---
 
@@ -160,15 +163,21 @@ Or `cd web` first and drop the `--filter web` prefix.
 ### React & Next.js
 
 - Default to **Server Components**. Add `"use client"` only when browser APIs or hooks are required.
-- Co-locate data-fetching with the server component that needs it.
+- Server components never call the API. Inside `docker compose`, `127.0.0.1:8000` from the `web` container is not the API container, and the API's `TrustedHostMiddleware` rejects a request whose `Host` header is `api:8000`. The browser is the only caller, straight to `NEXT_PUBLIC_API_URL` - see [Data fetching](#data-fetching-tanstack-query).
 - Keep Client Components as leaf nodes. Lift them out only when the boundary needs to move.
 - Use `next/image` and `next/link` instead of `<img>` and `<a>`.
 
-### TanStack Query
+### Data fetching: TanStack Query
 
-- Wrap queries in custom hooks inside `src/hooks/` (e.g. `useUsers.ts`).
-- Export query key factories alongside hooks for cache invalidation.
-- Use `suspense: true` + `<Suspense>` boundaries for loading states when possible.
+Every web ↔ API call goes through TanStack Query. No exceptions except `/chat` (below).
+
+- No `fetch` in components. One typed client, `web/src/lib/api.ts`, built on the generated types in `web/src/lib/api-types.ts` (see [gen:api](#env-ports-and-the-generated-api-client)) - called only from query/mutation hooks in `web/src/hooks/`, one file per resource (`useMarket`, `useBars`, `useCompany`, `useEvents`, `useNotes`, `useStatus`).
+- A query key factory per resource (`marketKeys`, `companyKeys`, `barsKeys`, `eventsKeys`, `notesKeys`, `statusKeys`).
+- Caching: `bars` and `events` use a long `staleTime` (history rarely changes; invalidated after `bars_daily` updates). `market` and `status` poll with `refetchInterval` (10s while the market's open, 5min closed, paused while the tab is hidden). Range changes on the chart use `placeholderData: keepPreviousData` so it doesn't flash.
+- Notes: `useMutation` with an optimistic update and rollback on error, then invalidate `notesKeys` - the chart markers read the same cache, so they update for free.
+- Errors: a `problem+json` response becomes a typed `ApiError`. No retry on 4xx; 2 retries on network errors and 5xx.
+- Company page: prefetch on Market row hover with `queryClient.prefetchQuery`.
+- The one exception is the `/chat` stream, which `useChat` owns end to end. A `data-view` result renders straight from the stream and is never refetched.
 
 ### Error Handling
 
@@ -200,6 +209,12 @@ This project enforces **Conventional Commits**. All commits must match:
 Use `pnpm commit` for the interactive Commitizen prompt. Direct `git commit` will be validated by the `commit-msg` Husky hook.
 
 **Breaking changes:** add `!` after the type (`feat!:`) and a `BREAKING CHANGE:` footer.
+
+---
+
+## Pull requests
+
+Every PR updates `README.md`: the brief-to-status table, and the "How this was built" artifacts table if the PR adds a process artifact (ADR, design doc, prompt, diagram).
 
 ---
 
@@ -236,12 +251,12 @@ Hooks live at the repo root and run across the workspace.
 
 The `pre-commit` hook runs `lint-staged`:
 
-- `web/**/*.{ts,tsx,js,jsx,...}` → `web`'s ESLint fix + Prettier
-- `web/**/*.{json,css,md,...}` and root `*.{json,md,yml}` → Prettier
+- `web/**/*.{ts,tsx,js,jsx,...}` → `web`'s ESLint fix
+- Every `*.{ts,tsx,js,jsx,json,css,md,...}` in the repo, `web/` included → the root's Prettier
 
 The `commit-msg` hook runs `commitlint` to enforce Conventional Commits.
 
-The `pre-push` hook mirrors the fast CI jobs (`pnpm --filter web type-check`, `lint`, `format:check`, `test`) so a push that would fail CI fails locally first, before consuming a CI run. It intentionally skips `build` and `test:e2e` - those are slower and still run on the PR itself.
+The `pre-push` hook mirrors the fast CI jobs (`pnpm --filter web type-check`, `pnpm --filter web lint`, `pnpm format:check`, `pnpm --filter web test`) so a push that would fail CI fails locally first, before consuming a CI run. It intentionally skips `build` and `test:e2e` - those are slower and still run on the PR itself.
 
 To skip hooks in an emergency: `git commit --no-verify` / `git push --no-verify` (discouraged - fix the underlying issue instead).
 
@@ -254,16 +269,25 @@ Renovate runs automatically and:
 - **Auto-merges** patch updates to production deps and minor+patch updates to devDependencies (when CI passes).
 - **Auto-merges** security vulnerability fixes.
 - **Requires manual review** for all major version bumps.
-- Groups TanStack, Testing Library, and TypeScript ESLint updates together.
+- Groups TanStack and Testing Library updates together.
 - Pins GitHub Actions to digests.
 
 ---
 
-## Environment Variables
+## Env, ports, and the generated API client
 
-Copy `web/.env.example` to `web/.env.local` for local development. Never commit `.env.local` or any file containing secrets.
+Copy `.env.example` (repo root) to `.env` (repo root, git-ignored) for local development. There is one `.env` for the whole stack, not one per package: once `docker-compose.yml` lands, compose hands it to every service with `env_file`. `web/src/env.ts` (`@t3-oss/env-nextjs` + Zod) validates the vars `web` itself reads out of it - add a new one there, not just to `.env.example`, and prefix anything browser-exposed with `NEXT_PUBLIC_` in the `client` block.
 
-All env vars are declared and validated in `web/src/env.ts` (via `@t3-oss/env-nextjs` + Zod) - add new vars there, not just to `.env.example`. The build fails fast if a required var is missing or invalid, rather than failing at runtime in production. Prefix client-side variables with `NEXT_PUBLIC_` and list them in the `client` block of `src/env.ts`.
+- **Ports.** `web` on `127.0.0.1:3000`, the API on `127.0.0.1:8000`.
+- **`NEXT_PUBLIC_API_URL`** defaults to `http://127.0.0.1:8000` in `src/env.ts`, so local `web` dev needs no `.env` at all unless the API runs somewhere else. The browser calls it directly - no Next.js rewrite, because a rewrite buffers the `/chat` SSE stream and has its own proxy timeout.
+- **CSP.** `default-src 'self'; img-src 'self' data:; connect-src 'self' http://127.0.0.1:8000` - update the `connect-src` host if `NEXT_PUBLIC_API_URL` ever points elsewhere.
+- **`pnpm gen:api`** (planned, tracked in [#8](https://github.com/EliRobinson/stock-ticker/issues/8)) will generate `web/src/lib/api-types.ts` from the API's OpenAPI schema; the generated file is committed, not built in CI. The script itself is a TODO until the API foundation lands.
+
+---
+
+## `api/` (Python)
+
+Python 3.12, managed with `uv`. FastAPI for the REST + chat-stream service, Alembic for migrations, pytest for tests, ruff for lint/format. Full layout, the worker, and `docker-compose.yml` land with the API foundation PR (#3) - this section grows once that merges.
 
 ---
 
@@ -274,10 +298,4 @@ All env vars are declared and validated in `web/src/env.ts` (via `@t3-oss/env-ne
 - Do not add `console.log` (only `console.warn`/`console.error` are permitted by ESLint).
 - Do not bypass pre-commit hooks without a documented reason.
 - Do not manually edit files in `web/src/components/ui/` to match a new shadcn version - re-add the component instead.
-- Do not have `web/` open a direct database connection. It calls the Python API.
-
-# This is NOT the Next.js you know
-
-This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
-
-This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+- Do not have `web/` open a direct database connection, or call the API from a server component. It's a browser-only, TanStack-Query-only call.

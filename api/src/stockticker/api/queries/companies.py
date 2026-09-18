@@ -3,21 +3,18 @@
 **52-week range.** Counted in Trading Days, not calendar days (a "52-week"
 range is conventionally 252 Trading Days, the number of sessions in a
 trading year) -- the last 252 `daily_bars` rows for the company's *price*
-Listing. The range itself is the *adjusted* intraday high/low:
-`high * adj_close / close` and `low * adj_close / close`, scaling each
-day's as-traded intraday extreme by that day's own split/dividend
-adjustment factor (`adj_close / close`) rather than reading the stored
-`adj_close` (a close-only figure) as if it were the day's range.
-
-**Price Listing, the active-only rule.** `share_class_rules.price_symbol`
-if that Listing is still active, else the active primary Listing, else
-null (DRY pass on #6's review gate: no further fallback to an inactive
-primary or "the first Listing alphabetically" -- either can point at a
-retired ticker, which would silently use stale prices). This is the same
-rule the market-cap-rebuild job needs on its own side to pick a price
-Listing; `_price_symbol` here is a placeholder for the shared
-`public.price_symbol(cik)` SQL function the foundation is adding, to
-replace once its signature lands.
+Listing, from `public.price_symbol(cik)` (migration 0001): the seeded
+`share_class_rules.price_symbol` if that Listing is still active, else the
+active primary Listing, else null. DRY pass on #6's review gate: this used
+to be a second, disagreeing copy of that rule in Python here (no fallback
+to an inactive primary or "the first Listing alphabetically", either of
+which could silently use stale prices off a retired ticker) -- now it's the
+one function both this query and the market-cap-rebuild job call. The range
+itself is the *adjusted* intraday high/low: `high * adj_close / close` and
+`low * adj_close / close`, scaling each day's as-traded intraday extreme by
+that day's own split/dividend adjustment factor (`adj_close / close`)
+rather than reading the stored `adj_close` (a close-only figure) as if it
+were the day's range.
 """
 
 from __future__ import annotations
@@ -38,7 +35,7 @@ _COMPANY_QUERY = text(
 )
 
 _LISTINGS_QUERY = text(
-    "SELECT symbol, is_primary, is_active, first_bar_date FROM listings "
+    "SELECT symbol, is_primary, is_active, first_bar_date, backfill_completed_at FROM listings "
     "WHERE cik = :cik ORDER BY is_primary DESC, symbol"
 )
 
@@ -46,8 +43,6 @@ _MARKET_CAP_QUERY = text(
     "SELECT market_cap, shares_as_of, is_multi_class FROM market_caps "
     "WHERE cik = :cik AND trade_date <= :today ORDER BY trade_date DESC LIMIT 1"
 )
-
-_PRICE_SYMBOL_QUERY = text("SELECT price_symbol FROM share_class_rules WHERE cik = :cik")
 
 _FIRST_BAR_DATE_QUERY = text("SELECT min(first_bar_date) FROM listings WHERE cik = :cik")
 
@@ -58,7 +53,7 @@ _WEEK_52_RANGE_QUERY = text(
       min(low * adj_close / close)::numeric(18, 6) AS low
     FROM (
       SELECT high, low, close, adj_close FROM daily_bars
-      WHERE symbol = :symbol AND trade_date <= :today
+      WHERE symbol = public.price_symbol(:cik) AND trade_date <= :today
       ORDER BY trade_date DESC
       LIMIT :trading_days
     ) recent
@@ -83,27 +78,10 @@ async def fetch_first_bar_date(conn: AsyncConnection, *, cik: str) -> date | Non
     return first_bar_date
 
 
-async def _price_symbol(conn: AsyncConnection, *, cik: str, listings: Sequence[Row[Any]]) -> str | None:
-    seeded: str | None = await conn.scalar(_PRICE_SYMBOL_QUERY, {"cik": cik})
-    if seeded is not None:
-        for listing in listings:
-            if listing.symbol == seeded and listing.is_active:
-                return seeded
-    for listing in listings:
-        if listing.is_primary and listing.is_active:
-            return str(listing.symbol)
-    return None
-
-
-async def fetch_week_52_range(
-    conn: AsyncConnection, *, cik: str, listings: Sequence[Row[Any]], today: date
-) -> Row[Any] | None:
-    symbol = await _price_symbol(conn, cik=cik, listings=listings)
-    if symbol is None:
-        return None
+async def fetch_week_52_range(conn: AsyncConnection, *, cik: str, today: date) -> Row[Any] | None:
     return (
         await conn.execute(
             _WEEK_52_RANGE_QUERY,
-            {"symbol": symbol, "today": today, "trading_days": WEEK_52_TRADING_DAYS},
+            {"cik": cik, "today": today, "trading_days": WEEK_52_TRADING_DAYS},
         )
     ).first()

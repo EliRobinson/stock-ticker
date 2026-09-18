@@ -2,7 +2,7 @@
   "components": {
     "schemas": {
       "AiStatus": {
-        "description": "Populated once the AI chat agent's `ai_usage` table (migration\n0002+) and pricing module exist; see `_ai_status` in\n`api/routers/status.py` for exactly what's real today versus a\nplaceholder.",
+        "description": "Owned end to end by the AI chat agent's `stockticker.ai.status.\nai_status(settings)` (issue #7's agreed contract) -- this model just\ngives it a shape to return. `StatusResponse.ai` is null until that\nmodule exists and `api/routers/status.py` calls it.",
         "properties": {
           "enabled": {
             "title": "Enabled",
@@ -445,6 +445,18 @@
       },
       "ListingSummary": {
         "properties": {
+          "backfill_completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backfill Completed At"
+          },
           "first_bar_date": {
             "anyOf": [
               {
@@ -474,7 +486,8 @@
           "symbol",
           "is_primary",
           "is_active",
-          "first_bar_date"
+          "first_bar_date",
+          "backfill_completed_at"
         ],
         "title": "ListingSummary",
         "type": "object"
@@ -566,6 +579,18 @@
       },
       "MarketRow": {
         "properties": {
+          "backfill_completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backfill Completed At"
+          },
           "change": {
             "anyOf": [
               {
@@ -695,7 +720,8 @@
           "volume",
           "market_cap",
           "market_cap_is_approx",
-          "first_bar_date"
+          "first_bar_date",
+          "backfill_completed_at"
         ],
         "title": "MarketRow",
         "type": "object"
@@ -882,6 +908,7 @@
         "type": "object"
       },
       "ReadyResponse": {
+        "description": "`/api/v1/health/ready`: DB reachable and schema at the Alembic head.",
         "properties": {
           "database": {
             "const": "ok",
@@ -910,7 +937,14 @@
       "StatusResponse": {
         "properties": {
           "ai": {
-            "$ref": "#/components/schemas/AiStatus"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AiStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "backfill": {
             "$ref": "#/components/schemas/BackfillProgress"

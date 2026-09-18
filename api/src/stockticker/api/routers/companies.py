@@ -36,7 +36,7 @@ async def get_company(cik: str, conn: AsyncConnection = Depends(get_app_writer_c
     today = today_ny()
     listing_rows = await fetch_listing_rows(conn, cik=cik)
     market_cap_row = await fetch_market_cap_row(conn, cik=cik, today=today)
-    range_row = await fetch_week_52_range(conn, cik=cik, listings=listing_rows, today=today)
+    range_row = await fetch_week_52_range(conn, cik=cik, today=today)
     first_bar_date = await fetch_first_bar_date(conn, cik=cik)
 
     return CompanyDetail.model_validate(

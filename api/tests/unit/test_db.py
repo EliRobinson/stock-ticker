@@ -1,5 +1,6 @@
 from sqlalchemy.pool import QueuePool
 
+from stockticker.config import get_settings
 from stockticker.db import (
     dispose_engines,
     get_ai_reader_engine,
@@ -7,7 +8,6 @@ from stockticker.db import (
     get_quotes_engine,
     get_worker_app_writer_engine,
 )
-from stockticker.settings import get_settings
 
 
 def test_each_purpose_gets_its_own_engine_with_the_right_pool_size() -> None:

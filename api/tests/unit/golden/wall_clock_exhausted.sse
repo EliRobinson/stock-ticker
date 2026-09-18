@@ -1,0 +1,20 @@
+data: {"type":"start","messageId":"msg-golden"}
+
+data: {"type":"start-step"}
+
+data: {"type":"text-start","id":"msg-golden-text-1"}
+
+data: {"type":"text-delta","id":"msg-golden-text-1","delta":"Querying."}
+
+data: {"type":"text-end","id":"msg-golden-text-1"}
+
+data: {"type":"tool-input-available","toolCallId":"toolu_01","toolName":"run_sql","input":{"sql":"SELECT c.name, m.market_cap FROM ai.market_caps m JOIN ai.companies c ON c.cik = m.cik ORDER BY m.market_cap DESC LIMIT 2","purpose":"Rank"}}
+
+data: {"type":"tool-output-error","toolCallId":"toolu_01","errorText":"Not run. The answer stopped before this tool call finished."}
+
+data: {"type":"error","errorText":"Stopped after 0.2 s without a final answer. Ask a narrower question."}
+
+data: {"type":"finish","finishReason":"error"}
+
+data: [DONE]
+

@@ -1,0 +1,8 @@
+data: {"type":"start","messageId":"msg-golden"}
+
+data: {"type":"error","errorText":"AI is off. ANTHROPIC_API_KEY is not set."}
+
+data: {"type":"finish","finishReason":"error"}
+
+data: [DONE]
+

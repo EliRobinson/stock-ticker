@@ -1,0 +1,24 @@
+data: {"type":"start","messageId":"msg-golden"}
+
+data: {"type":"start-step"}
+
+data: {"type":"tool-input-available","toolCallId":"toolu_01","toolName":"run_sql","input":{"sql":"SELECT * FROM pg_catalog.pg_authid","purpose":"Look"}}
+
+data: {"type":"tool-output-error","toolCallId":"toolu_01","errorText":"Schema 'pg_catalog' is not readable. Only the ai views are: ai.companies, ai.daily_prices, ai.listings, ai.market_caps."}
+
+data: {"type":"finish-step"}
+
+data: {"type":"start-step"}
+
+data: {"type":"text-start","id":"msg-golden-text-1"}
+
+data: {"type":"text-delta","id":"msg-golden-text-1","delta":"I can only read the ai views, so I cannot answer that."}
+
+data: {"type":"text-end","id":"msg-golden-text-1"}
+
+data: {"type":"finish-step"}
+
+data: {"type":"finish","finishReason":"stop"}
+
+data: [DONE]
+

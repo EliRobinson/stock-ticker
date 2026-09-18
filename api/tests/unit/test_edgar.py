@@ -14,13 +14,16 @@ from stockticker.ingest.edgar.parse import (
     DEI_SHARES,
     US_GAAP_SHARES,
     filing_title,
+    older_filing_pages,
     parse_filings,
+    parse_filings_page,
     parse_shares,
 )
 from stockticker.ingest.edgar.sync import (
     EDGAR_BASE_URL,
     build_edgar_client,
     fetch_companyfacts,
+    fetch_filings,
     fetch_submissions,
 )
 from stockticker.ingest.http import reset_rate_budgets
@@ -28,6 +31,7 @@ from stockticker.ingest.http import reset_rate_budgets
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "edgar"
 AAPL_CIK = "0000320193"
 GOOGL_CIK = "0001652044"
+GOOGL_PAGE = "CIK0001652044-submissions-001.json"
 USER_AGENT = "Jane Doe jane@example.com"
 
 
@@ -204,3 +208,61 @@ async def test_submissions_404_is_an_error() -> None:
     async with build_edgar_client(USER_AGENT) as client:
         with pytest.raises(httpx.HTTPStatusError):
             await fetch_submissions(client, GOOGL_CIK)
+
+
+def test_older_filing_pages_keeps_only_pages_that_reach_2018() -> None:
+    assert older_filing_pages(_fixture("submissions_googl.json")) == [GOOGL_PAGE]
+    assert older_filing_pages(_fixture("submissions_aapl.json")) == []
+
+
+def test_older_filing_pages_ignores_unexpected_page_names() -> None:
+    submissions = {
+        "filings": {
+            "files": [
+                {"name": "../../evil.json", "filingTo": "2024-01-01"},
+                {"name": "CIK0001652044-submissions-003.json", "filingTo": "not a date"},
+            ]
+        }
+    }
+
+    assert older_filing_pages(submissions) == []
+
+
+def test_parse_filings_page_reads_top_level_columns() -> None:
+    events = parse_filings_page(_fixture("submissions_googl_page_001.json"), GOOGL_CIK)
+
+    assert [(event.kind, event.event_date.isoformat()) for event in events] == [
+        ("filing_8k", "2023-04-25"),
+        ("filing_8k", "2020-04-28"),
+        ("filing_10q", "2020-04-29"),
+        ("filing_10k", "2020-02-04"),
+        ("filing_8k", "2019-06-21"),
+    ]
+
+
+@respx.mock
+async def test_fetch_filings_adds_older_pages_and_dedupes_by_accession() -> None:
+    """The recent block stops at 2023; page 001 reaches back to 2019 (COVID
+    era 8-Ks included); page 002 ends in 2017 and is never requested."""
+    respx.get(f"{EDGAR_BASE_URL}/submissions/CIK{GOOGL_CIK}.json").mock(
+        return_value=httpx.Response(200, json=_fixture("submissions_googl.json"))
+    )
+    page = respx.get(f"{EDGAR_BASE_URL}/submissions/{GOOGL_PAGE}").mock(
+        return_value=httpx.Response(200, json=_fixture("submissions_googl_page_001.json"))
+    )
+    old_page = respx.get(f"{EDGAR_BASE_URL}/submissions/CIK0001652044-submissions-002.json").mock(
+        return_value=httpx.Response(500)
+    )
+
+    async with build_edgar_client(USER_AGENT) as client:
+        events = await fetch_filings(client, GOOGL_CIK)
+
+    accessions = [event.accession for event in events]
+    assert len(accessions) == len(set(accessions)) == 7
+    assert accessions[0] == "0001652044-19-000032"
+    assert accessions[-1] == "0001652044-26-000071"
+    covid_earnings = next(event for event in events if event.accession == "0001652044-20-000019")
+    assert covid_earnings.title == "Results of operations (8-K)"
+    assert page.calls[0].request.url.host == "data.sec.gov"
+    assert page.calls[0].request.headers["User-Agent"] == USER_AGENT
+    assert not old_page.called

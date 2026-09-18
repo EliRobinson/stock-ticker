@@ -1,12 +1,11 @@
 # ---- Next.js ----
-/.next/
-/out/
-/build/
-.next
+.next/
+out/
+build/
 next-env.d.ts
 
 # ---- Production ----
-/dist/
+dist/
 
 # ---- Node ----
 node_modules/
@@ -22,11 +21,11 @@ pnpm-debug.log*
 *.tsbuildinfo
 
 # ---- Testing ----
-/coverage/
-/playwright-report/
-/test-results/
-/blob-report/
-/playwright/.cache/
+coverage/
+playwright-report/
+test-results/
+blob-report/
+playwright/.cache/
 
 # ---- Environment ----
 .env

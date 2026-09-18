@@ -1,4 +1,11 @@
 {
-  "*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}": ["eslint --fix", "prettier --write"],
-  "*.{json,css,md,mdx,yml,yaml}": ["prettier --write"]
+  "web/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}": [
+    "pnpm --filter web exec eslint --fix",
+    "pnpm --filter web exec prettier --write"
+  ],
+  "web/**/*.{json,css,md,mdx,yml,yaml}": [
+    "pnpm --filter web exec prettier --write"
+  ],
+  "*.{json,md,yml}": ["pnpm --filter web exec prettier --write"],
+  "pnpm-workspace.yaml": ["pnpm --filter web exec prettier --write"]
 }

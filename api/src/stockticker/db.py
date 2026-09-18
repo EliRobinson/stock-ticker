@@ -67,6 +67,15 @@ def get_ai_reader_engine() -> AsyncEngine:
         pool_size=3,
         max_overflow=0,
         pool_timeout=POOL_ACQUIRE_TIMEOUT_SECONDS,
+        # The /api/v1/chat SQL guard's executor runs DISCARD ALL before a
+        # connection goes back to the pool (§6), which deallocates every
+        # server-side prepared statement -- but asyncpg's own client-side
+        # statement cache doesn't know that, and the next query (including
+        # pool_pre_ping's) fails with "prepared statement ... does not
+        # exist" (reproduced on PG17). Disabling asyncpg's cache trades a
+        # little per-query overhead for correctness here; this engine never
+        # runs the same statement often enough for the cache to matter.
+        connect_args={"statement_cache_size": 0},
     )
 
 

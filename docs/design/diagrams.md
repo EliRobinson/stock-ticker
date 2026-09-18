@@ -2,22 +2,46 @@
 
 Mermaid renderings of the design in [system-design.md](system-design.md), using the terms defined in [CONTEXT.md](../../CONTEXT.md).
 
-## 1. System context and containers
+## 1. System context (C4 Level 1)
 
-Look at which external source feeds which compose service, and which Postgres role (`app_writer` or `ai_reader`) each edge into `db` uses. Every compose port binds to `127.0.0.1`; `db` is not published at all.
+Look at who the app talks to and why: the user drives it, and it reaches out to four external systems. This is the widest zoom; nothing about compose services or Postgres roles appears here.
+
+```mermaid
+flowchart TD
+    user(["User"])
+    app["Stock Ticker (this app)"]
+    alpaca["Alpaca"]
+    edgar["SEC EDGAR"]
+    wiki["Wikipedia"]
+    anthropic["Anthropic"]
+
+    user -->|"views Market, Company, and Notes; asks questions"| app
+    app -->|"Quotes, Daily Bars, calendar, corporate actions"| alpaca
+    app -->|"shares outstanding, filings"| edgar
+    app -->|"S&P 500 constituent table"| wiki
+    app -->|"natural-language answers"| anthropic
+```
+
+## 2. Containers (C4 Level 2)
+
+One level in from the context diagram: the four compose services inside the loopback trust boundary, the Postgres roles on each edge into `db`, the `ai` schema sitting between `ai_reader` and the tables, the `migrate` service that both `api` and `worker` wait on, and the one edge where data (Notes and query rows) leaves the machine for Anthropic.
 
 ```mermaid
 flowchart LR
-    subgraph external["External sources"]
-        alpaca["Alpaca (clock, calendar, snapshots, bars, corporate actions)"]
-        edgar["SEC EDGAR (companyfacts, submissions)"]
-        wiki["Wikipedia (S&P 500 table)"]
+    subgraph external["External systems"]
+        alpaca["Alpaca"]
+        edgar["SEC EDGAR"]
+        wiki["Wikipedia"]
         anthropic["Anthropic"]
     end
 
-    subgraph compose["Docker Compose (all ports bound to 127.0.0.1)"]
+    subgraph compose["Docker Compose: loopback trust boundary, every port bound to 127.0.0.1, nothing reachable from outside the machine"]
+        migrate["migrate (one-shot: alembic upgrade head)"]
         worker["worker (APScheduler, no published port)"]
-        db[("db: Postgres 17 (not published)")]
+        subgraph dbbox["db: Postgres 17 (not published)"]
+            tables[("domain tables (app_owner)")]
+            aiviews["ai schema: views + ai.returns_between + ai.today_ny (SECURITY DEFINER)"]
+        end
         api["api (FastAPI, 127.0.0.1:8000)"]
         web["web (Next.js 16, 127.0.0.1:3000)"]
     end
@@ -27,18 +51,23 @@ flowchart LR
     alpaca --> worker
     edgar --> worker
     wiki --> worker
-    worker -->|app_writer| db
-    api -->|app_writer| db
-    api -->|ai_reader, read-only| db
-    api -->|"Claude tool loop"| anthropic
+
+    migrate -->|"must complete (service_completed_successfully) before"| worker
+    migrate -->|"must complete (service_completed_successfully) before"| api
+
+    worker -->|app_writer| tables
+    api -->|app_writer| tables
+    api -->|"ai_reader, read-only"| aiviews
+    aiviews -->|"reads through views only"| tables
+    api -->|"Notes + query rows leave the machine here"| anthropic
 
     browser -->|"page load"| web
     browser -->|"REST /api/v1 + SSE /api/v1/chat"| api
 ```
 
-## 2. Ingest schedule and data flow
+## 3. Ingest: sources and the startup chain (not a C4 diagram)
 
-Look at which job writes which tables, and the three trigger chains: `bars_daily`'s drift check queuing a full adjusted re-fetch, `bars_daily`/`edgar_sync` both triggering `market_caps_rebuild`, and `gap_check` queuing its own re-fetch.
+Look at which external source feeds which job on its regular schedule (thin arrows), and separately, the thick arrows tracing the worker's one-time startup chain: `constituents_sync` then `calendar_sync`, then `bars_backfill` and `edgar_sync` in parallel, then `market_caps_rebuild`, before the regular schedule registers.
 
 ```mermaid
 flowchart TD
@@ -50,7 +79,7 @@ flowchart TD
 
     cs["constituents_sync (startup + daily 06:00)"]
     cal["calendar_sync (startup + daily 06:05)"]
-    bb["bars_backfill (startup, hourly until done)"]
+    bb["bars_backfill (startup, then hourly until done)"]
     bd["bars_daily (Trading Days 16:30)"]
     qp["quotes_poll (every 15s, market open)"]
     cas["corporate_actions_sync (daily 06:10)"]
@@ -66,120 +95,167 @@ flowchart TD
     alpaca --> cas
     sec --> es
 
+    cs ==>|"startup chain: 1st"| cal
+    cal ==>|"2nd, in parallel"| bb
+    cal ==>|"2nd, in parallel"| es
+    bb ==>|"3rd, both must finish"| mcr
+    es ==>|"3rd, both must finish"| mcr
+    mcr -.->|"regular schedule registers only after this chain finishes"| qp
+```
+
+## 4. Ingest: jobs, tables, and triggers (not a C4 diagram)
+
+Look at the `backfill_completed_at` gate (a Listing must clear `bars_backfill` before `bars_daily` or `gap_check` will touch it), the `refetch_requests` table standing in for the old in-memory queue for both the drift check and gap retries, and the `rerun_requested` loop on `market_caps_rebuild`.
+
+```mermaid
+flowchart TD
+    cs["constituents_sync"]
+    cal["calendar_sync"]
+    bb["bars_backfill"]
+    bd["bars_daily"]
+    qp["quotes_poll"]
+    cas["corporate_actions_sync"]
+    es["edgar_sync"]
+    mcr["market_caps_rebuild"]
+    gc["gap_check"]
+    prune["ingest_runs_prune (nightly 22:00)"]
+
     tCompanies[("companies, listings")]
+    gate{{"listings.backfill_completed_at"}}
     tEvents[("events")]
     tTradingDays[("trading_days")]
     tBars[("daily_bars")]
     tQuotes[("quotes")]
     tShares[("shares_outstanding")]
     tMarketCaps[("market_caps")]
+    tRefetch[("refetch_requests")]
+    tIngestRuns[("ingest_runs")]
 
     cs -->|writes| tCompanies
     cs -->|"writes (index_added)"| tEvents
+    cs -->|"new Listing: starts null"| gate
     cal -->|"writes (replaces future rows)"| tTradingDays
     bb -->|writes| tBars
+    bb -->|"sets once a symbol's history is complete"| gate
     bd -->|writes| tBars
     qp -->|"writes (if observed_at newer)"| tQuotes
     cas -->|writes| tEvents
     es -->|writes| tShares
     es -->|"writes (10-K/10-Q/8-K)"| tEvents
     mcr -->|writes| tMarketCaps
+    prune -->|"deletes old rows"| tIngestRuns
 
-    drift{"drift check: stored adj_close vs new adj_close > 1e-6 relative?"}
+    gate -->|"gates (must be set)"| bd
+    gate -->|"gates (must be set)"| gc
+
+    drift{"drift check: stored adj_close vs new > 1e-6 relative?"}
     bd -->|"re-fetch last 5 Trading Days"| drift
-    drift -->|yes| refetch["full adjusted re-fetch for symbol"]
-    refetch --> tBars
-
-    bd -->|triggers| mcr
-    es -->|triggers| mcr
+    drift -->|"yes: insert before upserting"| tRefetch
+    tRefetch -->|"reason=adj_drift, from_date"| bb
 
     gapfound["Trading Days with no bar found"]
     gc --> gapfound
-    gapfound -->|"re-fetch (up to 3 tries)"| tBars
-    gapfound -->|"still open after 3 tries"| status["reported in /status"]
+    gapfound -->|"insert, reason=gap"| tRefetch
+    tRefetch -->|"reason=gap, from_date, attempts += 1"| bb
+    tRefetch -->|"3rd failed attempt: row deleted, accepted"| status["reported in /api/v1/status"]
+
+    bd -->|triggers| mcr
+    es -->|triggers| mcr
+    rerun(("rerun_requested"))
+    mcr -->|"already running: sets"| rerun
+    rerun -->|"lock holder reruns once free"| mcr
 ```
 
-## 3. Data model
+## 5. Data model (ER diagram, not a C4 diagram)
 
-Look at the primary keys (composite where the design calls for one, such as `daily_bars` and `market_caps`), the foreign keys, and which tables sit outside the relationship graph entirely (`ingest_runs`, `ingest_watermarks` are job bookkeeping, not domain data).
+Look at the primary keys, the writer noted in each entity's name (`worker`, `api`, or the checked-in `share_class_rules` seed), the `listings`-`quotes` relationship (exactly one Listing per Quote, zero-or-one Quote per Listing), and the two additions: `refetch_requests` and `share_class_rules.price_symbol`'s link to `listings`.
 
 ```mermaid
 erDiagram
-    companies {
+    companies["companies (worker)"] {
         text cik PK
         text name
         text sector
         boolean is_active
     }
-    listings {
+    listings["listings (worker)"] {
         text symbol PK
         text cik FK
         boolean is_primary
         boolean is_active
         date first_bar_date
+        timestamptz backfill_completed_at
     }
-    share_class_rules {
+    share_class_rules["share_class_rules (seed, checked in)"] {
         text cik PK
         text price_symbol
         numeric shares_unit_ratio
         text note
     }
-    trading_days {
+    trading_days["trading_days (worker)"] {
         date trade_date PK
         timestamptz open_at
         timestamptz close_at
     }
-    daily_bars {
+    daily_bars["daily_bars (worker)"] {
         text symbol PK
         date trade_date PK
         numeric close
         numeric adj_close
         bigint volume
+        text source
     }
-    quotes {
+    quotes["quotes (worker)"] {
         text symbol PK
         numeric price
         timestamptz observed_at
         text feed
     }
-    shares_outstanding {
+    shares_outstanding["shares_outstanding (worker)"] {
         text cik PK
         date as_of_date PK
         text concept PK
         text accession PK
         bigint shares
     }
-    market_caps {
+    market_caps["market_caps (worker)"] {
         text cik PK
         date trade_date PK
         numeric market_cap
         bigint shares_used
         boolean is_multi_class
     }
-    events {
+    events["events (worker)"] {
         bigserial id PK
         text cik FK
         text symbol
         date event_date
         text kind
     }
-    notes {
+    notes["notes (api)"] {
         uuid id PK
         text cik FK
         date start_date
         date end_date
         text body
     }
-    ingest_runs {
+    ingest_runs["ingest_runs (worker)"] {
         bigserial id PK
         text job
         text status
         timestamptz started_at
     }
-    ingest_watermarks {
+    ingest_watermarks["ingest_watermarks (worker)"] {
         text job PK
         text key PK
         text value
+    }
+    refetch_requests["refetch_requests (worker)"] {
+        text symbol PK
+        text reason PK
+        date from_date
+        int attempts
+        timestamptz requested_at
     }
 
     companies ||--o{ listings : "has"
@@ -189,14 +265,16 @@ erDiagram
     companies ||--o{ events : "has"
     companies |o--o{ notes : "optionally about"
     listings ||--o{ daily_bars : "has"
-    listings |o--o| quotes : "has current"
+    listings ||--o| quotes : "has current"
+    listings ||--o| share_class_rules : "is price_symbol for"
+    listings ||--o{ refetch_requests : "requested for"
     trading_days ||--o{ daily_bars : "on"
     trading_days ||--o{ market_caps : "on"
 ```
 
-## 4. Live Quote path
+## 6. Live Quote path (sequence diagram, not a C4 diagram)
 
-Look at the two independent loops: the worker polling Alpaca every 15 seconds and upserting only newer Quotes, and the browser polling `/api/v1/market` every 10 seconds and computing staleness itself from `observed_at` against `/status`'s `server_time`.
+Look at the two independent loops: the worker polling Alpaca every 15 seconds and upserting only newer Quotes, and the browser polling `/api/v1/market` every 10 seconds. Staleness now comes from that single response, with no second call to `/api/v1/status`.
 
 ```mermaid
 sequenceDiagram
@@ -217,87 +295,101 @@ sequenceDiagram
         B->>API: GET /api/v1/market
         API->>DB: read active listings joined with quotes
         DB-->>API: rows
-        API-->>B: symbol, price, observed_at, change, market_cap
-        B->>API: GET /status
-        API-->>B: server_time, market clock, data_as_of
-        Note over B: staleness computed client-side "(server_time - observed_at)"
+        API-->>B: symbol, price, observed_at, change, market_cap, server_time, is_open, next_open, next_close
+        Note over B: staleness and next poll interval computed client-side from this one response, no separate /api/v1/status call
     end
 ```
 
-## 5. Ask (AI) request
+## 7. Ask (AI) request (sequence diagram, not a C4 diagram)
 
-Look at the tool loop's inner `alt` (text versus a tool call), the SQL guard sitting between the model's `run_sql` call and `ai_reader`, and the disconnect path at the bottom where the API cancels both the model stream and the running query.
+Look at the two-step split: `run_sql` finishes a step before `show_table`/`show_chart` can read its `result_id` on the next model call. The bottom `alt` is the only top-level branch: normal completion, a mid-stream error that closes every open part first, or a client disconnect that cancels both the model stream and the query and sends nothing more.
 
 ```mermaid
 sequenceDiagram
     participant B as Browser (useChat)
-    participant API as api (POST /api/v1/chat)
-    participant C as Claude (tool loop)
-    participant G as run_sql (SQL guard)
+    participant API as api (/api/v1/chat)
+    participant C as Claude
+    participant G as run_sql guard
     participant DB as Postgres (ai_reader)
 
-    B->>API: POST /api/v1/chat "{id, messages, trigger, messageId}"
-    Note over API: UIMessage converter maps parts to Anthropic messages
-    API-->>B: start "{messageId}"
+    B->>API: POST messages
+    API-->>B: start
 
-    loop up to 8 steps, 60s wall time, 150k input tokens
-        API-->>B: start-step
-        API->>C: model call ("cached system prompt + tools")
-        alt model answers in text
-            C-->>API: text deltas
-            API-->>B: text-start / text-delta / text-end
-        else model calls a tool
-            C-->>API: tool_use "run_sql(sql, purpose)"
-            API-->>B: tool-input-available "{toolCallId, toolName, input}"
-            API->>G: guard "(parse, ai.* table allow-list, function allow-list)"
-            alt guard and query succeed
-                G->>DB: "read-only transaction, local timeouts, SELECT wrapped with LIMIT 5001"
-                DB-->>G: rows ("<=5000, cached under result_id")
-                G-->>API: "{result_id, columns, rows, truncated}"
-                API-->>B: tool-output-available "{toolCallId, output}"
-                C-->>API: tool_use "show_table/show_chart(result_id, ...)"
-                API-->>B: tool-input-available then tool-output-available
-                API-->>B: data-view "{id, TableSpec|ChartSpec}"
-            else guard rejects or query errors
-                G-->>API: guard or SQL error text
-                API-->>B: tool-output-error "{toolCallId, errorText}"
-            end
-        end
-        API-->>B: finish-step
+    Note over API,DB: Step N: run_sql
+    API->>C: model call
+    C-->>API: tool_use "run_sql(sql)"
+    API-->>B: tool-input-available
+    API->>G: guard, then run as ai_reader
+    G->>DB: "read-only, timeouts, wrapped with LIMIT 5001"
+    DB-->>G: rows
+    G-->>API: "result_id, columns, rows"
+    API-->>B: tool-output-available
+    API-->>B: finish-step
+    Note over G,API: "a guard or SQL error surfaces as tool-output-error instead, and the model can retry with a fixed query on a later step"
+
+    Note over API,B: Step N+1: show_table / show_chart, using step N's result_id
+    API->>C: model call
+    C-->>API: tool_use "show_table/show_chart(result_id)"
+    API-->>B: tool-input-available, tool-output-available
+    API-->>B: data-view "ViewSpec"
+    API-->>B: finish-step
+
+    alt normal completion
+        API-->>B: finish
+        API-->>B: "data: [DONE]"
+    else model error or budget exhausted
+        Note over API: closes every open part first ("text-end", "tool-output-error" per unfinished call)
+        API-->>B: error
+        API-->>B: finish
+    else client disconnects
+        Note over API,DB: checked between every chunk via "request.is_disconnected()"
+        B--xAPI: disconnect
+        API->>C: cancel the Anthropic stream
+        API->>DB: cancel the running query
+        Note over API: nothing further is sent
     end
-
-    API-->>B: finish
-    API-->>B: "data: [DONE]"
-
-    Note over B,DB: Disconnect / cancel path
-    API->>API: "checks request.is_disconnected() between chunks"
-    B--xAPI: browser disconnects or aborts the stream
-    API->>C: cancel the Anthropic stream
-    API->>DB: cancel the running query
-    API-->>B: error "{errorText}", then finish
 ```
 
-## 6. Job run lifecycle
+## 8. Job run lifecycle (state diagram, not a C4 diagram)
 
-Look at the fork right after the advisory lock (`skipped_locked` versus `running`), the three terminal outcomes of a running job, and the separate orphan-cleanup path that fails any `running` row still open after an hour.
+Look at the fork right after the trigger (`skipped_locked`, `skipped`, or `running`), the `rerun_requested` loop back into `Running` when a locked job is retriggered, the "lock connection lost" path straight to `failed`, and orphan cleanup, which now fires at any age, not just at startup.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> AttemptingLock: "job trigger fires (schedule or startup)"
+    [*] --> AttemptingLock: "job trigger fires"
 
-    AttemptingLock --> SkippedLocked: "pg_try_advisory_lock(hashtext(job)) fails"
+    AttemptingLock --> SkippedLocked: "lock held by another run"
+    AttemptingLock --> Skipped: "job inputs are empty"
     AttemptingLock --> Running: "lock acquired, ingest_runs row inserted"
+
+    SkippedLocked --> RerunRequested: "sets rerun_requested"
+    RerunRequested --> Running: "lock holder reruns once free"
 
     Running --> Succeeded: "no item failures"
     Running --> Partial: "one or more items failed"
     Running --> Failed: "uncaught error"
+    Running --> Failed: "lock connection lost mid-run"
 
-    SkippedLocked --> [*]: "status = skipped_locked"
+    Skipped --> [*]: "status = skipped"
+    SkippedLocked --> [*]: "no rerun requested"
     Succeeded --> [*]: "status = succeeded"
     Partial --> [*]: "status = partial"
     Failed --> [*]: "status = failed"
 
-    state "Orphan cleanup (on startup)" as Orphan
-    Running --> Orphan: "running row older than 1h"
-    Orphan --> Failed: "marked failed"
+    state "Orphan cleanup: checked at every trigger, any age" as Orphan
+    Running --> Orphan: "a running row for this job already exists and the lock can be acquired"
+    Orphan --> Failed: "marked failed (orphaned)"
+```
+
+## 9. Startup order (not a C4 diagram)
+
+Look at the join before `web`: both `api` becoming ready and the worker's own startup chain (diagram 3) have to finish, not just `migrate`.
+
+```mermaid
+flowchart LR
+    db["db healthy (pg_isready)"] --> migrate["migrate completes (alembic upgrade head)"]
+    migrate --> apiReady["api ready (/api/v1/health/ready)"]
+    migrate --> workerChain["worker startup chain (constituents_sync, calendar_sync, bars_backfill ∥ edgar_sync, market_caps_rebuild)"]
+    apiReady --> web["web (next dev, 127.0.0.1:3000)"]
+    workerChain --> web
 ```

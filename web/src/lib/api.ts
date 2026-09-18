@@ -1,6 +1,6 @@
 import createClient from 'openapi-fetch'
 import { env } from '@/env'
-import type { components, paths } from './api-types'
+import type { components, operations, paths } from './api-types'
 
 export type ProblemDetail = components['schemas']['ProblemDetail']
 export type MarketResponse = components['schemas']['MarketResponse']
@@ -23,7 +23,7 @@ export type NotesResponse = components['schemas']['NotesPage']
  * it's filled in from `start_date` by a `mode="before"` validator on the
  * raw request body before Pydantic's required-field check runs, so the
  * route is expected to still accept an omitted `end_date` at runtime. This
- * type keeps that optional for callers; putNote() fills it in itself
+ * type keeps that optional for callers; toNotePut() fills it in itself
  * before it ever reaches the generated (required-end_date) request type,
  * so it's correct either way.
  */
@@ -33,6 +33,76 @@ export interface PutNoteBody {
   end_date?: string
   body: string
 }
+
+/** cik/start_date/end_date/body all filled in - a subtype of the
+ * generated NotePut (whose fields are individually optional/nullable per
+ * the schema), precise enough to also build the fields a Note needs. */
+export interface NormalizedNotePut {
+  cik: string | null
+  start_date: string
+  end_date: string
+  body: string
+}
+
+/** The one place a PutNoteBody becomes the request the generated NotePut
+ * type expects - putNote() and the optimistic Note builder in
+ * useNotes.ts both call this, so cik/end_date can never default
+ * differently between "what we send" and "what we show before the
+ * response comes back". */
+export function toNotePut(body: PutNoteBody): NormalizedNotePut {
+  return {
+    cik: body.cik ?? null,
+    start_date: body.start_date,
+    end_date: body.end_date ?? body.start_date,
+    body: body.body
+  }
+}
+
+/**
+ * Maps a generated query-param object's `T | null` fields to `T |
+ * undefined` - the schema allows explicit `null` for an omitted filter,
+ * but every caller here (hooks, noteMatchesList, openapi-fetch's own
+ * query serializer) already treats "not filtering on this" as
+ * `undefined`, not a second `null` case to also check for.
+ */
+type NullToUndefined<T> = T extends null ? undefined : T
+type Loosen<T> = { [K in keyof T]: NullToUndefined<T[K]> }
+
+export type GetBarsParams = Loosen<
+  NonNullable<
+    operations['list_bars_api_v1_listings__symbol__bars_get']['parameters']['query']
+  >
+>
+
+export const DEFAULT_BARS_TIMEFRAME = '1d' satisfies GetBarsParams['timeframe']
+
+export type GetNotesParams = Loosen<
+  NonNullable<operations['list_notes_api_v1_notes_get']['parameters']['query']>
+>
+/** The shape every cached notes-list query key carries (everything
+ * `useNotes`/`noteMatchesList` needs; `cursor` is per-page, not part of
+ * a list's identity). */
+export type NotesListParams = Omit<GetNotesParams, 'cursor'>
+
+type GeneratedEventsQuery = Loosen<
+  NonNullable<
+    operations['list_events_api_v1_events_get']['parameters']['query']
+  >
+>
+
+/** Exactly one of `cik`/`symbol` is required by the route (422 with
+ * `.../problems/missing-cik-or-symbol` otherwise) - the union makes
+ * passing neither, or both, a type error instead of a runtime one. The
+ * generated query type has both as plain optional fields with no such
+ * constraint, so this narrows it rather than using it directly. */
+export type GetEventsParams = (
+  { cik: string; symbol?: never } | { symbol: string; cik?: never }
+) &
+  Omit<GeneratedEventsQuery, 'cik' | 'symbol' | 'kind' | 'cursor'> & {
+    kind?: string[]
+    cursor?: string
+  }
+export type EventsListParams = Omit<GetEventsParams, 'cursor'>
 
 const client = createClient<paths>({
   baseUrl: env.NEXT_PUBLIC_API_URL,
@@ -98,12 +168,21 @@ interface FetchResult<T> {
   response: Response
 }
 
-/** For routes that always return a body on success (every route here
- * except DELETE, which calls `client.DELETE` directly - see deleteNote). */
-async function unwrap<T>(result: FetchResult<T>): Promise<T> {
+/** Throws an ApiError for the two ways a request can fail: an openapi-fetch
+ * `error`, or a non-ok response with no typed error body. Shared by
+ * unwrap() and deleteNote(), the only route with no response body to
+ * unwrap on success. */
+function throwIfError(
+  result: Pick<FetchResult<unknown>, 'error' | 'response'>
+): void {
   if (result.error !== undefined || !result.response.ok) {
     throw new ApiError(normalizeProblem(result.error, result.response))
   }
+}
+
+/** For routes that always return a body on success. */
+async function unwrap<T>(result: FetchResult<T>): Promise<T> {
+  throwIfError(result)
   if (result.data === undefined) {
     throw new ApiError(normalizeProblem(undefined, result.response))
   }
@@ -119,14 +198,6 @@ export async function getCompany(cik: string): Promise<CompanyDetail> {
     await client.GET('/api/v1/companies/{cik}', { params: { path: { cik } } })
   )
 }
-
-export interface GetBarsParams {
-  from?: string
-  to?: string
-  timeframe?: '1d'
-}
-
-export const DEFAULT_BARS_TIMEFRAME = '1d' satisfies GetBarsParams['timeframe']
 
 /** The route wraps bars in {symbol, timeframe, bars}, echoing the
  * requested timeframe back so the cache key stays unambiguous once
@@ -151,19 +222,6 @@ export async function getBars(
   return response.bars
 }
 
-/** Exactly one of `cik`/`symbol` is required by the route (422 with
- * `.../problems/missing-cik-or-symbol` otherwise) - the union makes
- * passing neither, or both, a type error instead of a runtime one. */
-export type GetEventsParams = (
-  { cik: string; symbol?: never } | { symbol: string; cik?: never }
-) & {
-  from?: string
-  to?: string
-  kind?: string[]
-  limit?: number
-  cursor?: string
-}
-
 export async function getEvents(
   params: GetEventsParams
 ): Promise<EventsResponse> {
@@ -182,19 +240,6 @@ export async function getEvents(
       }
     })
   )
-}
-
-export interface GetNotesParams {
-  cik?: string
-  from?: string
-  to?: string
-  market_only?: boolean
-  /** With `cik`, also return whole-market Notes (cik === null). The route
-   * 422s if `market_only` and `cik` are both given - `include_market` is
-   * the one meant to combine with `cik`. */
-  include_market?: boolean
-  limit?: number
-  cursor?: string
 }
 
 export async function getNotes(
@@ -221,23 +266,17 @@ export async function putNote(id: string, body: PutNoteBody): Promise<Note> {
   return unwrap(
     await client.PUT('/api/v1/notes/{note_id}', {
       params: { path: { note_id: id } },
-      body: {
-        cik: body.cik ?? null,
-        start_date: body.start_date,
-        end_date: body.end_date ?? body.start_date,
-        body: body.body
-      }
+      body: toNotePut(body)
     })
   )
 }
 
 export async function deleteNote(id: string): Promise<void> {
-  const result = await client.DELETE('/api/v1/notes/{note_id}', {
-    params: { path: { note_id: id } }
-  })
-  if (result.error !== undefined || !result.response.ok) {
-    throw new ApiError(normalizeProblem(result.error, result.response))
-  }
+  throwIfError(
+    await client.DELETE('/api/v1/notes/{note_id}', {
+      params: { path: { note_id: id } }
+    })
+  )
 }
 
 export async function getStatus(): Promise<StatusResponse> {

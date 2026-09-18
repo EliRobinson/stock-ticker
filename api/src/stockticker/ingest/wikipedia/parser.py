@@ -94,9 +94,7 @@ def parse_constituents(html: str) -> ConstituentsParseResult:
     return ConstituentsParseResult(rows=parsed, rejected=tuple(rejected))
 
 
-def _to_row(
-    cells: list[str], index_of: dict[str, int], row_number: int
-) -> ConstituentRow | FailedItem:
+def _to_row(cells: list[str], index_of: dict[str, int], row_number: int) -> ConstituentRow | FailedItem:
     def field(name: str) -> str:
         return cells[index_of[name]]
 

@@ -59,14 +59,11 @@ async def _connectable(dsn: URL) -> AsyncEngine | None:
 
 def _unreachable(role: str) -> None:
     db = get_settings().postgres_db
-    message = (
-        f"Postgres not reachable as {role} on database {db!r} -- "
-        "see tests/integration/conftest.py."
-    )
+    message = f"Postgres not reachable as {role} on database {db!r} -- see tests/integration/conftest.py."
     if _require_db():
         pytest.fail(
             f"{message} REQUIRE_DB=1 is set: run `docker compose up -d db`, then "
-            "`docker compose run --rm --no-deps --entrypoint \"\" api "
+            '`docker compose run --rm --no-deps --entrypoint "" api '
             "uv run --no-sync python scripts/ensure_test_database.py`."
         )
     pytest.skip(message)
@@ -79,8 +76,7 @@ def _assert_test_database() -> Iterator[None]:
     expected = os.environ.get("POSTGRES_TEST_DB", "stockticker_test")
     if settings.postgres_db != expected:
         pytest.fail(
-            f"integration tests must use POSTGRES_DB={expected!r}, "
-            f"got {settings.postgres_db!r} (issue #38)"
+            f"integration tests must use POSTGRES_DB={expected!r}, got {settings.postgres_db!r} (issue #38)"
         )
     if settings.postgres_db == "stockticker":
         pytest.fail("refusing to run integration tests against the app database 'stockticker'")

@@ -13,7 +13,7 @@ After a client disconnect nothing is encoded at all; that is the caller's job
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, MutableMapping
 from typing import Any, Literal
 
 import anyio
@@ -26,7 +26,8 @@ _logger = get_logger(__name__)
 
 # ASGI receive callable. Kept as a plain alias so this module stays free of
 # Starlette; the HTTP response wrapper lives in `stockticker.api.streaming`.
-Receive = Callable[[], Awaitable[dict[str, Any]]]
+# MutableMapping matches Starlette's Message / Receive return type.
+Receive = Callable[[], Awaitable[MutableMapping[str, Any]]]
 
 UI_MESSAGE_STREAM_HEADERS = {
     "x-vercel-ai-ui-message-stream": "v1",

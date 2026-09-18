@@ -55,8 +55,8 @@ _DATE_TIME = {
 _STRING = {
     "lower", "upper", "initcap", "length", "char_length", "character_length", "substring", "substr",
     "left", "right", "trim", "btrim", "ltrim", "rtrim", "concat", "concat_ws", "dpipe", "replace",
-    "split_part", "position", "str_position", "strpos", "starts_with", "startswith", "lpad", "rpad",
-    "pad", "format", "reverse", "repeat", "regexp_replace", "regexp_like", "regexp_i_like",
+    "split_part", "position", "str_position", "strpos", "starts_with", "startswith",
+    "format", "reverse", "regexp_replace", "regexp_like", "regexp_i_like",
     "regexp_extract", "regexp_match", "translate", "md5", "chr", "ascii", "quote_literal",
 }  # fmt: skip
 _CONDITIONAL = {"coalesce", "nullif", "greatest", "least", "case", "if", "iff"}
@@ -204,7 +204,7 @@ def _check_node(node: exp.Expr, ai_views: frozenset[str]) -> None:
 def _check_table(table: exp.Table, ai_views: frozenset[str]) -> None:
     if table.catalog:
         raise GuardError(f"Cross-database references are not allowed: {table.sql(dialect='postgres')}.")
-    schema = table.db.lower() if table.db else ""
+    schema = _folded(table.args.get("db"))
     if schema and schema != AI_SCHEMA:
         raise GuardError(
             f"Schema '{table.db}' is not readable. Only the ai views are: "
@@ -212,14 +212,18 @@ def _check_table(table: exp.Table, ai_views: frozenset[str]) -> None:
         )
     if isinstance(table.this, exp.Func):
         return  # a table function: checked by `_check_function` when the walk reaches it
-    name = table.name.lower()
+    name = _folded(table.this)
     if schema == AI_SCHEMA:
         if name not in ai_views:
             raise GuardError(
                 f"ai.{table.name} does not exist. The ai views are: {', '.join(sorted(ai_views))}."
             )
         return
-    if name in _visible_cte_names(table) or name in ai_views:
+    if name in _visible_cte_names(table):
+        return
+    if name in ai_views:
+        # Pin the schema, so what runs never depends on search_path.
+        table.set("db", exp.to_identifier(AI_SCHEMA))
         return
     raise GuardError(
         f"Table '{table.name}' is not an ai view or a CTE in scope. "
@@ -227,10 +231,32 @@ def _check_table(table: exp.Table, ai_views: frozenset[str]) -> None:
     )
 
 
+def _folded(identifier: exp.Expr | str | None) -> str:
+    """An identifier as Postgres resolves it: quoted names are exact,
+    unquoted names fold to lower case."""
+    if identifier is None:
+        return ""
+    if isinstance(identifier, exp.Identifier):
+        return str(identifier.this) if identifier.quoted else str(identifier.this).lower()
+    if isinstance(identifier, exp.Expr):
+        return (
+            _folded(identifier.this)
+            if isinstance(identifier.this, exp.Identifier)
+            else identifier.name.lower()
+        )
+    return identifier.lower()
+
+
+def _cte_name(cte: exp.CTE) -> str:
+    alias = cte.args.get("alias")
+    return _folded(alias.this if isinstance(alias, exp.TableAlias) else alias)
+
+
 def _visible_cte_names(node: exp.Expr) -> set[str]:
     """CTE names visible from `node`, following Postgres scoping: a CTE sees the
     CTEs before it in its WITH (and itself only under RECURSIVE); the query
-    body sees all of them; nothing outside the query that owns the WITH does."""
+    body sees all of them; nothing outside the query that owns the WITH does.
+    Names are folded the way Postgres folds them."""
     visible: set[str] = set()
     child: exp.Expr = node
     parent = node.parent
@@ -239,11 +265,11 @@ def _visible_cte_names(node: exp.Expr) -> set[str]:
             ctes = list(parent.expressions)
             index = next(i for i, cte in enumerate(ctes) if cte is child)
             upto = index + 1 if parent.args.get("recursive") else index
-            visible.update(cte.alias_or_name.lower() for cte in ctes[:upto])
+            visible.update(_cte_name(cte) for cte in ctes[:upto])
         else:
             with_ = parent.args.get("with") or parent.args.get("with_")
             if isinstance(with_, exp.With) and child is not with_:
-                visible.update(cte.alias_or_name.lower() for cte in with_.expressions)
+                visible.update(_cte_name(cte) for cte in with_.expressions)
         child, parent = parent, parent.parent
     return visible
 

@@ -25,9 +25,9 @@ from ai_fakes import (
 from pydantic import ValidationError
 
 from stockticker.ai.convert import (
+    MAX_TEXT_PART_CHARS,
     SUMMARY_BYTES,
     UNFINISHED_TOOL_RESULT,
-    DataPart,
     OtherPart,
     StepStartPart,
     TextPart,
@@ -231,7 +231,7 @@ def test_golden_client_messages_parse_into_typed_parts() -> None:
         ToolOutputAvailable,
         StepStartPart,
         ToolOutputAvailable,
-        DataPart,
+        OtherPart,
         StepStartPart,
         TextPart,
     ]
@@ -261,10 +261,18 @@ def test_an_unknown_part_type_is_kept_as_an_other_part_and_dropped() -> None:
         "approval-responded",
         "output-denied",
         "later",
+        "",
+        None,
     ],
 )
-def test_every_tool_state_without_output_becomes_an_is_error_result(state: str) -> None:
-    call = {"type": "tool-run_sql", "toolCallId": "t1", "state": state, "input": {"sql": "x", "purpose": "p"}}
+def test_every_tool_state_without_output_becomes_an_is_error_result(state: str | None) -> None:
+    call: dict[str, Any] = {
+        "type": "tool-run_sql",
+        "toolCallId": "t1",
+        "input": {"sql": "x", "purpose": "p"},
+    }
+    if state is not None:
+        call["state"] = state
     converted = to_anthropic_messages(
         [user("q"), ui_message("assistant", call), user("next")], tool_names=TOOL_NAMES
     )
@@ -288,12 +296,61 @@ def test_a_streaming_tool_call_without_input_becomes_an_empty_tool_use() -> None
         {"type": "text"},
         {"type": "tool-run_sql", "state": "output-available", "output": {}},
         {"type": "tool-run_sql", "toolCallId": "", "state": "input-available"},
-        {"type": "tool-run_sql", "toolCallId": "t1", "state": "output-error"},
-        {"type": "tool-run_sql", "toolCallId": "t1", "state": "input-available", "input": "not an object"},
         {"type": "dynamic-tool", "toolCallId": "t1", "state": "input-available"},
         {"type": "tool-", "toolCallId": "t1", "state": "input-available"},
     ],
 )
-def test_a_malformed_known_part_is_rejected(part: dict[str, Any]) -> None:
+def test_a_malformed_known_part_is_dropped(part: dict[str, Any]) -> None:
+    message = ui_message("assistant", part, {"type": "text", "text": "kept"})
+    assert [type(p) for p in message.parts] == [TextPart]
+    assert to_anthropic_messages(
+        [user("q"), message, user("next")], tool_names=TOOL_NAMES
+    ) == [
+        {"role": "user", "content": [{"type": "text", "text": "q"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "kept"}]},
+        {"role": "user", "content": [{"type": "text", "text": "next"}]},
+    ]
+
+
+def test_an_overlong_text_part_is_rejected() -> None:
     with pytest.raises(ValidationError):
-        ui_message("assistant", part)
+        ui_message(
+            "user",
+            {"type": "text", "text": "x" * (MAX_TEXT_PART_CHARS + 1)},
+            {"type": "text", "text": "kept"},
+        )
+
+
+def test_a_tool_part_with_non_object_input_converts_with_empty_input() -> None:
+    call = {
+        "type": "tool-run_sql",
+        "toolCallId": "t1",
+        "state": "input-available",
+        "input": "not an object",
+    }
+    converted = to_anthropic_messages(
+        [user("q"), ui_message("assistant", call), user("next")], tool_names=TOOL_NAMES
+    )
+    assert converted[1]["content"][0]["input"] == {}  # type: ignore[index]
+
+
+def test_a_data_part_with_a_bad_shape_is_still_dropped_unread() -> None:
+    message = ui_message(
+        "user",
+        {"type": "data-view", "id": 7},
+        {"type": "text", "text": "Hi"},
+    )
+    assert [type(p) for p in message.parts] == [OtherPart, TextPart]
+    assert to_anthropic_messages([message], tool_names=TOOL_NAMES) == [
+        {"role": "user", "content": [{"type": "text", "text": "Hi"}]}
+    ]
+
+
+def test_output_error_without_error_text_still_converts() -> None:
+    call = {"type": "tool-run_sql", "toolCallId": "t1", "state": "output-error", "input": {}}
+    converted = to_anthropic_messages(
+        [user("q"), ui_message("assistant", call), user("next")], tool_names=TOOL_NAMES
+    )
+    result: Any = converted[2]["content"][0]  # type: ignore[index]
+    assert result["is_error"] is True
+    assert "The tool call failed." in result["content"]

@@ -6,12 +6,13 @@ the Wikipedia Constituent List.
 - Each Company gets exactly one primary Listing: `share_class_rules.price_symbol`
   when a rule exists and that symbol is listed, otherwise its first row in
   the table.
-- A Company or Listing missing from the table is deactivated only after it
-  has been missing on `MISSING_SYNCS_BEFORE_DEACTIVATION` consecutive syncs.
-  The per-key miss counts live in `ingest_watermarks` under this job.
-- More than `MAX_COMPANY_DEACTIVATIONS_PER_RUN` Company deactivations in one
-  run means the parse broke, not that the index changed. The run fails and
-  the whole transaction rolls back, so the last good list stays.
+- A Company or Listing is deactivated only once it has been missing on two
+  consecutive New York days: it is active, absent from today's list, and
+  absent from the last list parsed on an earlier day. Several runs on one
+  day count once. The last lists live in `ingest_watermarks` under this job.
+- More than `MAX_DEACTIVATIONS_PER_RUN` Company or Listing deactivations in
+  one run means the parse broke, not that the index changed. The run fails
+  and the whole transaction rolls back, so the last good list stays.
 """
 
 from __future__ import annotations
@@ -19,6 +20,8 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import date
+from typing import Any
 
 import httpx
 from sqlalchemy import text
@@ -26,27 +29,50 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from stockticker.ingest.http import RateBudgetName, build_http_client, request
 from stockticker.ingest.job import JobContext, JobResult
+from stockticker.ingest.sinks import EventRow, upsert_events
+from stockticker.ingest.watermarks import read_watermark, write_watermark
 from stockticker.ingest.wikipedia.parser import ConstituentRow, parse_constituents
 from stockticker.logging import get_logger
+from stockticker.timeutil import today_ny
 
 logger = get_logger(__name__)
 
 JOB_NAME = "constituents_sync"
 WIKIPEDIA_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+# Operator-neutral on purpose: the SEC contact in SEC_USER_AGENT is for SEC only.
+USER_AGENT = "stock-ticker/0.1 (local research tool)"
 EVENT_SOURCE = "wikipedia"
-MISSING_SYNCS_BEFORE_DEACTIVATION = 2
-MAX_COMPANY_DEACTIVATIONS_PER_RUN = 10
-
-_MISSING_COMPANY = "missing_company:"
-_MISSING_LISTING = "missing_listing:"
+MAX_DEACTIVATIONS_PER_RUN = 10
+LISTS_KEY = "lists"
 
 
 class TooManyDeactivationsError(Exception):
-    def __init__(self, ciks: Sequence[str]) -> None:
-        self.ciks = list(ciks)
+    def __init__(self, table: str, keys: Sequence[str]) -> None:
+        self.table = table
+        self.keys = sorted(keys)
         super().__init__(
-            f"{len(ciks)} Companies would be deactivated in one run "
-            f"(limit {MAX_COMPANY_DEACTIVATIONS_PER_RUN}); keeping the last good list"
+            f"{len(keys)} {table} would be deactivated in one run "
+            f"(limit {MAX_DEACTIVATIONS_PER_RUN}); keeping the last good list"
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedList:
+    day: date
+    symbols: frozenset[str]
+    ciks: frozenset[str]
+
+    def to_json(self) -> dict[str, Any]:
+        return {"day": self.day.isoformat(), "symbols": sorted(self.symbols), "ciks": sorted(self.ciks)}
+
+    @classmethod
+    def from_json(cls, data: dict[str, Any] | None) -> ParsedList | None:
+        if not data:
+            return None
+        return cls(
+            day=date.fromisoformat(data["day"]),
+            symbols=frozenset(data["symbols"]),
+            ciks=frozenset(data["ciks"]),
         )
 
 
@@ -69,18 +95,17 @@ class ConstituentsSyncSummary:
         )
 
 
-def user_agent(contact: str | None) -> str:
-    base = "stock-ticker/0.1 (local research tool)"
-    return f"{base} {contact}" if contact else base
-
-
 async def fetch_constituents_html(client: httpx.AsyncClient) -> str:
     response = await request(client, "GET", WIKIPEDIA_URL, rate_budget=RateBudgetName.WIKIPEDIA)
     return response.text
 
 
-async def run_constituents_sync(engine: AsyncEngine, *, contact: str | None) -> JobResult:
-    async with build_http_client(headers={"User-Agent": user_agent(contact)}) as client:
+async def constituents_sync(ctx: JobContext) -> JobResult:
+    return await run_constituents_sync(ctx.engine)
+
+
+async def run_constituents_sync(engine: AsyncEngine) -> JobResult:
+    async with build_http_client(headers={"User-Agent": USER_AGENT}) as client:
         html = await fetch_constituents_html(client)
     rows = parse_constituents(html)
     async with engine.connect() as conn:
@@ -91,11 +116,12 @@ async def run_constituents_sync(engine: AsyncEngine, *, contact: str | None) -> 
 
 
 async def apply_constituents(
-    conn: AsyncConnection, rows: Sequence[ConstituentRow]
+    conn: AsyncConnection, rows: Sequence[ConstituentRow], *, today: date | None = None
 ) -> ConstituentsSyncSummary:
     """Apply one parsed Constituent List inside the caller's transaction.
     Does not commit."""
     _reject_duplicate_symbols(rows)
+    today = today or today_ny()
     summary = ConstituentsSyncSummary()
     by_cik = _group_by_cik(rows)
     rules = await _price_symbols_by_cik(conn)
@@ -105,26 +131,39 @@ async def apply_constituents(
     summary.listings_upserted = await _upsert_listings(conn, rows, primaries)
     summary.events_written = await _write_index_added_events(conn, rows, primaries)
 
-    listed_ciks = list(by_cik)
-    listed_symbols = [row.symbol for row in rows]
-    missing_companies = await _bump_missing(conn, "companies", "cik", _MISSING_COMPANY, listed_ciks)
-    missing_listings = await _bump_missing(conn, "listings", "symbol", _MISSING_LISTING, listed_symbols)
-    await _clear_counters_except(
-        conn, [_MISSING_COMPANY + key for key in missing_companies], _MISSING_COMPANY
+    current = ParsedList(day=today, symbols=frozenset(row.symbol for row in rows), ciks=frozenset(by_cik))
+    stored = json.loads(await read_watermark(conn, JOB_NAME, LISTS_KEY) or "{}")
+    latest = ParsedList.from_json(stored.get("latest"))
+    prior = ParsedList.from_json(stored.get("prior"))
+    if latest is not None and latest.day < today:
+        prior = latest
+    await write_watermark(
+        conn,
+        JOB_NAME,
+        LISTS_KEY,
+        json.dumps({"latest": current.to_json(), "prior": prior.to_json() if prior else None}),
     )
-    await _clear_counters_except(conn, [_MISSING_LISTING + key for key in missing_listings], _MISSING_LISTING)
+    if prior is None:
+        return summary
 
-    companies_to_drop = [
-        cik for cik, misses in missing_companies.items() if misses >= MISSING_SYNCS_BEFORE_DEACTIVATION
-    ]
-    if len(companies_to_drop) > MAX_COMPANY_DEACTIVATIONS_PER_RUN:
-        raise TooManyDeactivationsError(companies_to_drop)
-    listings_to_drop = [
-        symbol for symbol, misses in missing_listings.items() if misses >= MISSING_SYNCS_BEFORE_DEACTIVATION
-    ]
+    companies_to_drop = await _missing_twice(conn, "companies", "cik", current.ciks | prior.ciks)
+    listings_to_drop = await _missing_twice(conn, "listings", "symbol", current.symbols | prior.symbols)
+    for table, keys in (("Companies", companies_to_drop), ("Listings", listings_to_drop)):
+        if len(keys) > MAX_DEACTIVATIONS_PER_RUN:
+            raise TooManyDeactivationsError(table, keys)
     summary.companies_deactivated = await _deactivate(conn, "companies", "cik", companies_to_drop)
     summary.listings_deactivated = await _deactivate(conn, "listings", "symbol", listings_to_drop)
     return summary
+
+
+async def _missing_twice(
+    conn: AsyncConnection, table: str, key_column: str, seen_recently: frozenset[str]
+) -> list[str]:
+    result = await conn.execute(
+        text(f"SELECT {key_column} AS key FROM {table} WHERE is_active AND NOT ({key_column} = ANY(:seen))"),
+        {"seen": sorted(seen_recently)},
+    )
+    return [row.key for row in result]
 
 
 def _reject_duplicate_symbols(rows: Sequence[ConstituentRow]) -> None:
@@ -214,59 +253,25 @@ async def _upsert_listings(
 async def _write_index_added_events(
     conn: AsyncConnection, rows: Sequence[ConstituentRow], primaries: dict[str, str]
 ) -> int:
-    # Primary rows first, so a shared (cik, date) event names the primary symbol.
-    dated = [row for row in sorted(rows, key=lambda row: primaries[row.cik] != row.symbol) if row.date_added]
-    if not dated:
-        return 0
-    result = await conn.execute(
-        text(
-            "INSERT INTO events (cik, symbol, event_date, kind, title, details, source, source_ref) "
-            "SELECT e.cik, e.symbol, e.event_date, 'index_added', e.title, e.details, :source, "
-            "e.cik || ':' || e.event_date::text "
-            "FROM unnest(CAST(:cik AS text[]), CAST(:symbol AS text[]), CAST(:event_date AS date[]), "
-            "CAST(:title AS text[]), CAST(:details AS jsonb[])) WITH ORDINALITY "
-            "AS e(cik, symbol, event_date, title, details, position) "
-            "ORDER BY e.position "
-            "ON CONFLICT (source, source_ref) DO NOTHING"
-        ),
-        {
-            "source": EVENT_SOURCE,
-            "cik": [row.cik for row in dated],
-            "symbol": [row.symbol for row in dated],
-            "event_date": [row.date_added for row in dated],
-            "title": [f"Added to the S&P 500 ({row.symbol})" for row in dated],
-            "details": [json.dumps({"symbol": row.symbol}) for row in dated],
-        },
-    )
-    return result.rowcount or 0
-
-
-async def _bump_missing(
-    conn: AsyncConnection, table: str, key_column: str, prefix: str, present: Sequence[str]
-) -> dict[str, int]:
-    """Increment the miss counter of every active row not in `present`, and
-    return {key: consecutive misses}."""
-    result = await conn.execute(
-        text(
-            "INSERT INTO ingest_watermarks (job, key, value, updated_at) "
-            f"SELECT :job, :prefix || t.{key_column}, '1', now() FROM {table} t "
-            f"WHERE t.is_active AND NOT (t.{key_column} = ANY(:present)) "
-            "ON CONFLICT (job, key) DO UPDATE SET "
-            "value = (ingest_watermarks.value::int + 1)::text, updated_at = now() "
-            "RETURNING key, value"
-        ),
-        {"job": JOB_NAME, "prefix": prefix, "present": list(present)},
-    )
-    return {row.key.removeprefix(prefix): int(row.value) for row in result}
-
-
-async def _clear_counters_except(conn: AsyncConnection, keep: Sequence[str], prefix: str) -> None:
-    await conn.execute(
-        text(
-            "DELETE FROM ingest_watermarks WHERE job = :job AND starts_with(key, :prefix) "
-            "AND NOT (key = ANY(:keep))"
-        ),
-        {"job": JOB_NAME, "prefix": prefix, "keep": list(keep)},
+    # Primary rows last: upsert_events keeps the last of a duplicate
+    # (cik, date), so a shared event names the primary symbol.
+    ordered = sorted(rows, key=lambda row: primaries[row.cik] == row.symbol)
+    return await upsert_events(
+        conn,
+        [
+            EventRow(
+                cik=row.cik,
+                symbol=row.symbol,
+                event_date=row.date_added,
+                kind="index_added",
+                title=f"Added to the S&P 500 ({row.symbol})",
+                details={"symbol": row.symbol},
+                source=EVENT_SOURCE,
+                source_ref=f"{row.cik}:{row.date_added.isoformat()}",
+            )
+            for row in ordered
+            if row.date_added is not None
+        ],
     )
 
 
@@ -283,10 +288,6 @@ async def _deactivate(conn: AsyncConnection, table: str, key_column: str, keys: 
     if result.rowcount:
         logger.info("constituents_sync.deactivated", table=table, keys=list(keys))
     return result.rowcount or 0
-
-
-async def constituents_sync(ctx: JobContext) -> JobResult:
-    return await run_constituents_sync(ctx.engine, contact=ctx.settings.sec_user_agent)
 
 
 def _as_log(summary: ConstituentsSyncSummary) -> dict[str, int]:

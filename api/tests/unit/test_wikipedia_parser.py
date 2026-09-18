@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from stockticker.ingest.http import reset_rate_budgets
 from stockticker.ingest.wikipedia.parser import MIN_ROWS, ConstituentsParseError, parse_constituents
-from stockticker.ingest.wikipedia.sync import WIKIPEDIA_URL, run_constituents_sync, user_agent
+from stockticker.ingest.wikipedia.sync import USER_AGENT, WIKIPEDIA_URL, run_constituents_sync
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "wikipedia"
 NORMAL_PAGE = (FIXTURES / "sp500_constituents.html").read_text()
@@ -103,9 +103,12 @@ def test_a_non_numeric_cik_fails() -> None:
         parse_constituents(page)
 
 
-def test_user_agent_carries_the_contact_when_set() -> None:
-    assert user_agent("Jane Doe jane@example.com").endswith("Jane Doe jane@example.com")
-    assert user_agent(None) == "stock-ticker/0.1 (local research tool)"
+@pytest.mark.parametrize("cik", ["١٢٣", "12345678901", "0x1F", "1 23"])
+def test_a_cik_must_be_one_to_ten_ascii_digits(cik: str) -> None:
+    page = NORMAL_PAGE.replace("<td>0000066740</td>", f"<td>{cik}</td>", 1)
+
+    with pytest.raises(ConstituentsParseError, match="bad CIK"):
+        parse_constituents(page)
 
 
 @respx.mock
@@ -114,8 +117,12 @@ async def test_malformed_page_fails_the_run_before_touching_the_db() -> None:
     unreachable = create_async_engine("postgresql+asyncpg://nobody@127.0.0.1:1/none")
 
     with pytest.raises(ConstituentsParseError):
-        await run_constituents_sync(unreachable, contact="Jane Doe jane@example.com")
+        await run_constituents_sync(unreachable)
 
     assert route.call_count == 1
-    assert route.calls[0].request.headers["User-Agent"].endswith("jane@example.com")
+    assert route.calls[0].request.headers["User-Agent"] == USER_AGENT
     await unreachable.dispose()
+
+
+def test_the_wikipedia_user_agent_names_no_operator() -> None:
+    assert "@" not in USER_AGENT

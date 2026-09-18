@@ -18,8 +18,8 @@ services:
     healthcheck:
       test:
         [
-          "CMD-SHELL",
-          "pg_isready -U ${POSTGRES_SUPERUSER:-postgres} -d ${POSTGRES_DB:-stockticker}",
+          'CMD-SHELL',
+          'pg_isready -U ${POSTGRES_SUPERUSER:-postgres} -d ${POSTGRES_DB:-stockticker}'
         ]
       interval: 5s
       timeout: 5s
@@ -35,7 +35,7 @@ services:
     command: uv run alembic upgrade head
     environment:
       POSTGRES_HOST: db
-      POSTGRES_PORT: "5432"
+      POSTGRES_PORT: '5432'
       POSTGRES_DB: ${POSTGRES_DB:-stockticker}
       POSTGRES_SUPERUSER: ${POSTGRES_SUPERUSER:-postgres}
       POSTGRES_SUPERUSER_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?}
@@ -47,7 +47,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    restart: "no"
+    restart: 'no'
 
   api:
     build:
@@ -56,7 +56,7 @@ services:
     environment:
       ENVIRONMENT: development
       POSTGRES_HOST: db
-      POSTGRES_PORT: "5432"
+      POSTGRES_PORT: '5432'
       POSTGRES_DB: ${POSTGRES_DB:-stockticker}
       POSTGRES_APP_WRITER_PASSWORD: ${POSTGRES_APP_WRITER_PASSWORD:?}
       POSTGRES_AI_READER_PASSWORD: ${POSTGRES_AI_READER_PASSWORD:?}
@@ -71,14 +71,20 @@ services:
       - ./api:/app
       - api_venv:/app/.venv
     ports:
-      - "127.0.0.1:8000:8000"
+      - '127.0.0.1:8000:8000'
     depends_on:
       db:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready')"]
+      test:
+        [
+          'CMD',
+          'python3',
+          '-c',
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready')"
+        ]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -91,7 +97,7 @@ services:
     environment:
       ENVIRONMENT: development
       POSTGRES_HOST: db
-      POSTGRES_PORT: "5432"
+      POSTGRES_PORT: '5432'
       POSTGRES_DB: ${POSTGRES_DB:-stockticker}
       POSTGRES_APP_WRITER_PASSWORD: ${POSTGRES_APP_WRITER_PASSWORD:?}
       ALPACA_KEY_ID: ${ALPACA_KEY_ID:-}
@@ -111,10 +117,10 @@ services:
       # plain "is the process alive" check would miss.
       test:
         [
-          "CMD",
-          "python3",
-          "-c",
-          "import sys,time,os; p='/tmp/worker-heartbeat'; sys.exit(0 if os.path.exists(p) and time.time()-os.path.getmtime(p)<60 else 1)",
+          'CMD',
+          'python3',
+          '-c',
+          "import sys,time,os; p='/tmp/worker-heartbeat'; sys.exit(0 if os.path.exists(p) and time.time()-os.path.getmtime(p)<60 else 1)"
         ]
       interval: 15s
       timeout: 5s
@@ -131,7 +137,7 @@ services:
       - .:/app
       - web_node_modules:/app/web/node_modules
     ports:
-      - "127.0.0.1:3000:3000"
+      - '127.0.0.1:3000:3000'
 
 volumes:
   db_data:

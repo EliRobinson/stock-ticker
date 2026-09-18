@@ -434,6 +434,39 @@ async def test_run_job_uses_the_spec_engine_for_both_lock_and_handler(app_writer
         await _cleanup(app_writer_engine, job_name)
 
 
+async def test_run_job_with_engine_quotes_fits_in_the_real_quotes_pool_size() -> None:
+    """`engine="quotes"` holds a lock connection for the whole run while
+    the handler opens its own -- two connections at once, minimum. Built
+    against `db.get_quotes_engine()`'s actual pool size (not a literal
+    copy of it) so a regression back to a too-small pool fails this test
+    with `status == "failed"` / `error.type == "infra"` instead of hanging
+    unnoticed (it did: pool_size=1 deadlocked every run against its own
+    lock, invisible to the rest of this suite because every other test
+    here passes a NullPool `app_writer_engine` in the `quotes_engine`
+    role)."""
+    from stockticker.db import get_quotes_engine
+
+    job_name = _job_name()
+    quotes_engine = create_async_engine(
+        get_settings().app_writer_dsn,
+        pool_size=get_quotes_engine().pool.size(),
+        max_overflow=0,
+        pool_timeout=2,
+    )
+
+    async def fn(ctx: JobContext) -> JobResult:
+        async with ctx.quotes_engine.connect():
+            pass
+        return JobResult(rows_written=1)
+
+    try:
+        outcome = await run_job(_spec(job_name, fn, engine="quotes"), engine=quotes_engine, quotes_engine=quotes_engine)
+        assert outcome.status == "succeeded"
+    finally:
+        await quotes_engine.dispose()
+        await _cleanup(quotes_engine, job_name)
+
+
 async def test_run_job_never_raises_when_the_database_is_unreachable(app_writer_engine: AsyncEngine) -> None:
     """`run_job`'s own bookkeeping -- taking the lock, before a handler
     ever runs -- can fail too (the DB is down). It must still return a

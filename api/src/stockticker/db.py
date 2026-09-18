@@ -8,11 +8,9 @@ One module-level engine per role *and purpose* (reliability review), not a
 single factory keyed on caller-supplied pool-size kwargs: `api` gets
 `get_api_app_writer_engine()` (5 + 5 overflow); `worker` gets
 `get_worker_app_writer_engine()` (6 + 0) and its own tiny
-`get_quotes_engine()` (pool_size=2: one for `run_job`'s advisory-lock
-connection, held for the run's duration, one for the handler's own work —
-`quotes_poll` never queues behind the rest of the worker's jobs for a
-connection — freshness (N1) should never be starved by a slow backfill
-batch. Every engine here gets
+`get_quotes_engine()` (pool_size=2) so `quotes_poll` never queues behind
+the rest of the worker's jobs for a connection — freshness (N1) should
+never be starved by a slow backfill batch. Every engine here gets
 `pool_pre_ping=True` and a 2s acquire timeout (`pool_timeout`): a request
 or job would rather fail fast than queue indefinitely for a connection.
 

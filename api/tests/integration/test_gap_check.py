@@ -15,8 +15,14 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-from stockticker.ingest.gap_check import MAX_ATTEMPTS, check_gaps
+from stockticker.ingest.gap_check import check_gaps
 from stockticker.ingest.job import JobSkipped
+from stockticker.ingest.refetch import (
+    GAP_STILL_OPEN,
+    MAX_GAP_ATTEMPTS,
+    finish_refetch,
+    mark_refetch_failed,
+)
 
 DAYS = [date(1990, 1, day) for day in (2, 3, 4, 5, 8, 9, 10, 11, 12)]
 
@@ -76,21 +82,25 @@ async def _add_bar(conn: AsyncConnection, symbol: str, day: date) -> None:
     )
 
 
-async def _request(conn: AsyncConnection, symbol: str) -> Any:
+async def _request(conn: AsyncConnection, symbol: str, reason: str = "gap") -> Any:
     result = await conn.execute(
         text(
-            "SELECT from_date, attempts, accepted_at FROM refetch_requests "
-            "WHERE symbol = :s AND reason = 'gap'"
+            "SELECT from_date, attempts, last_error, accepted_at FROM refetch_requests "
+            "WHERE symbol = :s AND reason = :r"
         ),
-        {"s": symbol},
+        {"s": symbol, "r": reason},
     )
     return result.one_or_none()
 
 
-async def _serve(conn: AsyncConnection, symbol: str) -> None:
-    """What bars_backfill does once its re-fetch commits (issue #4)."""
+async def _fail(conn: AsyncConnection, symbol: str) -> None:
+    """What bars_backfill does when its re-fetch raises (issue #4)."""
+    await mark_refetch_failed(conn, symbol, "gap", "provider returned 500")
+
+
+async def _drop_bar(conn: AsyncConnection, symbol: str, day: date) -> None:
     await conn.execute(
-        text("DELETE FROM refetch_requests WHERE symbol = :s AND reason = 'gap'"), {"s": symbol}
+        text("DELETE FROM daily_bars WHERE symbol = :s AND trade_date = :d"), {"s": symbol, "d": day}
     )
 
 
@@ -105,7 +115,7 @@ async def test_a_gap_is_queued_from_its_first_missing_day(conn: AsyncConnection)
 
     request = await _request(conn, symbol)
     assert request.from_date == DAYS[3]
-    assert request.attempts == 1
+    assert request.attempts == 0
     assert request.accepted_at is None
     assert summary.queued == 1
 
@@ -146,9 +156,10 @@ async def test_no_listing_in_scope_skips_the_run(conn: AsyncConnection) -> None:
         await check_gaps(conn)
 
 
-async def test_an_unserved_request_is_not_counted_again(conn: AsyncConnection) -> None:
+async def test_a_request_being_retried_is_left_waiting(conn: AsyncConnection) -> None:
     symbol = await _listing(conn, _without(DAYS[4]))
     await check_gaps(conn)
+    await _fail(conn, symbol)
 
     summary = await check_gaps(conn)
 
@@ -156,83 +167,124 @@ async def test_an_unserved_request_is_not_counted_again(conn: AsyncConnection) -
     assert summary.waiting == 1
 
 
-async def test_an_earlier_gap_widens_an_unserved_request(conn: AsyncConnection) -> None:
+async def test_an_earlier_gap_widens_a_waiting_request(conn: AsyncConnection) -> None:
     symbol = await _listing(conn, _without(DAYS[4]))
     await check_gaps(conn)
-    await conn.execute(
-        text("DELETE FROM daily_bars WHERE symbol = :s AND trade_date = :d"), {"s": symbol, "d": DAYS[1]}
-    )
+    await _drop_bar(conn, symbol, DAYS[1])
 
     await check_gaps(conn)
 
     assert (await _request(conn, symbol)).from_date == DAYS[1]
 
 
-async def test_a_gap_is_accepted_after_three_served_attempts(conn: AsyncConnection) -> None:
+async def test_a_gap_is_accepted_after_three_failed_refetches(conn: AsyncConnection) -> None:
+    """The real failure path: the serving job's mark_refetch_failed. Before
+    the DRY pass, a failed gap re-fetch left no trace and the gap could
+    never be accepted."""
     symbol = await _listing(conn, _without(DAYS[4]))
-
-    for attempt in range(1, MAX_ATTEMPTS + 1):
-        await check_gaps(conn)
+    await check_gaps(conn)
+    for attempt in range(1, MAX_GAP_ATTEMPTS + 1):
+        await _fail(conn, symbol)
         assert (await _request(conn, symbol)).attempts == attempt
-        await _serve(conn, symbol)
 
     summary = await check_gaps(conn)
 
     request = await _request(conn, symbol)
     assert request.accepted_at is not None
-    assert request.attempts == MAX_ATTEMPTS
+    assert request.last_error == "provider returned 500"
     assert summary.accepted == 1
-
     later = await check_gaps(conn)
-    assert (later.queued, later.accepted) == (0, 0)
+    assert (later.queued, later.waiting, later.accepted) == (0, 0, 0)
+
+
+async def test_a_refetch_that_leaves_the_gap_open_counts_as_a_failed_attempt(conn: AsyncConnection) -> None:
+    symbol = await _listing(conn, _without(DAYS[4]))
+    await check_gaps(conn)
+
+    await finish_refetch(conn, symbol, "gap", datetime.now(UTC))
+
+    request = await _request(conn, symbol)
+    assert request.attempts == 1
+    assert request.last_error == GAP_STILL_OPEN
+
+
+async def test_three_refetches_with_no_bar_for_the_day_accept_the_gap(conn: AsyncConnection) -> None:
+    """A halted day: the provider has no bar, so every re-fetch commits and
+    the gap stays open."""
+    symbol = await _listing(conn, _without(DAYS[4]))
+    await check_gaps(conn)
+    for _ in range(MAX_GAP_ATTEMPTS):
+        await finish_refetch(conn, symbol, "gap", datetime.now(UTC))
+
+    summary = await check_gaps(conn)
+
+    assert summary.accepted == 1
     assert (await _request(conn, symbol)).accepted_at is not None
+
+
+async def test_a_refetch_that_closes_the_gap_deletes_the_request(conn: AsyncConnection) -> None:
+    symbol = await _listing(conn, _without(DAYS[4]))
+    await check_gaps(conn)
+    await _add_bar(conn, symbol, DAYS[4])
+
+    await finish_refetch(conn, symbol, "gap", datetime.now(UTC))
+
+    assert await _request(conn, symbol) is None
+
+
+async def test_a_request_renewed_during_the_refetch_is_kept(conn: AsyncConnection) -> None:
+    symbol = await _listing(conn, _without(DAYS[4]))
+    selected_at = datetime.now(UTC) - timedelta(minutes=5)
+    await check_gaps(conn)
+    await _add_bar(conn, symbol, DAYS[4])
+
+    await finish_refetch(conn, symbol, "gap", selected_at)
+
+    assert await _request(conn, symbol) is not None
+
+
+async def test_adj_drift_rows_share_the_failure_and_finish_paths(conn: AsyncConnection) -> None:
+    symbol = await _listing(conn, DAYS)
+    await conn.execute(
+        text("INSERT INTO refetch_requests (symbol, reason, from_date) VALUES (:s, 'adj_drift', :d)"),
+        {"s": symbol, "d": DAYS[0]},
+    )
+
+    await mark_refetch_failed(conn, symbol, "adj_drift", "x" * 900)
+    failed = await _request(conn, symbol, "adj_drift")
+    await finish_refetch(conn, symbol, "adj_drift", datetime.now(UTC))
+
+    assert failed.attempts == 1
+    assert len(failed.last_error) == 500
+    assert await _request(conn, symbol, "adj_drift") is None
 
 
 async def test_a_new_gap_after_acceptance_starts_a_fresh_cycle(conn: AsyncConnection) -> None:
     symbol = await _listing(conn, _without(DAYS[4]))
-    for _ in range(MAX_ATTEMPTS):
-        await check_gaps(conn)
-        await _serve(conn, symbol)
     await check_gaps(conn)
-    await conn.execute(
-        text("DELETE FROM daily_bars WHERE symbol = :s AND trade_date = :d"), {"s": symbol, "d": DAYS[6]}
-    )
+    for _ in range(MAX_GAP_ATTEMPTS):
+        await _fail(conn, symbol)
+    await check_gaps(conn)
+    await _drop_bar(conn, symbol, DAYS[6])
 
     await check_gaps(conn)
 
     request = await _request(conn, symbol)
     assert request.accepted_at is None
-    assert request.attempts == 1
+    assert request.attempts == 0
     assert request.from_date == DAYS[6]
 
 
-async def test_a_filled_gap_resets_the_attempt_count(conn: AsyncConnection) -> None:
+async def test_accepted_days_do_not_keep_a_later_refetch_open(conn: AsyncConnection) -> None:
     symbol = await _listing(conn, _without(DAYS[4]))
     await check_gaps(conn)
-    await _serve(conn, symbol)
+    for _ in range(MAX_GAP_ATTEMPTS):
+        await _fail(conn, symbol)
     await check_gaps(conn)
-    await _serve(conn, symbol)
-    await _add_bar(conn, symbol, DAYS[4])
+    await _drop_bar(conn, symbol, DAYS[6])
     await check_gaps(conn)
+    await _add_bar(conn, symbol, DAYS[6])
 
-    await conn.execute(
-        text("DELETE FROM daily_bars WHERE symbol = :s AND trade_date = :d"), {"s": symbol, "d": DAYS[2]}
-    )
-    await check_gaps(conn)
+    await finish_refetch(conn, symbol, "gap", datetime.now(UTC))
 
-    assert (await _request(conn, symbol)).attempts == 1
-
-
-async def test_a_request_that_failed_with_an_error_counts_as_an_attempt(conn: AsyncConnection) -> None:
-    symbol = await _listing(conn, _without(DAYS[4]))
-    await check_gaps(conn)
-    await conn.execute(
-        text("UPDATE refetch_requests SET last_error = 'provider returned 422' WHERE symbol = :s"),
-        {"s": symbol},
-    )
-
-    summary = await check_gaps(conn)
-
-    request = await _request(conn, symbol)
-    assert request.attempts == 2
-    assert summary.queued == 1
+    assert await _request(conn, symbol) is None

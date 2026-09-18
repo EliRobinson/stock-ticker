@@ -1,18 +1,19 @@
-"""Placeholder for the Alpaca market-clock client.
-
-`/api/v1/status` needs `is_open`/`next_open`/`next_close` (system design §5),
-but the Alpaca client itself is out of scope for the API foundation. This
-function is the seam: it returns `None` today, and the agent building the
-Alpaca ingest client (§4, `calendar_sync`/`quotes_poll`) replaces the body
-with a real call to `GET /v2/clock`, cached ~60s per the design's own
-`quotes_poll` note. Keep the name and return type stable — `status.py`
-imports it directly.
+"""The Alpaca market-clock lookup behind `/api/v1/status` and `/api/v1/market`
+(system design §5). `None` when `ALPACA_KEY_ID`/`ALPACA_SECRET_KEY` are unset
+(N4) -- `get_alpaca_client()` is the single place that check lives. The
+underlying `GET /v2/clock` call is cached ~60s (`AlpacaClient.get_clock`),
+shared with `quotes_poll`'s own clock check so the two never race to
+refresh it independently.
 """
 
 from __future__ import annotations
 
+from stockticker.ingest.alpaca.client import get_alpaca_client
 from stockticker.models.status import MarketClock
 
 
 async def fetch_market_clock() -> MarketClock | None:
-    return None
+    client = get_alpaca_client()
+    if client is None:
+        return None
+    return await client.get_clock()

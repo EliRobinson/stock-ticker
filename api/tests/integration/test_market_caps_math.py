@@ -18,10 +18,10 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from stockticker.ingest.edgar.parse import DEI_SHARES, US_GAAP_SHARES
+from stockticker.ingest.events import SplitRatioError, split_details
 from stockticker.ingest.job import FailedItem
 from stockticker.ingest.market_caps import (
     NO_WHOLE_COMPANY_COUNT,
-    SplitRatioError,
     only_new_items,
     rebuild_company,
 )
@@ -202,7 +202,7 @@ async def test_four_for_one_split_between_two_filings(s: Scenario) -> None:
     symbol = await s.listing(cik)
     await s.shares(cik, "2020-07-17", "2020-07-31", 4_275_634_000)
     await s.shares(cik, "2020-10-16", "2020-10-30", 17_001_802_000)
-    await s.event(cik, symbol, "split", "2020-08-31", {"new_rate": 4, "old_rate": 1})
+    await s.event(cik, symbol, "split", "2020-08-31", split_details(1, 4))
     await s.bars(
         symbol,
         {"2020-08-28": "499.23", "2020-08-31": "129.04", "2020-10-29": "115.32", "2020-10-30": "108.86"},
@@ -223,7 +223,7 @@ async def test_reverse_split_divides_the_count(s: Scenario) -> None:
     cik = await s.company()
     symbol = await s.listing(cik)
     await s.shares(cik, "2023-03-31", "2023-04-20", 50_000_000)
-    await s.event(cik, symbol, "reverse_split", "2023-05-01", {"new_rate": 1, "old_rate": 10})
+    await s.event(cik, symbol, "reverse_split", "2023-05-01", split_details(10, 1))
     await s.bars(symbol, {"2023-04-28": "2.00", "2023-05-01": "20.10"})
 
     await rebuild_company(s.conn, cik)
@@ -238,8 +238,8 @@ async def test_two_splits_compound(s: Scenario) -> None:
     cik = await s.company()
     symbol = await s.listing(cik)
     await s.shares(cik, "2021-01-15", "2021-01-28", 1_000_000)
-    await s.event(cik, symbol, "split", "2021-03-01", {"ratio": 2})
-    await s.event(cik, symbol, "split", "2021-04-01", {"ratio": 3})
+    await s.event(cik, symbol, "split", "2021-03-01", split_details(1, 2))
+    await s.event(cik, symbol, "split", "2021-04-01", split_details(1, 3))
     await s.bars(symbol, {"2021-03-31": "1", "2021-04-01": "1"})
 
     await rebuild_company(s.conn, cik)
@@ -254,7 +254,7 @@ async def test_a_split_on_another_active_class_does_not_apply(s: Scenario) -> No
     symbol = await s.listing(cik)
     other_class = await s.listing(cik, primary=False)
     await s.shares(cik, "2021-01-15", "2021-01-28", 1_000_000)
-    await s.event(cik, other_class, "split", "2021-03-01", {"ratio": 2})
+    await s.event(cik, other_class, "split", "2021-03-01", split_details(1, 2))
     await s.bars(symbol, {"2021-03-02": "1"})
 
     await rebuild_company(s.conn, cik)
@@ -345,7 +345,7 @@ async def test_a_split_recorded_under_a_retired_ticker_still_applies(s: Scenario
     old = await s.listing(cik, primary=False, active=False)
     new = await s.listing(cik)
     await s.shares(cik, "2018-02-01", "2018-02-10", 200_000_000)
-    await s.event(cik, old, "split", "2018-03-19", {"ratio": 2})
+    await s.event(cik, old, "split", "2018-03-19", split_details(1, 2))
     await s.bars(new, {"2018-03-20": "50"})
 
     await rebuild_company(s.conn, cik)
@@ -357,7 +357,7 @@ async def test_a_split_with_no_symbol_applies_to_the_price_listing(s: Scenario) 
     cik = await s.company()
     symbol = await s.listing(cik)
     await s.shares(cik, "2018-02-01", "2018-02-10", 200_000_000)
-    await s.event(cik, None, "split", "2018-03-19", {"ratio": 2})
+    await s.event(cik, None, "split", "2018-03-19", split_details(1, 2))
     await s.bars(symbol, {"2018-03-20": "50"})
 
     await rebuild_company(s.conn, cik)
@@ -467,7 +467,7 @@ async def test_a_split_between_the_cover_date_and_the_filing_applies_to_a_dei_co
     cik = await s.company()
     symbol = await s.listing(cik)
     await s.shares(cik, "2024-05-17", "2024-05-29", 2_464_000_000)
-    await s.event(cik, symbol, "split", "2024-05-24", {"new_rate": 10, "old_rate": 1})
+    await s.event(cik, symbol, "split", "2024-05-24", split_details(1, 10))
     await s.bars(symbol, {"2024-05-30": "110.50"})
 
     await rebuild_company(s.conn, cik)
@@ -612,7 +612,7 @@ async def test_alphabet_2022_split_uses_only_counts_known_on_the_day(s: Scenario
     await s.shares(cik, "2022-03-31", "2022-04-27", 658_763_000, concept=g, accession="q1")
     await s.shares(cik, "2021-12-31", "2022-07-27", 13_242_000_000, concept=g, accession="q2")
     await s.shares(cik, "2022-06-30", "2022-07-27", 13_078_000_000, concept=g, accession="q2")
-    await s.event(cik, symbol, "split", "2022-07-18", {"new_rate": 20, "old_rate": 1})
+    await s.event(cik, symbol, "split", "2022-07-18", split_details(1, 20))
     await s.bars(
         symbol,
         {
@@ -646,7 +646,7 @@ async def test_apple_restated_comparative_does_not_leak_into_2019(s: Scenario) -
     await s.shares(cik, "2019-09-28", "2020-01-29", 4_443_236_000, concept=g)
     await s.shares(cik, "2019-09-28", "2020-10-30", 17_772_945_000, concept=g, accession="10-K 2020")
     await s.shares(cik, "2020-10-16", "2020-10-30", 17_001_802_000, accession="10-K 2020")
-    await s.event(cik, symbol, "split", "2020-08-31", {"new_rate": 4, "old_rate": 1})
+    await s.event(cik, symbol, "split", "2020-08-31", split_details(1, 4))
     await s.bars(symbol, {"2020-02-03": "308.66", "2020-09-01": "134.18", "2020-10-30": "108.86"})
 
     await rebuild_company(s.conn, cik)

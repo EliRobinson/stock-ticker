@@ -56,14 +56,14 @@ import json
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date
-from decimal import Decimal, InvalidOperation
-from typing import Any
+from decimal import Decimal
 
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-from stockticker.ingest.edgar.parse import DEI_SHARES, MERGER_ITEM, shares_key
+from stockticker.ingest.edgar.parse import DEI_SHARES, FILING_KINDS, MERGER_ITEM, shares_key
+from stockticker.ingest.events import SplitRatioError, split_ratio
 from stockticker.ingest.job import FailedItem, JobContext, JobResult, JobSkipped
 from stockticker.ingest.watermarks import read_watermark, symbols_with_watermark, write_watermark
 from stockticker.logging import get_logger
@@ -73,18 +73,16 @@ logger = get_logger(__name__)
 JOB_NAME = "market_caps_rebuild"
 MAX_UNEXPLAINED_CHANGE = Decimal("0.40")
 SPLIT_KINDS = ("split", "reverse_split")
+SPIN_OFF_KIND = "spin_off"
 NO_WHOLE_COMPANY_COUNT = "no_whole_company_count"
 SPLITS_NOT_SYNCED = "splits_not_synced"
 REPORTED_KEY = "reported_items"
+FILING_8K_KIND = FILING_KINDS["8-K"]
 
 # Written by corporate_actions_sync (#4) once a symbol's corporate actions
 # have been fetched back to 2018.
 CORPORATE_ACTIONS_JOB = "corporate_actions_sync"
 BOOTSTRAPPED_PREFIX = "bootstrapped:"
-
-
-class SplitRatioError(ValueError):
-    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +103,13 @@ class ShareCount:
         outstanding on its `as_of_date`; a `us-gaap` balance-sheet count is
         restated for every split before its `filed_date`."""
         return self.as_of_date if self.concept == DEI_SHARES else self.filed_date
+
+
+def _filing_order(count: ShareCount) -> tuple[date, date, bool, str]:
+    """The one ordering of share counts: by filing date, then as-of date,
+    then `dei` over `us-gaap`, then accession. The sanity checks walk counts
+    in this order, and the rebuild picks the greatest eligible count by it."""
+    return (count.filed_date, count.as_of_date, count.concept == DEI_SHARES, count.accession)
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,35 +133,13 @@ class PriceTarget:
     splits_synced: bool
 
 
-def split_ratio(kind: str, details: dict[str, Any]) -> Decimal:
-    """New shares per old share, from a split Event's `details`: either
-    `ratio`, or Alpaca's `new_rate` / `old_rate`. A reverse split always
-    reduces the count, so a `ratio` above 1 on one (1-for-10 written as 10)
-    is inverted."""
-    try:
-        if details.get("ratio") is not None:
-            ratio = Decimal(str(details["ratio"]))
-        else:
-            ratio = Decimal(str(details["new_rate"])) / Decimal(str(details["old_rate"]))
-    except (KeyError, InvalidOperation, ZeroDivisionError) as exc:
-        raise SplitRatioError(f"no usable split ratio in {details!r}") from exc
-    if ratio <= 0:
-        raise SplitRatioError(f"split ratio must be positive, got {ratio}")
-    if kind == "reverse_split" and ratio > 1:
-        ratio = 1 / ratio
-    return ratio
-
-
 def validate_counts(
     counts: Sequence[ShareCount], exemption_dates: Sequence[date]
 ) -> tuple[list[ShareCount], list[Rejection]]:
     """Apply the §3 sanity checks. `exemption_dates` are the dates of the
     Company's splits, reverse splits, spin-offs, and mergers: a jump with one
     of them in between is not suspicious."""
-    ordered = sorted(
-        counts,
-        key=lambda c: (c.filed_date, c.as_of_date, c.concept != DEI_SHARES, c.accession),
-    )
+    ordered = sorted(counts, key=_filing_order)
     accepted: list[ShareCount] = []
     rejected: list[Rejection] = []
     baseline: ShareCount | None = None
@@ -189,7 +172,7 @@ def validate_counts(
         if not jumped or jumped[-1].accession != count.accession:
             jumped = []
         jumped.append(count)
-    accepted.sort(key=lambda c: (c.filed_date, c.as_of_date, c.concept != DEI_SHARES, c.accession))
+    accepted.sort(key=_filing_order)
     return accepted, rejected
 
 
@@ -227,11 +210,12 @@ REBUILD_SQL = text(
     ),
     accepted AS (
       SELECT * FROM unnest(CAST(:accepted_as_of AS date[]), CAST(:accepted_concept AS text[]),
-                           CAST(:accepted_accession AS text[]), CAST(:accepted_anchor AS date[]))
-        AS a(as_of_date, concept, accession, anchor_date)
+                           CAST(:accepted_accession AS text[]), CAST(:accepted_anchor AS date[]),
+                           CAST(:accepted_rank AS int[]))
+        AS a(as_of_date, concept, accession, anchor_date, filing_rank)
     ),
     counts AS (
-      SELECT s.as_of_date, s.filed_date, s.concept, s.accession, s.shares, a.anchor_date
+      SELECT s.as_of_date, s.filed_date, s.shares, a.anchor_date, a.filing_rank
       FROM shares_outstanding s
       JOIN accepted a USING (as_of_date, concept, accession)
       WHERE s.cik = :cik
@@ -242,7 +226,7 @@ REBUILD_SQL = text(
       CROSS JOIN LATERAL (
         SELECT * FROM counts s
         WHERE s.as_of_date <= b.trade_date AND s.filed_date <= b.trade_date
-        ORDER BY s.filed_date DESC, s.as_of_date DESC, (s.concept = :dei) DESC, s.accession DESC
+        ORDER BY s.filing_rank DESC
         LIMIT 1
       ) cnt
       WHERE b.symbol = :price_symbol
@@ -352,7 +336,6 @@ async def rebuild_company(conn: AsyncConnection, cik: str) -> CompanyRebuild:
             REBUILD_SQL,
             {
                 "cik": cik,
-                "dei": DEI_SHARES,
                 "price_symbol": target.price_symbol,
                 "unit_ratio": target.unit_ratio,
                 "is_multi_class": target.is_multi_class,
@@ -362,6 +345,7 @@ async def rebuild_company(conn: AsyncConnection, cik: str) -> CompanyRebuild:
                 "accepted_concept": [count.concept for count in accepted],
                 "accepted_accession": [count.accession for count in accepted],
                 "accepted_anchor": [count.anchor_date for count in accepted],
+                "accepted_rank": list(range(len(accepted))),
             },
         )
     ).one()
@@ -408,19 +392,25 @@ async def _load_corporate_events(
                    ) AS applies_to_price
             FROM events e
             WHERE e.cik = :cik
-              AND (e.kind IN ('split', 'reverse_split', 'spin_off')
-                   OR (e.kind = 'filing_8k'
+              AND (e.kind = ANY(:exempting_kinds)
+                   OR (e.kind = :filing_8k
                        AND e.details -> 'items' @> jsonb_build_array(CAST(:merger_item AS text))))
             """
         ),
-        {"cik": cik, "price_symbol": price_symbol, "merger_item": MERGER_ITEM},
+        {
+            "cik": cik,
+            "price_symbol": price_symbol,
+            "exempting_kinds": [*SPLIT_KINDS, SPIN_OFF_KIND],
+            "filing_8k": FILING_8K_KIND,
+            "merger_item": MERGER_ITEM,
+        },
     )
     splits: list[Split] = []
     exemption_dates: list[date] = []
     for row in result:
         exemption_dates.append(row.event_date)
         if row.kind in SPLIT_KINDS and row.applies_to_price:
-            splits.append(Split(ex_date=row.event_date, ratio=split_ratio(row.kind, row.details)))
+            splits.append(Split(ex_date=row.event_date, ratio=split_ratio(row.details)))
     return splits, exemption_dates
 
 

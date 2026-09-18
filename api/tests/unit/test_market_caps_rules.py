@@ -10,7 +10,8 @@ from decimal import Decimal
 import pytest
 
 from stockticker.ingest.edgar.parse import DEI_SHARES, US_GAAP_SHARES
-from stockticker.ingest.market_caps import ShareCount, SplitRatioError, split_ratio, validate_counts
+from stockticker.ingest.events import SplitRatioError, split_details, split_ratio
+from stockticker.ingest.market_caps import ShareCount, validate_counts
 
 
 def count(
@@ -26,29 +27,30 @@ def count(
 
 
 @pytest.mark.parametrize(
-    ("kind", "details", "expected"),
-    [
-        ("split", {"ratio": 4}, Decimal(4)),
-        ("split", {"ratio": "1.5"}, Decimal("1.5")),
-        ("split", {"new_rate": 20, "old_rate": 1}, Decimal(20)),
-        ("reverse_split", {"new_rate": 1, "old_rate": 10}, Decimal("0.1")),
-        ("reverse_split", {"ratio": "0.125"}, Decimal("0.125")),
-        ("reverse_split", {"ratio": 8}, Decimal("0.125")),
-    ],
+    ("old_rate", "new_rate", "expected"),
+    [(1, 4, Decimal(4)), (1, 20, Decimal(20)), (2, 3, Decimal("1.5")), (10, 1, Decimal("0.1"))],
 )
-def test_split_ratio_is_new_shares_per_old_share(
-    kind: str, details: dict[str, object], expected: Decimal
-) -> None:
-    assert split_ratio(kind, details) == expected
+def test_split_ratio_is_new_shares_per_old_share(old_rate: int, new_rate: int, expected: Decimal) -> None:
+    details = split_details(old_rate, new_rate)
+
+    assert details == {"old_rate": str(old_rate), "new_rate": str(new_rate)}
+    assert split_ratio(details) == expected
 
 
 @pytest.mark.parametrize(
     "details",
-    [{}, {"new_rate": 2}, {"new_rate": 2, "old_rate": 0}, {"ratio": "abc"}, {"ratio": 0}, {"ratio": -2}],
+    [
+        {},
+        {"new_rate": "2"},
+        {"new_rate": "2", "old_rate": "0"},
+        {"new_rate": "abc", "old_rate": "1"},
+        {"new_rate": "-2", "old_rate": "1"},
+        {"new_rate": "Infinity", "old_rate": "1"},
+    ],
 )
 def test_split_ratio_rejects_unusable_details(details: dict[str, object]) -> None:
     with pytest.raises(SplitRatioError):
-        split_ratio("split", details)
+        split_ratio(details)
 
 
 def test_steady_counts_are_all_accepted() -> None:

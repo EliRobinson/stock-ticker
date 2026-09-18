@@ -6,14 +6,13 @@ import { z } from 'zod'
  * Import `env` instead of using `process.env` directly so missing/invalid
  * vars fail fast at build/boot time rather than deep in a request handler.
  *
- * Remove DATABASE_URL if this project doesn't use a database.
+ * This app never talks to a database directly — it calls the Python API.
  */
 export const env = createEnv({
   server: {
     NODE_ENV: z
       .enum(['development', 'test', 'production'])
-      .default('development'),
-    DATABASE_URL: z.string().url().optional()
+      .default('development')
   },
   client: {
     // Prefix any browser-exposed vars with NEXT_PUBLIC_ and list them here.

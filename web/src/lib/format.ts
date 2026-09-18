@@ -94,6 +94,37 @@ export function formatDateTime(value: string | null | undefined): string {
   }).format(date)
 }
 
+/** The market clock and every Trading Day are dated in New York time
+ * (CONTEXT.md), so times shown next to them - "Data as of", a Quote's
+ * observed_at - use America/New_York explicitly rather than the viewer's
+ * local zone, with the zone name (EDT/EST) printed so it's never ambiguous. */
+export function formatDateTimeET(value: string | null | undefined): string {
+  if (!value) return EMPTY
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return EMPTY
+  return new Intl.DateTimeFormat('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: 'America/New_York',
+    timeZoneName: 'short'
+  }).format(date)
+}
+
+/** A short "how long ago" label for a Quote's age, not a duration a screen
+ * reader would want spelled out - this is chrome next to a price, not prose. */
+export function formatQuoteAge(ageMs: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ageMs / 1000))
+  if (totalSeconds < 60) return `${totalSeconds}s`
+  const totalMinutes = Math.floor(totalSeconds / 60)
+  if (totalMinutes < 60) return `${totalMinutes}m`
+  const hours = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+  return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`
+}
+
 export interface SignedFormat {
   text: string
   direction: Direction

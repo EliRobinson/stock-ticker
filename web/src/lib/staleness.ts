@@ -37,3 +37,21 @@ export function getQuoteStaleness(
     isStale: isQuoteStale(observedAt, serverTime)
   }
 }
+
+export interface MarketClockLike {
+  is_open: boolean
+}
+
+export type MarketStatus = 'open' | 'closed' | 'unknown'
+
+/**
+ * The API's MarketClock is a plain is_open boolean plus next_open/next_close
+ * - it has no pre-market/after-hours state. Callers that want a pre/after
+ * label are asking for something the API doesn't report; this returns
+ * 'unknown' only when there is no clock at all (schema has it nullable
+ * "until the Alpaca agent wires up fetch_market_clock").
+ */
+export function getMarketStatus(clock: MarketClockLike | null): MarketStatus {
+  if (clock === null) return 'unknown'
+  return clock.is_open ? 'open' : 'closed'
+}

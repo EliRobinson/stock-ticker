@@ -39,6 +39,25 @@ export const searchFilterFn: FilterFn<MarketRow> = (
   )
 }
 
+/**
+ * `observed_at` sorts last-priced-first by default (nulls, meaning never
+ * quoted, sort last in either direction) so the UI can offer "sort by
+ * staleness" without a separate age column - age itself depends on the
+ * parent /market response's server_time, which isn't on MarketRow.
+ */
+export const nullableDateStringSortingFn: SortingFn<MarketRow> = (
+  rowA,
+  rowB,
+  columnId
+) => {
+  const a = rowA.getValue<string | null>(columnId)
+  const b = rowB.getValue<string | null>(columnId)
+  if (a === null && b === null) return 0
+  if (a === null) return 1
+  if (b === null) return -1
+  return a < b ? -1 : a > b ? 1 : 0
+}
+
 export const sectorFilterFn: FilterFn<MarketRow> = (
   row,
   _columnId,
@@ -92,6 +111,12 @@ export const marketTableColumns: ColumnDef<MarketRow>[] = [
     accessorKey: 'volume',
     header: 'Volume',
     sortingFn: numericStringSortingFn
+  },
+  {
+    id: 'observed_at',
+    accessorKey: 'observed_at',
+    header: 'Quote time',
+    sortingFn: nullableDateStringSortingFn
   },
   {
     id: 'market_cap',

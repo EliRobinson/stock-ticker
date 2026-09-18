@@ -41,11 +41,21 @@ describe('company', () => {
       label: 'AAPL · Apple Inc.'
     })
   })
-  it('lists each Company once from Market rows, by its busiest Listing', () => {
+  it('lists each Company once from Market rows, by its primary Listing', () => {
     const options = companyOptionsFromMarket([
-      { cik: '9', symbol: 'GOOG', name: 'Alphabet Inc. Class C', volume: 15 },
-      { cik: '9', symbol: 'GOOGL', name: 'Alphabet Inc. Class A', volume: 21 },
-      { cik: '1', symbol: 'AAPL', name: 'Apple Inc.', volume: 48 }
+      {
+        cik: '9',
+        symbol: 'GOOG',
+        name: 'Alphabet Inc. Class C',
+        is_primary: false
+      },
+      {
+        cik: '9',
+        symbol: 'GOOGL',
+        name: 'Alphabet Inc. Class A',
+        is_primary: true
+      },
+      { cik: '1', symbol: 'AAPL', name: 'Apple Inc.', is_primary: true }
     ])
     expect(options.map((o) => o.label)).toEqual([
       'AAPL · Apple Inc.',
@@ -62,23 +72,21 @@ describe('routes', () => {
 })
 
 describe('companyOptionsFromMarket with is_primary', () => {
-  it('prefers the row the API marks primary over volume', () => {
+  it('prefers the row the API marks primary', () => {
     const options = companyOptionsFromMarket([
       {
         cik: '9',
         symbol: 'GOOG',
         name: 'Alphabet C',
-        volume: 99,
         is_primary: false
       },
       {
         cik: '9',
         symbol: 'GOOGL',
         name: 'Alphabet A',
-        volume: 1,
         is_primary: true
       }
-    ] as never)
+    ])
     expect(options[0]?.label).toBe('GOOGL · Alphabet A')
   })
 })

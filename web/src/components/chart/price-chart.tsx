@@ -256,12 +256,10 @@ export function PriceChart({
     const chart = partsRef.current?.chart
     if (!chart || !hasData) return
     if (visibleRange) {
-      chart
-        .timeScale()
-        .setVisibleRange({
-          from: visibleRange.from as Time,
-          to: visibleRange.to as Time
-        })
+      chart.timeScale().setVisibleRange({
+        from: visibleRange.from as Time,
+        to: visibleRange.to as Time
+      })
     } else {
       chart.timeScale().fitContent()
     }

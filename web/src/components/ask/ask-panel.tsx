@@ -389,9 +389,9 @@ function SqlDisclosure({
   defaultOpen: boolean
 }) {
   const [open, setOpen] = useState(defaultOpen)
-  // Shiki highlights on the client only; plain SQL until mount keeps an
+  // Shiki highlights on the client only; plain SQL until hydrated keeps an
   // open-by-default disclosure from mismatching on hydration.
-  const mounted = useHydrated()
+  const hydrated = useHydrated()
   const code = useMemo(() => sql.join('\n\n'), [sql])
   return (
     <Collapsible
@@ -426,7 +426,7 @@ function SqlDisclosure({
           tabIndex={0}
           className='focus-visible:outline-ring focus-visible:outline-2'
         >
-          {mounted ? (
+          {hydrated ? (
             <CodeBlock
               code={code}
               language='sql'

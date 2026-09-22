@@ -5,8 +5,17 @@ import {
 } from '@tanstack/react-query'
 import { act } from 'react'
 import { hydrateRoot } from 'react-dom/client'
+import type { Root } from 'react-dom/client'
 import { renderToString } from 'react-dom/server'
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi
+} from 'vitest'
 
 import { AfterHydration } from '@/components/shared/after-hydration'
 
@@ -35,8 +44,8 @@ function App({ client, guarded }: { client: QueryClient; guarded: boolean }) {
   )
 }
 
-// The shell's queries can finish before a Suspense-deferred page hydrates, so
-// the page's first client render finds data the server HTML never had.
+const roots: Root[] = []
+
 async function hydrateWithWarmCache(guarded: boolean) {
   const container = document.createElement('div')
   container.innerHTML = renderToString(
@@ -47,20 +56,20 @@ async function hydrateWithWarmCache(guarded: boolean) {
   warm.setQueryData(KEY, ['AAPL'])
   const onRecoverableError = vi.fn()
   await act(async () => {
-    hydrateRoot(container, <App client={warm} guarded={guarded} />, {
-      onRecoverableError
-    })
+    roots.push(
+      hydrateRoot(container, <App client={warm} guarded={guarded} />, {
+        onRecoverableError
+      })
+    )
   })
   return { container, onRecoverableError }
 }
 
 describe('AfterHydration', () => {
-  beforeAll(() => {
-    ;(
-      globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
-    ).IS_REACT_ACT_ENVIRONMENT = true
-  })
+  beforeAll(() => vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true))
+  afterAll(() => vi.unstubAllGlobals())
   afterEach(() => {
+    act(() => roots.splice(0).forEach((root) => root.unmount()))
     document.body.innerHTML = ''
   })
 

@@ -1,7 +1,7 @@
 'use client'
 
 import { ChevronDown, ChevronRight, X } from 'lucide-react'
-import { useMemo, useState, useSyncExternalStore } from 'react'
+import { useMemo, useState } from 'react'
 
 import { CodeBlock } from '@/components/ai-elements/code-block'
 import {
@@ -36,6 +36,7 @@ import {
 import { cn } from '@/lib/utils'
 
 import { TimeseriesChart } from '../chart/timeseries-chart'
+import { useHydrated } from '../shared/after-hydration'
 import { RegionBoundary } from '../shared/error-boundary'
 import { StatusAlert } from '../shared/feedback'
 import { safeMarkdownProps } from '../shared/markdown'
@@ -43,8 +44,6 @@ import { askCopy as copy } from './copy'
 import type { AskTurnModel, StepState, ToolStep, ViewModel } from './prepare'
 import type { AskStatus, AskUnavailable } from './types'
 import { ViewTable } from './view-table'
-
-const noopSubscribe = () => () => {}
 
 // AI Elements' Tool takes the AI SDK's part states; the panel's own
 // StepState maps onto them for the status icon.
@@ -392,11 +391,7 @@ function SqlDisclosure({
   const [open, setOpen] = useState(defaultOpen)
   // Shiki highlights on the client only; plain SQL until mount keeps an
   // open-by-default disclosure from mismatching on hydration.
-  const mounted = useSyncExternalStore(
-    noopSubscribe,
-    () => true,
-    () => false
-  )
+  const mounted = useHydrated()
   const code = useMemo(() => sql.join('\n\n'), [sql])
   return (
     <Collapsible

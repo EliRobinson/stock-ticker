@@ -1,16 +1,19 @@
 # GitHub Actions checks are disabled here: the local hooks are the gate
 # (.husky/pre-commit runs lint-staged; .husky/pre-push runs type-check, lint,
-# format:check, test, build, and optionally E2E via RUN_E2E=1). This keeps
-# the fast merge loop while chore/restructure-web and other branches are
-# rebasing onto this one, without losing a required PR check. Uncomment the
-# quality/unit/e2e jobs below to restore full CI in GitHub Actions.
+# format:check, test, build, and optionally E2E via RUN_E2E=1).
+#
+# The automatic triggers are off too, so nothing runs on push or PR. This
+# matches the other repos, where GitHub Actions billing stopped jobs from
+# starting. To restore CI: uncomment the triggers below and the
+# quality/unit/e2e jobs.
 name: CI
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  workflow_dispatch:
+  # push:
+  #   branches: [main]
+  # pull_request:
+  #   branches: [main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
